@@ -28,7 +28,7 @@ pub use api::{
     CreatedEvent, CreatedSource, EventConfApi, EventFilter, EventInSourceFilter, SourceFilter,
     SourceLookup, UploadFileError, UploadFileResult, UploadResult,
 };
-pub use cmd::SourceCmd;
+pub use cmd::{EventCmd, SourceCmd};
 pub use dto::{
     AddEventConfSourceRequest, AlarmData, Autoacknowledge, Correlation,
     EnableDisableConfSourceEventsPayload, Event, EventConfEventDeletePayload, EventConfEventDto,

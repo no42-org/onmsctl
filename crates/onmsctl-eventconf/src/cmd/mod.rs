@@ -8,6 +8,8 @@
 //! Exposed to the binary crate as [`SourceCmd`] (and in commit 2 of Phase 4,
 //! `EventCmd`). The binary composes them into its top-level command tree.
 
+pub mod event;
 pub mod source;
 
+pub use event::EventCmd;
 pub use source::SourceCmd;
