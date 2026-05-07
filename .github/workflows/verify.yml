@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    # Mondays 06:00 UTC — refreshes the cargo-deny advisory DB and surfaces
+    # newly-disclosed RUSTSEC advisories on pinned dependencies between PRs.
+    - cron: '0 6 * * 1'
 
 permissions:
   contents: read
@@ -14,13 +18,41 @@ concurrency:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    # Skip scheduled runs on forks — only the upstream repo's cron should fire.
+    if: github.event_name != 'schedule' || github.repository == 'labmonkeys-space/onmsctl'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - name: Install Rust toolchain components
-        run: rustup component add rustfmt clippy
+      - name: Install pinned Rust toolchain (honors rust-toolchain.toml)
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
 
       - name: Run verify
         run: make verify
+
+  notify-on-cron-failure:
+    # Open a tracking issue when the scheduled run fails, so a freshly-disclosed
+    # RUSTSEC advisory does not silently rot. Only fires for the cron event.
+    needs: verify
+    if: failure() && github.event_name == 'schedule' && github.repository == 'labmonkeys-space/onmsctl'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Open tracking issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          gh issue create \
+            --title "Scheduled verify failed: $(date -u +%Y-%m-%d)" \
+            --body "Weekly cron run failed. Likely a freshly-disclosed advisory or a transient infrastructure issue.\n\nRun: $run_url" \
+            --label "ci,scheduled-failure"

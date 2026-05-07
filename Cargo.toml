@@ -8,7 +8,7 @@ edition = "2024"
 license = "Apache-2.0"
 authors = ["Ronny Trommer <ronny@no42.org>"]
 repository = "https://github.com/labmonkeys-space/onmsctl"
-rust-version = "1.85"
+rust-version = "1.95"
 
 [workspace.dependencies]
 # CLI & async runtime
