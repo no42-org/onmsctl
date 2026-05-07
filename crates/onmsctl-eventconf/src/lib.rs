@@ -13,6 +13,7 @@
 
 pub mod api;
 pub mod dto;
+pub mod xml;
 
 pub use api::{
     CreatedEvent, CreatedSource, EventConfApi, EventFilter, EventInSourceFilter, SourceFilter,
