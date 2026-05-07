@@ -13,12 +13,16 @@
 //! architecture and `cli-core` spec deltas for observable requirements.
 
 pub mod auth;
+pub mod client;
 pub mod config;
 pub mod context;
 pub mod error;
 pub mod format;
+pub mod render;
 
 pub use auth::AuthCreds;
+pub use client::OnmsClient;
 pub use context::{Context, Overrides};
 pub use error::{Error, Result};
 pub use format::OutputFormat;
+pub use render::{TableRow, render_list, render_one};
