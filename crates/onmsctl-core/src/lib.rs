@@ -12,6 +12,7 @@
 //! See `openspec/changes/init-onmsctl-event-conf/design.md` for the full
 //! architecture and `cli-core` spec deltas for observable requirements.
 
+pub mod apply;
 pub mod auth;
 pub mod client;
 pub mod config;
@@ -20,6 +21,7 @@ pub mod error;
 pub mod format;
 pub mod render;
 
+pub use apply::{ApplyOptions, ApplyTarget, Diff, Outcome, run_apply};
 pub use auth::AuthCreds;
 pub use client::OnmsClient;
 pub use context::{Context, Overrides};
