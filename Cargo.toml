@@ -37,6 +37,9 @@ keyring = "3"
 thiserror = "2"
 anyhow = "1"
 
+# URL & encoding
+percent-encoding = "2"
+
 # Workspace-internal crates. Explicit version (alongside `path`) keeps
 # `cargo-deny check bans` happy — without it the dep registers as a
 # wildcard. The version mirrors `workspace.package.version`.
