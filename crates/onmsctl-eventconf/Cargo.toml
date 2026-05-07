@@ -15,7 +15,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
-# Phase 3 commit 2 adds quick-xml for the YAML <-> XML conversion.
+quick-xml = { workspace = true }
 
 [dev-dependencies]
 wiremock = "0.6"
