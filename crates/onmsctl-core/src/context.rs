@@ -46,15 +46,17 @@ pub struct Overrides {
 }
 
 impl Overrides {
-    /// Read the recognised environment variables.
+    /// Read the recognised environment variables. Empty-string values are
+    /// treated as unset so e.g. `ONMS_PASSWORD=""` does not produce an
+    /// empty-credential request that bypasses keyring/file sources.
     pub fn from_env() -> Self {
         Self {
-            config_path: std::env::var("ONMSCTL_CONFIG").ok().map(PathBuf::from),
-            context_name: std::env::var("ONMSCTL_CONTEXT").ok(),
-            url: std::env::var("ONMS_URL").ok(),
-            user: std::env::var("ONMS_USER").ok(),
-            password: std::env::var("ONMS_PASSWORD").ok(),
-            token: std::env::var("ONMS_TOKEN").ok(),
+            config_path: var_nonempty("ONMSCTL_CONFIG").map(PathBuf::from),
+            context_name: var_nonempty("ONMSCTL_CONTEXT"),
+            url: var_nonempty("ONMS_URL"),
+            user: var_nonempty("ONMS_USER"),
+            password: var_nonempty("ONMS_PASSWORD"),
+            token: var_nonempty("ONMS_TOKEN"),
             insecure_tls: None, // env-side opt-out is intentionally absent
             output: None,
             verbose: false,
@@ -124,6 +126,12 @@ impl Context {
             .unwrap_or_else(|| active.server.url.clone());
         let url = reqwest::Url::parse(&raw_url)
             .map_err(|e| Error::Config(format!("invalid server URL '{raw_url}': {e}")))?;
+        if !matches!(url.scheme(), "http" | "https") {
+            return Err(Error::Config(format!(
+                "unsupported URL scheme '{}' in server URL '{raw_url}'; expected http or https",
+                url.scheme()
+            )));
+        }
 
         // -- Insecure TLS --
         let insecure_skip_tls_verify = overrides
@@ -164,9 +172,9 @@ fn resolve_basic(spec: &BasicSpec, overrides: &Overrides) -> Result<AuthCreds> {
     let password = if let Some(p) = overrides.password.clone() {
         p
     } else if let Some(kr) = &spec.keyring {
-        read_keyring(kr).ok_or_else(|| {
+        read_keyring(kr).map_err(|e| {
             Error::Auth(format!(
-                "basic auth: keyring entry not available (service='{}', account='{}')",
+                "basic auth: cannot read keyring (service='{}', account='{}'): {e}",
                 kr.service, kr.account
             ))
         })?
@@ -193,9 +201,9 @@ fn resolve_bearer(spec: &BearerSpec, overrides: &Overrides) -> Result<AuthCreds>
     let token = if let Some(t) = overrides.token.clone() {
         t
     } else if let Some(kr) = &spec.keyring {
-        read_keyring(kr).ok_or_else(|| {
+        read_keyring(kr).map_err(|e| {
             Error::Auth(format!(
-                "bearer auth: keyring entry not available (service='{}', account='{}')",
+                "bearer auth: cannot read keyring (service='{}', account='{}'): {e}",
                 kr.service, kr.account
             ))
         })?
@@ -218,17 +226,33 @@ fn resolve_bearer(spec: &BearerSpec, overrides: &Overrides) -> Result<AuthCreds>
     Ok(AuthCreds::bearer(token))
 }
 
-fn read_secret_file(path: &std::path::Path) -> std::io::Result<String> {
-    Ok(std::fs::read_to_string(path)?.trim().to_string())
+/// Read an env var only if it is set AND non-empty. An empty string from
+/// the shell otherwise becomes a valid-but-meaningless override
+/// (e.g. `ONMS_PASSWORD=""` → empty Basic auth password).
+fn var_nonempty(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|s| !s.is_empty())
 }
 
-/// Best-effort keyring read. Returns `None` for any failure (entry not found,
-/// keyring service unavailable, permission denied) so the resolver can fall
-/// through. Keyring backends are platform-dependent (D-Bus on Linux, Keychain
-/// on macOS, Credential Manager on Windows) and absent on most servers.
-fn read_keyring(r: &KeyringRef) -> Option<String> {
-    let entry = keyring::Entry::new(&r.service, &r.account).ok()?;
-    entry.get_password().ok()
+fn read_secret_file(path: &std::path::Path) -> std::io::Result<String> {
+    // Strip only trailing CR/LF — preserves any internal or trailing
+    // whitespace that is part of the credential. `.trim()` would silently
+    // change a credential whose intended form ends with a space.
+    Ok(std::fs::read_to_string(path)?
+        .trim_end_matches(['\n', '\r'])
+        .to_string())
+}
+
+/// Read a keyring entry, returning the cleartext on success. Returns the
+/// underlying error verbatim so the caller can include it in the user-facing
+/// `Auth` error — operators need to distinguish "entry not found" from
+/// "backend unavailable" (D-Bus down on a headless Linux box, keychain
+/// locked, etc.).
+fn read_keyring(r: &KeyringRef) -> Result<String> {
+    let entry = keyring::Entry::new(&r.service, &r.account)
+        .map_err(|e| Error::Auth(format!("keyring entry construction failed: {e}")))?;
+    entry
+        .get_password()
+        .map_err(|e| Error::Auth(format!("keyring read failed: {e}")))
 }
 
 static PLAINTEXT_WARNING_EMITTED: AtomicBool = AtomicBool::new(false);
@@ -447,7 +471,10 @@ mod tests {
     #[test]
     fn bearer_token_file_is_resolved_at_request_time() {
         let mut f = tempfile::NamedTempFile::new().unwrap();
-        f.write_all(b"  bearer-token-content  \n").unwrap();
+        // Trailing newline is stripped (typical for `echo > token-file`),
+        // but internal/leading whitespace is preserved by design — see
+        // `read_secret_file` in this module for the rationale.
+        f.write_all(b"bearer-token-content\n").unwrap();
         let cfg = ConfigFile {
             current_context: Some("dev".into()),
             contexts: vec![NamedContext {
