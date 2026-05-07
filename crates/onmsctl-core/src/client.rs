@@ -7,13 +7,24 @@
 //!
 //! Capabilities consume `&OnmsClient` and never reach for `reqwest`
 //! directly. This is the bright line that keeps the workspace
-//! maintainable (design.md §2.1).
+//! maintainable (design.md §2.1). The [`MultipartPart`] type is the
+//! capability-facing abstraction over multipart bodies; capabilities do not
+//! see `reqwest::multipart::Form`.
+//!
+//! Defaults:
+//!   - Total request timeout: 30 s (kubectl-equivalent default).
+//!   - get_bytes() body cap: 16 MiB.
+//!   - HTTP non-success body excerpt cap: 4 KiB
+//!     (see [`crate::error::HTTP_BODY_EXCERPT_BYTES`]).
+//!   - Redirects: limited to 5 hops.
 //!
 //! Error mapping:
-//!   - HTTP non-success status → [`Error::HttpStatus`] with method/path/body
+//!   - HTTP non-success status → [`Error::HttpStatus`] with method/path/excerpted body.
 //!   - Network failures → mapped via `From<reqwest::Error>` to typed
 //!     transport variants (DNS, ConnRefused, Timeout, TLS, Redirect)
 //!     so exit codes per cli-core spec §4.5 are preserved.
+
+use std::time::Duration;
 
 use reqwest::header::{CONTENT_TYPE, HeaderValue};
 use reqwest::{Method, RequestBuilder, StatusCode, Url};
@@ -22,9 +33,21 @@ use serde::de::DeserializeOwned;
 
 use crate::auth::AuthCreds;
 use crate::context::Context;
-use crate::error::{Error, Result};
+use crate::error::{Error, Result, excerpt_body};
 
-/// HTTP transport for OpenNMS Horizon capabilities. Cheap to clone.
+/// Default total-request timeout. Hard-coded here; capabilities that need a
+/// different deadline will gain configurability in a follow-up if a real
+/// use case appears.
+pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Hard cap on bytes returned by [`OnmsClient::get_bytes`]. 16 MiB is well
+/// above realistic OpenNMS source XML (largest published files ~2 MB) and
+/// guards against a pathological/malicious server forcing the process to
+/// allocate without bound.
+pub const MAX_BYTES_RESPONSE: usize = 16 * 1024 * 1024;
+
+/// HTTP transport for OpenNMS Horizon capabilities. Cheap to clone within a
+/// process (the inner `reqwest::Client` is reference-counted).
 #[derive(Clone, Debug)]
 pub struct OnmsClient {
     inner: reqwest::Client,
@@ -32,12 +55,44 @@ pub struct OnmsClient {
     creds: AuthCreds,
 }
 
+/// One part of a multipart upload. Capabilities construct these and pass a
+/// slice to [`OnmsClient::multipart`]; the client wraps them into a
+/// `reqwest::multipart::Form` internally so capability code never imports
+/// reqwest types.
+#[derive(Clone, Debug)]
+pub struct MultipartPart {
+    /// Multipart form-field name. Horizon's `/eventconf/upload` uses CXF's
+    /// "all parts in a list-of-Attachment" binding; the field name is
+    /// effectively ignored, so capabilities typically pass `"file"`.
+    pub field_name: String,
+    /// Filename associated with this part. `EventConfRestService.uploadEventConfFiles`
+    /// reads `getContentDisposition().getParameter("filename")` to derive
+    /// the source basename — this field is load-bearing.
+    pub filename: String,
+    /// MIME type. Common values: `application/xml` for eventconf XML.
+    pub content_type: String,
+    /// Body bytes.
+    pub body: Vec<u8>,
+}
+
+impl MultipartPart {
+    pub fn xml(filename: impl Into<String>, body: impl Into<Vec<u8>>) -> Self {
+        Self {
+            field_name: "file".into(),
+            filename: filename.into(),
+            content_type: "application/xml".into(),
+            body: body.into(),
+        }
+    }
+}
+
 impl OnmsClient {
     /// Construct from a resolved [`Context`]. Honors `insecure_skip_tls_verify`
     /// and emits a single stderr warning per process when it is set.
     pub fn from_context(ctx: &Context) -> Result<Self> {
-        let mut builder =
-            reqwest::Client::builder().redirect(reqwest::redirect::Policy::limited(5));
+        let mut builder = reqwest::Client::builder()
+            .timeout(DEFAULT_REQUEST_TIMEOUT)
+            .redirect(reqwest::redirect::Policy::limited(5));
         if ctx.insecure_skip_tls_verify {
             warn_insecure_tls_once();
             builder = builder.danger_accept_invalid_certs(true);
@@ -51,9 +106,13 @@ impl OnmsClient {
     }
 
     /// Construct with explicit pieces; useful for tests against `wiremock`.
+    /// Tests do not need a timeout (wiremock responses are immediate); the
+    /// `insecure_skip_tls_verify` flag is irrelevant for plain HTTP.
     pub fn from_parts(base: Url, creds: AuthCreds) -> Result<Self> {
         Ok(Self {
-            inner: reqwest::Client::new(),
+            inner: reqwest::Client::builder()
+                .timeout(DEFAULT_REQUEST_TIMEOUT)
+                .build()?,
             base,
             creds,
         })
@@ -68,16 +127,35 @@ impl OnmsClient {
             req = req.query(query);
         }
         let resp = self.send(req, Method::GET, path).await?;
-        Ok(resp.json().await?)
+        json_or_no_content(resp, Method::GET, path).await
     }
 
     /// `GET <base><path>` returning the raw response body bytes (e.g. for XML
-    /// downloads from `/eventconf/sources/{id}/events/download`).
+    /// downloads from `/eventconf/sources/{id}/events/download`). The
+    /// returned body is capped at [`MAX_BYTES_RESPONSE`] to guard against
+    /// runaway allocations.
     pub async fn get_bytes(&self, path: &str) -> Result<Vec<u8>> {
         let url = self.url_for(path)?;
         let req = self.inner.request(Method::GET, url);
         let resp = self.send(req, Method::GET, path).await?;
-        Ok(resp.bytes().await?.to_vec())
+        // Inspect Content-Length when present and reject early if it
+        // exceeds the cap. Servers may omit the header; we still defensively
+        // cap during the streaming read below.
+        if let Some(cl) = resp.content_length()
+            && cl as usize > MAX_BYTES_RESPONSE
+        {
+            return Err(Error::Config(format!(
+                "GET {path} response Content-Length {cl} exceeds cap of {MAX_BYTES_RESPONSE} bytes"
+            )));
+        }
+        let bytes = resp.bytes().await?;
+        if bytes.len() > MAX_BYTES_RESPONSE {
+            return Err(Error::Config(format!(
+                "GET {path} response body {} bytes exceeds cap of {MAX_BYTES_RESPONSE} bytes",
+                bytes.len()
+            )));
+        }
+        Ok(bytes.to_vec())
     }
 
     /// `POST` with a JSON body, deserializing the JSON response.
@@ -101,28 +179,46 @@ impl OnmsClient {
 
     /// `DELETE` with optional JSON body. Returns unit on success since the
     /// EventConf delete endpoints return either 200 or 204 with no
-    /// caller-actionable payload.
+    /// caller-actionable payload. The body is read and discarded so the
+    /// underlying connection can return to the pool cleanly.
     pub async fn delete<B: Serialize>(&self, path: &str, body: Option<&B>) -> Result<()> {
         let url = self.url_for(path)?;
         let mut req = self.inner.request(Method::DELETE, url);
         if let Some(b) = body {
             req = req.json(b);
         }
-        let _ = self.send(req, Method::DELETE, path).await?;
+        let resp = self.send(req, Method::DELETE, path).await?;
+        // Drain the response body so the connection is reusable.
+        let _ = resp.bytes().await?;
         Ok(())
     }
 
     /// `POST` with `multipart/form-data`, returning JSON. Used by
-    /// `/eventconf/upload`.
+    /// `/eventconf/upload`. Capabilities pass typed [`MultipartPart`]s; the
+    /// reqwest `Form` is constructed here so capability code never sees
+    /// reqwest types.
     pub async fn multipart<T: DeserializeOwned>(
         &self,
         path: &str,
-        form: reqwest::multipart::Form,
+        parts: &[MultipartPart],
     ) -> Result<T> {
         let url = self.url_for(path)?;
+        let mut form = reqwest::multipart::Form::new();
+        for p in parts {
+            let part = reqwest::multipart::Part::bytes(p.body.clone())
+                .file_name(p.filename.clone())
+                .mime_str(&p.content_type)
+                .map_err(|e| {
+                    Error::Config(format!(
+                        "multipart part '{}': invalid content-type '{}': {e}",
+                        p.filename, p.content_type
+                    ))
+                })?;
+            form = form.part(p.field_name.clone(), part);
+        }
         let req = self.inner.request(Method::POST, url).multipart(form);
         let resp = self.send(req, Method::POST, path).await?;
-        Ok(resp.json().await?)
+        json_or_no_content(resp, Method::POST, path).await
     }
 
     // -- internals -----------------------------------------------------------
@@ -139,12 +235,12 @@ impl OnmsClient {
             .request(method.clone(), url)
             .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
             .json(body);
-        let resp = self.send(req, method, path).await?;
-        Ok(resp.json().await?)
+        let resp = self.send(req, method.clone(), path).await?;
+        json_or_no_content(resp, method, path).await
     }
 
     /// Send a request with auth applied, mapping non-success status codes to
-    /// [`Error::HttpStatus`] with the response body inlined.
+    /// [`Error::HttpStatus`] with the response body inlined (and excerpted).
     async fn send(
         &self,
         req: RequestBuilder,
@@ -169,7 +265,7 @@ impl OnmsClient {
             method: method.to_string(),
             path: path.to_string(),
             status,
-            body,
+            body: excerpt_body(&body),
         })
     }
 
@@ -181,6 +277,14 @@ impl OnmsClient {
     }
 
     fn url_for(&self, path: &str) -> Result<Url> {
+        // Reject path-traversal segments. Capability code is trusted but a
+        // defensive check prevents subtle bugs that would otherwise let a
+        // malformed path escape the API base.
+        if path.split(['/', '\\']).any(|seg| seg == "..") {
+            return Err(Error::Config(format!(
+                "path '{path}' contains path-traversal segment"
+            )));
+        }
         // Joining a relative path: ensure base ends with `/` so reqwest's join
         // treats it as a directory rather than replacing the last segment.
         let base = if self.base.path().ends_with('/') {
@@ -196,21 +300,57 @@ impl OnmsClient {
     }
 }
 
-/// Inspect a 401 response for a `WWW-Authenticate` challenge that names
-/// something other than Basic or Bearer.
-fn unsupported_auth_scheme(resp: &reqwest::Response) -> Option<String> {
-    let challenge = resp
-        .headers()
-        .get("www-authenticate")?
-        .to_str()
-        .ok()?
-        .trim();
-    let scheme = challenge.split_whitespace().next()?.trim_end_matches(',');
-    let lower = scheme.to_ascii_lowercase();
-    if lower == "basic" || lower == "bearer" {
-        return None;
+/// Decode the response body as JSON. If the response is `204 No Content`,
+/// attempt to deserialize a unit / empty value via `serde_json::from_str("null")`
+/// — `T = ()` works; other types yield a clear error.
+async fn json_or_no_content<T: DeserializeOwned>(
+    resp: reqwest::Response,
+    method: Method,
+    path: &str,
+) -> Result<T> {
+    if resp.status() == StatusCode::NO_CONTENT {
+        return serde_json::from_str("null").map_err(|_| Error::HttpStatus {
+            method: method.to_string(),
+            path: path.to_string(),
+            status: 204,
+            body: "204 No Content with non-unit response type expected by caller".into(),
+        });
     }
-    Some(scheme.to_string())
+    Ok(resp.json().await?)
+}
+
+/// Inspect a 401 response for any `WWW-Authenticate` challenge that names
+/// something other than Basic or Bearer. The header may carry multiple
+/// schemes (e.g. `"Bearer realm=\"x\", Negotiate"`); we scan all of them
+/// and report the first unsupported scheme found. If at least one
+/// supported scheme is offered AND no unsupported one is, returns `None`.
+fn unsupported_auth_scheme(resp: &reqwest::Response) -> Option<String> {
+    let header = resp.headers().get(reqwest::header::WWW_AUTHENTICATE)?;
+    let challenge = header.to_str().ok()?;
+    // Schemes are comma-separated at the top level. Each scheme entry
+    // begins with the scheme keyword; we skip auth-params (key="value"
+    // pairs) when looking for scheme tokens.
+    for scheme in extract_schemes(challenge) {
+        let lower = scheme.to_ascii_lowercase();
+        if lower != "basic" && lower != "bearer" {
+            return Some(scheme);
+        }
+    }
+    None
+}
+
+/// Pull scheme tokens from a WWW-Authenticate header value. A scheme token
+/// is a bare word (no `=`) that appears at the top level (between commas).
+/// Tokens that contain `=` are auth-params and are skipped.
+fn extract_schemes(challenge: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for entry in challenge.split(',') {
+        let first = entry.split_whitespace().next().unwrap_or("");
+        if !first.is_empty() && !first.contains('=') {
+            out.push(first.to_string());
+        }
+    }
+    out
 }
 
 static INSECURE_TLS_WARNING_EMITTED: std::sync::atomic::AtomicBool =
@@ -333,14 +473,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn http_5xx_body_is_excerpted() {
+        let mock = MockServer::start().await;
+        // Build a body larger than the 4 KiB cap.
+        let big_body = "x".repeat(8000);
+        Mock::given(method("GET"))
+            .and(path("/api/v2/boom"))
+            .respond_with(ResponseTemplate::new(500).set_body_string(big_body.clone()))
+            .mount(&mock)
+            .await;
+
+        let client = OnmsClient::from_context(&ctx_for(
+            &format!("{}/api/v2/", mock.uri()),
+            AuthCreds::bearer("tok"),
+        ))
+        .unwrap();
+        let err = client.get::<Sample>("boom", &[]).await.unwrap_err();
+        match err {
+            Error::HttpStatus { body, .. } => {
+                assert!(body.len() < big_body.len(), "body should be excerpted");
+                assert!(body.contains("truncated"));
+                assert!(body.contains(&format!("{} bytes total", big_body.len())));
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn unsupported_auth_challenge_yields_specific_error_with_exit_9() {
         let mock = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/api/v2/x"))
-            .respond_with(
-                ResponseTemplate::new(401)
-                    .insert_header("WWW-Authenticate", "Negotiate, Bearer realm=fallback"),
-            )
+            .respond_with(ResponseTemplate::new(401).insert_header("WWW-Authenticate", "Negotiate"))
             .mount(&mock)
             .await;
 
@@ -355,6 +519,56 @@ mod tests {
             other => panic!("unexpected {other:?}"),
         }
         assert_eq!(err.exit_code(), 9);
+    }
+
+    #[tokio::test]
+    async fn unsupported_auth_detected_when_listed_after_supported_one() {
+        // Server offers Bearer first, then Negotiate. The first-only parser
+        // would miss Negotiate; the multi-scheme parser must detect it.
+        let mock = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v2/x"))
+            .respond_with(
+                ResponseTemplate::new(401)
+                    .insert_header("WWW-Authenticate", "Bearer realm=\"x\", Negotiate"),
+            )
+            .mount(&mock)
+            .await;
+
+        let client = OnmsClient::from_context(&ctx_for(
+            &format!("{}/api/v2/", mock.uri()),
+            AuthCreds::bearer("tok"),
+        ))
+        .unwrap();
+        let err = client.get::<Sample>("x", &[]).await.unwrap_err();
+        match err {
+            Error::UnsupportedAuthScheme(s) => assert_eq!(s, "Negotiate"),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn supported_only_challenge_is_not_flagged() {
+        let mock = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v2/x"))
+            .respond_with(
+                ResponseTemplate::new(401).insert_header("WWW-Authenticate", "Basic realm=\"x\""),
+            )
+            .mount(&mock)
+            .await;
+
+        let client = OnmsClient::from_context(&ctx_for(
+            &format!("{}/api/v2/", mock.uri()),
+            AuthCreds::bearer("tok"),
+        ))
+        .unwrap();
+        let err = client.get::<Sample>("x", &[]).await.unwrap_err();
+        // 401 with a *supported* scheme falls through to HttpStatus(401).
+        match err {
+            Error::HttpStatus { status, .. } => assert_eq!(status, 401),
+            other => panic!("unexpected {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -442,6 +656,41 @@ mod tests {
         assert_eq!(bytes, xml);
     }
 
+    #[tokio::test]
+    async fn multipart_wrapper_constructs_form_internally() {
+        let mock = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v2/eventconf/upload"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "success": [{"file": "foo.events.xml", "eventCount": 0}],
+                "errors": []
+            })))
+            .mount(&mock)
+            .await;
+
+        let client = OnmsClient::from_context(&ctx_for(
+            &format!("{}/api/v2/", mock.uri()),
+            AuthCreds::bearer("tok"),
+        ))
+        .unwrap();
+        let parts = vec![MultipartPart::xml("foo.events.xml", b"<events/>".to_vec())];
+        let _: serde_json::Value = client.multipart("eventconf/upload", &parts).await.unwrap();
+    }
+
+    #[test]
+    fn url_for_rejects_path_traversal() {
+        let client = OnmsClient::from_parts(
+            Url::parse("http://example.com/opennms/").unwrap(),
+            AuthCreds::bearer("t"),
+        )
+        .unwrap();
+        let err = client.url_for("api/v2/../../etc/passwd").unwrap_err();
+        match err {
+            Error::Config(m) => assert!(m.contains("path-traversal")),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
     #[test]
     fn url_join_handles_base_without_trailing_slash() {
         let client = OnmsClient::from_parts(
@@ -465,5 +714,23 @@ mod tests {
         .unwrap();
         let url = client.url_for("/api/v2/eventconf").unwrap();
         assert_eq!(url.as_str(), "http://example.com/opennms/api/v2/eventconf");
+    }
+
+    #[test]
+    fn extract_schemes_handles_realistic_challenges() {
+        assert_eq!(extract_schemes("Basic"), vec!["Basic"]);
+        assert_eq!(
+            extract_schemes("Bearer realm=\"x\", Negotiate"),
+            vec!["Bearer", "Negotiate"]
+        );
+        assert_eq!(
+            extract_schemes("Digest realm=\"foo\", qop=\"auth\""),
+            vec!["Digest"]
+        );
+        // Plain Bearer (no params) followed by another scheme.
+        assert_eq!(
+            extract_schemes("Bearer, Basic realm=\"y\""),
+            vec!["Bearer", "Basic"]
+        );
     }
 }

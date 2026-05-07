@@ -20,15 +20,23 @@ use crate::error::{Error, Result};
 
 // -- Path resolution ---------------------------------------------------------
 
-/// Default config-file location: `$ONMSCTL_CONFIG`, else
-/// `$XDG_CONFIG_HOME/onmsctl/config.yaml` (typically
-/// `~/.config/onmsctl/config.yaml`).
+/// Default config-file location.
+///
+/// 1. `$ONMSCTL_CONFIG` (if set and non-empty), otherwise
+/// 2. The platform's standard application-config directory, joined with
+///    `config.yaml`. Per the [`directories`] crate's conventions this is:
+///    - **Linux:** `$XDG_CONFIG_HOME/onmsctl/config.yaml`
+///      (typically `~/.config/onmsctl/config.yaml`)
+///    - **macOS:** `~/Library/Application Support/org.labmonkeys-space.onmsctl/config.yaml`
+///    - **Windows:** `%APPDATA%\labmonkeys-space\onmsctl\config\config.yaml`
 pub fn default_path() -> Result<PathBuf> {
-    if let Ok(p) = std::env::var("ONMSCTL_CONFIG") {
+    if let Ok(p) = std::env::var("ONMSCTL_CONFIG")
+        && !p.is_empty()
+    {
         return Ok(PathBuf::from(p));
     }
     let dirs = directories::ProjectDirs::from("org", "labmonkeys-space", "onmsctl")
-        .ok_or_else(|| Error::Config("unable to resolve XDG config directory".into()))?;
+        .ok_or_else(|| Error::Config("unable to resolve config directory".into()))?;
     Ok(dirs.config_dir().join("config.yaml"))
 }
 
@@ -104,10 +112,11 @@ pub struct ServerSpec {
 ///
 /// The kubectl-style YAML shape is `auth: { basic: { ... } }` or
 /// `auth: { bearer: { ... } }`. Modeled as a struct with two optional fields
-/// (rather than an externally-tagged enum) because `serde_yml` requires the
-/// YAML `!Tag` syntax for external tagging, which is unergonomic. Exactly
-/// one of `basic`/`bearer` must be declared; this is enforced by
-/// [`Self::validate`] during config load.
+/// (rather than an externally-tagged enum) because `serde_norway` (and
+/// `serde_yaml`-family YAML libraries generally) require the YAML `!Tag`
+/// syntax for external tagging, which is unergonomic for kubectl-style
+/// configs. Exactly one of `basic`/`bearer` must be declared; this is
+/// enforced by [`Self::validate`] during config load.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct AuthSpec {
@@ -153,6 +162,14 @@ pub struct BasicSpec {
 
 impl BasicSpec {
     fn validate(&self, ctx_name: &str) -> Result<()> {
+        if self.username.trim().is_empty() {
+            return Err(Error::Config(format!(
+                "context '{ctx_name}': basic auth username is empty"
+            )));
+        }
+        if let Some(kr) = &self.keyring {
+            kr.validate(ctx_name)?;
+        }
         // It is legal to declare none of password/password-file/keyring — the
         // password is then expected via $ONMS_PASSWORD at request time.
         // It is illegal to declare more than one source, since precedence is
@@ -187,6 +204,9 @@ pub struct BearerSpec {
 
 impl BearerSpec {
     fn validate(&self, ctx_name: &str) -> Result<()> {
+        if let Some(kr) = &self.keyring {
+            kr.validate(ctx_name)?;
+        }
         let n = [
             self.token.is_some(),
             self.token_file.is_some(),
@@ -209,6 +229,22 @@ impl BearerSpec {
 pub struct KeyringRef {
     pub service: String,
     pub account: String,
+}
+
+impl KeyringRef {
+    fn validate(&self, ctx_name: &str) -> Result<()> {
+        if self.service.trim().is_empty() {
+            return Err(Error::Config(format!(
+                "context '{ctx_name}': keyring service is empty"
+            )));
+        }
+        if self.account.trim().is_empty() {
+            return Err(Error::Config(format!(
+                "context '{ctx_name}': keyring account is empty"
+            )));
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

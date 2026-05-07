@@ -54,10 +54,19 @@ where
 
 fn render_table<T: TableRow>(items: &[T]) -> String {
     let mut t = Table::new();
+    let headers = T::headers();
     t.set_content_arrangement(ContentArrangement::DynamicFullWidth)
-        .set_header(T::headers());
+        .set_header(headers.clone());
     for item in items {
-        t.add_row(item.row());
+        let row = item.row();
+        debug_assert_eq!(
+            row.len(),
+            headers.len(),
+            "TableRow impl returned {} cells but declared {} headers",
+            row.len(),
+            headers.len()
+        );
+        t.add_row(row);
     }
     t.to_string()
 }
