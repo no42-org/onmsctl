@@ -17,6 +17,7 @@ thiserror = { workspace = true }
 async-trait = { workspace = true }
 quick-xml = { workspace = true }
 percent-encoding = { workspace = true }
+clap = { workspace = true }
 
 [dev-dependencies]
 wiremock = "0.6"

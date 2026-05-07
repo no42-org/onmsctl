@@ -5,20 +5,30 @@
 
 //! EventConf capability for `onmsctl`.
 //!
-//! Phase 3 commit 1 — wire-format DTOs and the typed `EventConfApi<'_>`
-//! wrapper around Horizon's `/eventconf/*` REST surface (16 endpoints +
-//! `find_source_by_name` lookup helper). YAML ↔ XML conversion lands in
-//! Phase 3 commit 2; `apply -f` integration lands in Phase 5 per the
-//! OpenSpec change `init-onmsctl-event-conf`.
+//! Public surface:
+//!
+//! - [`api::EventConfApi`] — typed wrapper around Horizon's `/eventconf/*`
+//!   REST surface (16 endpoints + `find_source_by_name` lookup).
+//! - [`dto::*`] — wire-format DTOs (sources, events, payloads, the unified
+//!   Event type with nested Mask/Logmsg/AlarmData/etc.).
+//! - [`xml::*`] — JSON Event ↔ eventconf XML conversion plus the
+//!   master-file synthesis and stable canonicalization functions.
+//! - [`cmd::*`] — clap subcommand definitions for the `onmsctl source ...`
+//!   tree (Phase 4 commit 1) and `onmsctl event ...` (Phase 4 commit 2).
+//! - `TableRow` impls for the public DTOs so the binary's `-o table`
+//!   path renders them via comfy-table.
 
 pub mod api;
+pub mod cmd;
 pub mod dto;
+mod render;
 pub mod xml;
 
 pub use api::{
     CreatedEvent, CreatedSource, EventConfApi, EventFilter, EventInSourceFilter, SourceFilter,
     SourceLookup, UploadFileError, UploadFileResult, UploadResult,
 };
+pub use cmd::SourceCmd;
 pub use dto::{
     AddEventConfSourceRequest, AlarmData, Autoacknowledge, Correlation,
     EnableDisableConfSourceEventsPayload, Event, EventConfEventDeletePayload, EventConfEventDto,
