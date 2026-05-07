@@ -10,4 +10,27 @@ description = "Shared infrastructure for onmsctl capabilities (Phase 1 stub; HTT
 publish = false
 
 [dependencies]
-# Phase 2: reqwest, serde, tokio, thiserror, directories, comfy-table, ...
+# Errors
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_norway = { workspace = true }
+
+# Config & secrets
+directories = { workspace = true }
+keyring = { workspace = true }
+
+# HTTP & async
+reqwest = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+
+# Output rendering
+comfy-table = { workspace = true }
+similar = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
