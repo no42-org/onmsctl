@@ -10,4 +10,13 @@ description = "EventConf capability for onmsctl (Phase 1 stub; source/event life
 publish = false
 
 [dependencies]
-# Phase 2: onmsctl-core, clap, serde, async-trait, quick-xml, ...
+onmsctl-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+# Phase 3 commit 2 adds quick-xml for the YAML <-> XML conversion.
+
+[dev-dependencies]
+wiremock = "0.6"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

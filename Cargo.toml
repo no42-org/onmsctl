@@ -37,9 +37,11 @@ keyring = "3"
 thiserror = "2"
 anyhow = "1"
 
-# Workspace-internal crates
-onmsctl-core = { path = "crates/onmsctl-core" }
-onmsctl-eventconf = { path = "crates/onmsctl-eventconf" }
+# Workspace-internal crates. Explicit version (alongside `path`) keeps
+# `cargo-deny check bans` happy — without it the dep registers as a
+# wildcard. The version mirrors `workspace.package.version`.
+onmsctl-core = { path = "crates/onmsctl-core", version = "=0.1.0" }
+onmsctl-eventconf = { path = "crates/onmsctl-eventconf", version = "=0.1.0" }
 
 [profile.release]
 strip = "symbols"
