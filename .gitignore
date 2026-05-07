@@ -1,0 +1,17 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# IDE
+.idea/
+.vscode/
+
+# AI tool working directories
+_bmad-output/
+_bmad/
+openspec/
+.agents/
+.claude/
+
+# OS
+.DS_Store
