@@ -1,0 +1,12 @@
+[package]
+name = "onmsctl-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Shared infrastructure for onmsctl capabilities (HTTP client, auth, config, output rendering, ApplyTarget trait)"
+
+[dependencies]
+# Phase 2: reqwest, serde, tokio, thiserror, directories, comfy-table, ...
