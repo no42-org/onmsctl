@@ -18,7 +18,9 @@ deny: install-cargo-deny
 verify: fmt clippy build test deny
 
 licenses: install-cargo-about
-	cargo about generate -c about.toml about.hbs > THIRD-PARTY-LICENSES.md
+	# Atomic write: failure leaves the existing file untouched.
+	cargo about generate -c about.toml -o THIRD-PARTY-LICENSES.md.tmp about.hbs && \
+		mv THIRD-PARTY-LICENSES.md.tmp THIRD-PARTY-LICENSES.md
 
 clean:
 	cargo clean

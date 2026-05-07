@@ -6,7 +6,8 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Shared infrastructure for onmsctl capabilities (HTTP client, auth, config, output rendering, ApplyTarget trait)"
+description = "Shared infrastructure for onmsctl capabilities (Phase 1 stub; HTTP / auth / config / render / ApplyTarget land in Phase 2)"
+publish = false
 
 [dependencies]
 # Phase 2: reqwest, serde, tokio, thiserror, directories, comfy-table, ...
