@@ -28,3 +28,8 @@ pub use context::{Context, Overrides};
 pub use error::{Error, Result};
 pub use format::OutputFormat;
 pub use render::{TableRow, render_list, render_one};
+
+/// Re-export of `reqwest::Url`. Capabilities use this to construct
+/// `OnmsClient::from_parts(...)` in tests without taking a direct dep on
+/// `reqwest`.
+pub use reqwest::Url;
