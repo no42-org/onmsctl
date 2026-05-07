@@ -6,7 +6,8 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Command-line interface for OpenNMS Horizon"
+description = "Command-line interface for OpenNMS Horizon (Phase 1 stub)"
+publish = false
 
 [[bin]]
 name = "onmsctl"

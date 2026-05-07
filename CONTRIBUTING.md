@@ -27,12 +27,15 @@ compatibility. The allowed license set is enforced by `cargo deny check`
 - MIT
 - BSD-2-Clause / BSD-3-Clause
 - ISC
-- MPL-2.0
+- MPL-2.0  *(file-scope copyleft; acceptable)*
 - Unicode-3.0 / Unicode-DFS-2016
 - Unlicense
 - Zlib
 
-Copyleft licenses (GPL, AGPL, LGPL) **MUST NOT** be introduced.
+**Project-scope copyleft licenses (GPL, AGPL, LGPL) MUST NOT be introduced.**
+File-scope copyleft (MPL-2.0) is acceptable: it imposes obligations on
+modifications to MPL-licensed source files but does not restrict the
+license of the wider work.
 
 After adding a dependency, regenerate the third-party license report:
 
@@ -48,8 +51,23 @@ Run `make verify` before opening a pull request. CI runs the same target.
 
 ## Source file headers
 
-Every new Rust source file starts with the SPDX-compliant header documented
-in the project's `CLAUDE.md`. The header is short and stable across edits.
+Every new Rust source file starts with this SPDX-compliant header:
+
+```rust
+/*
+ * Copyright <YEAR> Ronny Trommer <ronny@no42.org>
+ * SPDX-License-Identifier: Apache-2.0
+ */
+```
+
+Rules:
+
+- `<YEAR>` is the file's creation year. Do not bump it on subsequent edits.
+- The SPDX identifier line is load-bearing for license tooling — keep it
+  exactly as `SPDX-License-Identifier: Apache-2.0`.
+- The header sits at the very top of the file.
+- Do not add this header to non-source files (Markdown, JSON, TOML, YAML).
+- Do not add it to generated files (`// Code generated ... DO NOT EDIT.`).
 
 ## Commit messages
 

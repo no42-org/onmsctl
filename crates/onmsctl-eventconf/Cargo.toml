@@ -6,7 +6,8 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "EventConf capability for onmsctl: source/event lifecycle and apply -f against the Horizon REST API"
+description = "EventConf capability for onmsctl (Phase 1 stub; source/event lifecycle and apply -f land in Phases 3–5)"
+publish = false
 
 [dependencies]
 # Phase 2: onmsctl-core, clap, serde, async-trait, quick-xml, ...
