@@ -1,0 +1,47 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+authors = ["Ronny Trommer <ronny@no42.org>"]
+repository = "https://github.com/labmonkeys-space/onmsctl"
+rust-version = "1.85"
+
+[workspace.dependencies]
+# CLI & async runtime
+clap = { version = "4.5", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+
+# HTTP & TLS (rustls avoids OpenSSL dependency)
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "multipart"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yml = "0.0.12"
+quick-xml = { version = "0.36", features = ["serialize"] }
+
+# Output rendering
+comfy-table = "7"
+similar = "2"
+
+# Config & secrets
+directories = "5"
+keyring = "3"
+
+# Errors
+thiserror = "2"
+anyhow = "1"
+
+# Workspace-internal crates
+onmsctl-core = { path = "crates/onmsctl-core" }
+onmsctl-eventconf = { path = "crates/onmsctl-eventconf" }
+
+[profile.release]
+strip = "symbols"
+lto = "thin"
+codegen-units = 1
