@@ -14,4 +14,8 @@ name = "onmsctl"
 path = "src/main.rs"
 
 [dependencies]
-# Phase 2: onmsctl-core, onmsctl-eventconf, clap, tokio, anyhow
+onmsctl-core = { workspace = true }
+onmsctl-eventconf = { workspace = true }
+clap = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
