@@ -3,7 +3,16 @@ all-features = true
 
 [advisories]
 version = 2
+# Schema v2 advisory defaults (per cargo-deny):
+#   - vulnerability: deny  (blocks merge on RUSTSEC vulnerabilities)
+#   - unsound:       deny  (blocks merge on unsound APIs)
+#   - unmaintained:  warn  (surfaces but does not block)
+#   - notice:        warn  (surfaces but does not block)
+# This matches D9 from the Phase-1 review. To soften a specific advisory
+# (e.g. a temporary unmaintained warning we cannot replace yet), add its
+# RUSTSEC ID to `ignore` below.
 yanked = "deny"
+ignore = []
 
 [licenses]
 version = 2
@@ -29,3 +38,5 @@ wildcards = "deny"
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# When introducing a git dependency, add it here as e.g.:
+#   allow-git = ["https://github.com/labmonkeys-space/<repo>"]

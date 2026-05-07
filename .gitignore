@@ -2,6 +2,16 @@
 /target/
 **/*.rs.bk
 
+# Secrets — accidental-commit prevention. Never commit credentials.
+.env
+.env.*
+!.env.example
+!.env.sample
+*.pem
+*.key
+*.p12
+*.pfx
+
 # IDE
 .idea/
 .vscode/
