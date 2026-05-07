@@ -154,6 +154,10 @@ where
             if diff.is_empty() {
                 return Ok(Outcome::Unchanged);
             }
+            // Print the diff to stderr before any update — both for dry-run
+            // (so the user sees what WOULD change) and for the real-update
+            // path (so the user sees what IS about to change). Doc comment
+            // on `show_diff` is the load-bearing contract here.
             if opts.show_diff {
                 eprintln!("{diff}");
             }
@@ -201,9 +205,13 @@ mod tests {
         body: String,
     }
 
-    // Smuggle a `SharedStore` through tests. Each test gets its own state via
-    // `thread_local!`, independent of tokio runtime threading. (For real
-    // capabilities the store is the remote server, accessed via `OnmsClient`.)
+    // Smuggle a `SharedStore` through tests. The trait methods on `Fake` are
+    // associated functions with no `self` and no test-fixture parameter, so
+    // we route per-test state through a `thread_local!`. Tests are pinned to
+    // the current-thread runtime via `#[tokio::test(flavor = "current_thread")]`
+    // so awaits cannot resume on a different thread where the thread_local
+    // is unset. (For real capabilities the "store" is the remote server,
+    // accessed via `OnmsClient`; this dance is test-only.)
     thread_local! {
         static FAKE_STORE: std::cell::RefCell<Option<SharedStore>> = const { std::cell::RefCell::new(None) };
     }
@@ -270,7 +278,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn create_path_when_remote_absent() {
         let store: SharedStore = Arc::new(Mutex::new(Store::default()));
         install_store(store.clone());
@@ -288,7 +296,7 @@ mod tests {
         assert!(s.remote.is_some());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn unchanged_when_remote_matches_local() {
         let store: SharedStore = Arc::new(Mutex::new(Store {
             remote: Some(RemoteSrc {
@@ -311,7 +319,7 @@ mod tests {
         assert_eq!(s.updates, 0);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn update_path_when_remote_differs() {
         let store: SharedStore = Arc::new(Mutex::new(Store {
             remote: Some(RemoteSrc {
@@ -334,7 +342,7 @@ mod tests {
         assert_eq!(s.remote.as_ref().unwrap().body, "v2");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn dry_run_does_not_mutate_create_path() {
         let store: SharedStore = Arc::new(Mutex::new(Store::default()));
         install_store(store.clone());
@@ -353,7 +361,7 @@ mod tests {
         assert!(s.remote.is_none());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn dry_run_does_not_mutate_update_path() {
         let store: SharedStore = Arc::new(Mutex::new(Store {
             remote: Some(RemoteSrc {

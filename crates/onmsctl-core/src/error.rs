@@ -12,6 +12,27 @@ use thiserror::Error;
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
+/// Hard cap on the body excerpt included in [`Error::HttpStatus`]. The wire
+/// body may be much larger; we truncate to this length and append a marker
+/// so error chains do not balloon stderr or log output.
+pub const HTTP_BODY_EXCERPT_BYTES: usize = 4096;
+
+/// Truncate `body` to [`HTTP_BODY_EXCERPT_BYTES`] characters (not bytes —
+/// honors UTF-8 char boundaries to avoid panics) and append a marker noting
+/// the original length.
+pub fn excerpt_body(body: &str) -> String {
+    let total = body.len();
+    if total <= HTTP_BODY_EXCERPT_BYTES {
+        return body.to_string();
+    }
+    // Trim at a UTF-8 char boundary at or below the cap.
+    let mut end = HTTP_BODY_EXCERPT_BYTES;
+    while !body.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{} [… truncated, {} bytes total]", &body[..end], total)
+}
+
 #[derive(Debug, Error)]
 pub enum Error {
     // -- Config / context resolution --
@@ -30,6 +51,9 @@ pub enum Error {
     Auth(String),
 
     // -- HTTP layer --
+    /// HTTP non-success response. The `body` field is capped at
+    /// [`HTTP_BODY_EXCERPT_BYTES`] to avoid dumping multi-MB error pages
+    /// (e.g. Tomcat HTML stack traces) into stderr / log output.
     #[error("{method} {path} returned {status}: {body}")]
     HttpStatus {
         method: String,
@@ -177,5 +201,28 @@ mod tests {
     fn unknown_context_names_the_context() {
         let e = Error::UnknownContext("staging".into());
         assert!(e.to_string().contains("staging"));
+    }
+
+    #[test]
+    fn excerpt_body_passes_short_input_through() {
+        let s = "short body";
+        assert_eq!(excerpt_body(s), s);
+    }
+
+    #[test]
+    fn excerpt_body_truncates_long_input_and_marks_total_length() {
+        let big = "x".repeat(HTTP_BODY_EXCERPT_BYTES * 2);
+        let out = excerpt_body(&big);
+        assert!(out.len() < big.len());
+        assert!(out.contains("truncated"));
+        assert!(out.contains(&format!("{} bytes total", big.len())));
+    }
+
+    #[test]
+    fn excerpt_body_respects_utf8_boundary() {
+        // A multi-byte char that straddles the cap must not split a code point.
+        let prefix = "x".repeat(HTTP_BODY_EXCERPT_BYTES - 1);
+        let big = format!("{prefix}€€€"); // each € is 3 bytes
+        let _ = excerpt_body(&big); // just must not panic
     }
 }
