@@ -71,7 +71,9 @@ enum TopCmd {
     /// Manage eventconf sources.
     #[command(subcommand)]
     Source(onmsctl_eventconf::cmd::SourceCmd),
-    // Phase 4 commit 2: Event(onmsctl_eventconf::cmd::EventCmd),
+    /// Manage eventconf events.
+    #[command(subcommand)]
+    Event(onmsctl_eventconf::cmd::EventCmd),
     // Future capabilities (Node, Alarm, …) extend here.
 }
 
@@ -131,6 +133,7 @@ async fn run(cli: Cli) -> Result<()> {
     // 4. Dispatch to the selected capability.
     match cli.command {
         TopCmd::Source(cmd) => cmd.run(&ctx).await?,
+        TopCmd::Event(cmd) => cmd.run(&ctx).await?,
     }
     Ok(())
 }
