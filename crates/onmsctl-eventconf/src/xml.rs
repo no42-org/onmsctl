@@ -65,10 +65,25 @@ pub fn synth_master_with_order(basenames: &[&str]) -> Result<String> {
 
 /// Canonicalize an eventconf XML document into a stable byte form.
 ///
-/// Pipeline: parse → re-serialize via the modeled schema. Two equivalent
-/// documents (whitespace, attribute order) round-trip to identical output.
-/// Documents containing unmodeled elements still round-trip stably — the
-/// unmodeled elements are dropped, but consistently.
+/// **Lossy normalization.** This function is named "canonical" for its
+/// fixed-point property — `canonical(canonical(x)) == canonical(x)` —
+/// not because it preserves every aspect of the input. The pipeline is
+/// parse-via-modeled-schema → re-serialize, which means:
+///
+///   - **Dropped:** XML declaration (`<?xml ...?>`), DOCTYPE / DTD
+///     references, namespace declarations, processing instructions,
+///     comments, and any element / attribute outside the modeled schema
+///     in this module (e.g. `<varbindsdecode>`, `<forward>`, `<script>`).
+///   - **Normalized:** whitespace differences, attribute ordering,
+///     element ordering within an event (re-serialized in struct field
+///     order).
+///
+/// The drops are *consistent* — running canonical twice produces identical
+/// output — which is sufficient for hash-based change detection in the
+/// `apply -f` flow. It is **not** suitable as a general-purpose XML
+/// canonicalization (e.g. for digital signatures).
+///
+/// Pipeline: parse → re-serialize via the modeled schema.
 pub fn xml_canonical(xml: &[u8]) -> Result<String> {
     let s = std::str::from_utf8(xml)
         .map_err(|e| Error::Config(format!("eventconf XML is not valid UTF-8: {e}")))?;

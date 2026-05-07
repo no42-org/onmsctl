@@ -16,6 +16,7 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
 quick-xml = { workspace = true }
+percent-encoding = { workspace = true }
 
 [dev-dependencies]
 wiremock = "0.6"

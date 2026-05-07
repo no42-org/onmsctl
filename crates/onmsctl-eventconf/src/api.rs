@@ -13,9 +13,36 @@
 
 use onmsctl_core::client::MultipartPart;
 use onmsctl_core::{Error, OnmsClient, Result};
+use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use serde::{Deserialize, Serialize};
 
 use crate::dto::*;
+
+/// Characters that need percent-encoding when interpolated into a URL path
+/// segment. Equivalent to RFC 3986's complement of `pchar` minus `/`. We
+/// keep alphanumerics, `-._~`, and `:@` (allowed in path segments)
+/// unencoded.
+const PATH_SEGMENT: &AsciiSet = &CONTROLS
+    .add(b' ')
+    .add(b'"')
+    .add(b'#')
+    .add(b'<')
+    .add(b'>')
+    .add(b'?')
+    .add(b'`')
+    .add(b'{')
+    .add(b'}')
+    .add(b'%')
+    .add(b'/')
+    .add(b'\\')
+    .add(b'+')
+    .add(b'&')
+    .add(b'=');
+
+/// Hard cap on the page size used by `find_source_by_name` so a degenerate
+/// duplicate-name pair is detected even if the server's default limit is
+/// small. Real eventconf installs have far fewer than 1000 sources.
+const FIND_SOURCE_LIMIT: i32 = 1000;
 
 /// Base path for all eventconf endpoints. Joined onto the configured
 /// `OnmsClient` base URL.
@@ -142,7 +169,10 @@ impl EventConfApi<'_> {
     }
 
     /// `DELETE /eventconf/sources` with body `{ sourceIds: [...] }`.
+    /// Empty slice is refused client-side so the server cannot interpret
+    /// `{sourceIds: []}` as "delete all".
     pub async fn delete_sources(&self, source_ids: &[i64]) -> Result<()> {
+        ensure_non_empty(source_ids, "delete_sources", "source ids")?;
         let path = format!("{BASE}/sources");
         let payload = EventConfSourceDeletePayload {
             source_ids: source_ids.to_vec(),
@@ -150,13 +180,14 @@ impl EventConfApi<'_> {
         self.client.delete(&path, Some(&payload)).await
     }
 
-    /// `PATCH /eventconf/sources/status`.
+    /// `PATCH /eventconf/sources/status`. Empty slice refused client-side.
     pub async fn set_sources_enabled(
         &self,
         source_ids: &[i64],
         enabled: bool,
         cascade_to_events: bool,
     ) -> Result<()> {
+        ensure_non_empty(source_ids, "set_sources_enabled", "source ids")?;
         let path = format!("{BASE}/sources/status");
         let payload = EventConfSrcEnableDisablePayload {
             enabled,
@@ -187,6 +218,7 @@ impl EventConfApi<'_> {
 
     /// `GET /eventconf/filter/sources` with `SourceFilter` parameters.
     pub async fn filter_sources(&self, filter: &SourceFilter) -> Result<Page<EventConfSourceDto>> {
+        validate_paging(filter.offset, filter.limit, "filter_sources")?;
         let path = format!("{BASE}/filter/sources");
         let mut q: Vec<(&str, String)> = Vec::new();
         if let Some(f) = &filter.filter {
@@ -227,8 +259,23 @@ impl EventConfApi<'_> {
     /// Look up a source by its exact name. Wraps `filter_sources` and
     /// post-filters (the `filter` query parameter is substring-matching;
     /// we require an exact name match).
+    ///
+    /// Uses an explicit page limit of [`FIND_SOURCE_LIMIT`] so a degenerate
+    /// duplicate-name pair on a hypothetical page 2 cannot be silently
+    /// missed. If `total_records` exceeds the limit the lookup errors
+    /// rather than risk reporting `Found` for a name that may also live
+    /// on an unread page.
     pub async fn find_source_by_name(&self, name: &str) -> Result<SourceLookup> {
-        let page = self.filter_sources(&SourceFilter::name_eq(name)).await?;
+        let mut filter = SourceFilter::name_eq(name);
+        filter.limit = Some(FIND_SOURCE_LIMIT);
+        let page = self.filter_sources(&filter).await?;
+        if page.total_records > FIND_SOURCE_LIMIT as i64 {
+            return Err(Error::Config(format!(
+                "find_source_by_name('{name}') returned {} substring matches; \
+                 cannot guarantee exact-name disambiguation. Use a more specific name.",
+                page.total_records
+            )));
+        }
         let exact: Vec<EventConfSourceDto> =
             page.items.into_iter().filter(|s| s.name == name).collect();
         match exact.len() {
@@ -250,6 +297,7 @@ impl EventConfApi<'_> {
         source_id: i64,
         filter: &EventInSourceFilter,
     ) -> Result<Page<EventConfEventDto>> {
+        validate_paging(filter.offset, filter.limit, "list_events_in_source")?;
         let path = format!("{BASE}/filter/{source_id}/events");
         let mut q: Vec<(&str, String)> = Vec::new();
         if let Some(f) = &filter.event_filter {
@@ -281,6 +329,7 @@ impl EventConfApi<'_> {
 
     /// `GET /eventconf/filter` — cross-source event filter.
     pub async fn filter_events(&self, filter: &EventFilter) -> Result<Vec<EventConfEventDto>> {
+        validate_paging(filter.offset, filter.limit, "filter_events")?;
         let path = format!("{BASE}/filter");
         let mut q: Vec<(&str, String)> = Vec::new();
         if let Some(u) = &filter.uei {
@@ -307,9 +356,12 @@ impl EventConfApi<'_> {
         }
     }
 
-    /// `GET /eventconf/vendors/{vendorName}/events`.
+    /// `GET /eventconf/vendors/{vendorName}/events`. The vendor name is
+    /// percent-encoded so names with `&`, ` `, `'`, `/` etc. don't break
+    /// the URL routing.
     pub async fn get_events_by_vendor(&self, vendor: &str) -> Result<Vec<EventConfEventDto>> {
-        let path = format!("{BASE}/vendors/{vendor}/events");
+        let encoded = utf8_percent_encode(vendor, PATH_SEGMENT).to_string();
+        let path = format!("{BASE}/vendors/{encoded}/events");
         self.client.get(&path, &[]).await
     }
 
@@ -333,7 +385,9 @@ impl EventConfApi<'_> {
     }
 
     /// `DELETE /eventconf/sources/{sourceId}/events` with `{eventIds: [...]}`.
+    /// Empty slice is refused client-side.
     pub async fn delete_events(&self, source_id: i64, event_ids: &[i64]) -> Result<()> {
+        ensure_non_empty(event_ids, "delete_events", "event ids")?;
         let path = format!("{BASE}/sources/{source_id}/events");
         let payload = EventConfEventDeletePayload {
             event_ids: event_ids.to_vec(),
@@ -341,13 +395,15 @@ impl EventConfApi<'_> {
         self.client.delete(&path, Some(&payload)).await
     }
 
-    /// `PATCH /eventconf/sources/{sourceId}/events/status`.
+    /// `PATCH /eventconf/sources/{sourceId}/events/status`. Empty slice
+    /// is refused client-side.
     pub async fn set_events_enabled(
         &self,
         source_id: i64,
         event_ids: &[i64],
         enable: bool,
     ) -> Result<()> {
+        ensure_non_empty(event_ids, "set_events_enabled", "event ids")?;
         let path = format!("{BASE}/sources/{source_id}/events/status");
         let payload = EnableDisableConfSourceEventsPayload {
             enable,
@@ -362,6 +418,39 @@ impl EventConfApi<'_> {
 /// underlying `OnmsClient::get` expects.
 fn borrow_pairs<'a>(pairs: &'a [(&'a str, String)]) -> Vec<(&'a str, &'a str)> {
     pairs.iter().map(|(k, v)| (*k, v.as_str())).collect()
+}
+
+/// Reject an empty id slice client-side. Some Horizon mutation endpoints
+/// have undefined semantics for empty payloads (potentially "delete all");
+/// we refuse to issue the request rather than gamble on server behavior.
+fn ensure_non_empty(ids: &[i64], method: &str, kind: &str) -> Result<()> {
+    if ids.is_empty() {
+        return Err(Error::Config(format!(
+            "{method}: refusing to call with empty {kind} slice; pass at least one id"
+        )));
+    }
+    Ok(())
+}
+
+/// Validate that paging parameters, when supplied, are non-negative.
+/// Negative values would either be rejected server-side with an opaque 400
+/// or, worse, silently produce undefined paging behaviour.
+fn validate_paging(offset: Option<i32>, limit: Option<i32>, method: &str) -> Result<()> {
+    if let Some(off) = offset
+        && off < 0
+    {
+        return Err(Error::Config(format!(
+            "{method}: offset must be non-negative, got {off}"
+        )));
+    }
+    if let Some(lim) = limit
+        && lim < 0
+    {
+        return Err(Error::Config(format!(
+            "{method}: limit must be non-negative, got {lim}"
+        )));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -754,6 +843,117 @@ mod tests {
             .await;
         let api = EventConfApi::new(&client);
         let _ = api.get_events_by_vendor("cisco").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn delete_sources_rejects_empty_slice() {
+        let (_mock, client) = mock_with_client().await;
+        let api = EventConfApi::new(&client);
+        let err = api.delete_sources(&[]).await.unwrap_err();
+        match err {
+            Error::Config(m) => {
+                assert!(m.contains("delete_sources"));
+                assert!(m.contains("empty"));
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn delete_events_rejects_empty_slice() {
+        let (_mock, client) = mock_with_client().await;
+        let api = EventConfApi::new(&client);
+        let err = api.delete_events(42, &[]).await.unwrap_err();
+        match err {
+            Error::Config(m) => assert!(m.contains("empty")),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn set_sources_enabled_rejects_empty_slice() {
+        let (_mock, client) = mock_with_client().await;
+        let api = EventConfApi::new(&client);
+        let err = api.set_sources_enabled(&[], true, false).await.unwrap_err();
+        match err {
+            Error::Config(m) => assert!(m.contains("empty")),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn negative_offset_is_rejected_client_side() {
+        let (_mock, client) = mock_with_client().await;
+        let api = EventConfApi::new(&client);
+        let err = api
+            .filter_sources(&SourceFilter {
+                offset: Some(-1),
+                ..Default::default()
+            })
+            .await
+            .unwrap_err();
+        match err {
+            Error::Config(m) => assert!(m.contains("offset must be non-negative")),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn negative_limit_is_rejected_client_side() {
+        let (_mock, client) = mock_with_client().await;
+        let api = EventConfApi::new(&client);
+        let err = api
+            .filter_events(&EventFilter {
+                limit: Some(-5),
+                ..Default::default()
+            })
+            .await
+            .unwrap_err();
+        match err {
+            Error::Config(m) => assert!(m.contains("limit must be non-negative")),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn vendor_name_is_percent_encoded_in_path() {
+        // A vendor name containing `&`, ` `, and `/` would otherwise break
+        // URL routing (the `/` would split into a new path segment).
+        // Encoded form: Schneider%20Electric%20%26%20Co%2FBrands
+        let (mock, client) = mock_with_client().await;
+        Mock::given(method("GET"))
+            .and(path(
+                "/api/v2/eventconf/vendors/Schneider%20Electric%20%26%20Co%2FBrands/events",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&mock)
+            .await;
+        let api = EventConfApi::new(&client);
+        let _ = api
+            .get_events_by_vendor("Schneider Electric & Co/Brands")
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn find_source_by_name_errors_when_total_exceeds_page_limit() {
+        // Server reports more substring matches than fit in a single
+        // page — the lookup cannot guarantee exact-name disambiguation.
+        let (mock, client) = mock_with_client().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v2/eventconf/filter/sources"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "totalRecords": 1500,
+                "items": []
+            })))
+            .mount(&mock)
+            .await;
+        let api = EventConfApi::new(&client);
+        let err = api.find_source_by_name("common-prefix").await.unwrap_err();
+        match err {
+            Error::Config(m) => assert!(m.contains("more specific")),
+            other => panic!("unexpected {other:?}"),
+        }
     }
 
     #[tokio::test]

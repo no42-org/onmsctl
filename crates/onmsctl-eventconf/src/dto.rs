@@ -17,23 +17,29 @@ use serde::{Deserialize, Serialize};
 
 /// A row in the EventConf source table. Returned by GET-by-id, list, and
 /// filter endpoints.
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", default)]
+///
+/// Required fields (`id`, `name`, `file_order`, `event_count`, `enabled`)
+/// are strict on read — a server response that omits one fails parsing
+/// rather than silently producing `id: 0`/`name: ""`. Truly optional
+/// fields (vendor, description, created_time, …) keep `Option<>` and
+/// `#[serde(default)]` individually.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct EventConfSourceDto {
     pub id: i64,
     pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vendor: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     pub file_order: i32,
     pub event_count: i32,
     pub enabled: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_time: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_modified: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uploaded_by: Option<String>,
 }
 
@@ -78,24 +84,27 @@ pub struct SourceNameAndId {
 
 /// A row in the EventConf event table. Returned by per-source listing,
 /// filter, and vendor endpoints.
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", default)]
+///
+/// Required fields (id, source_id, uei, event_label, severity, enabled)
+/// are strict on read — see [`EventConfSourceDto`] for the rationale.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct EventConfEventDto {
     pub id: i64,
     pub source_id: i64,
     pub uei: String,
     pub event_label: String,
     pub severity: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     pub enabled: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vendor: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_time: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_modified: Option<String>,
 }
 
@@ -167,7 +176,11 @@ pub struct Event {
     #[serde(skip_serializing_if = "Option::is_none", rename = "snmp")]
     pub snmp: Option<Snmp>,
     /// Parameters extracted from the event payload. Mapped from
-    /// `parmCollection` in the Horizon schema.
+    /// `parmCollection` in the Horizon schema. **Note:** this field has no
+    /// representation in eventconf XML (eventconf is a static
+    /// configuration; `parmCollection` is a *runtime* event field). A
+    /// JSON → XML → JSON round-trip via [`crate::xml`] therefore drops
+    /// this field. Setting it has no effect on uploaded source XML.
     #[serde(skip_serializing_if = "Option::is_none", rename = "parmCollection")]
     pub parm_collection: Option<Vec<Parm>>,
 }
@@ -272,9 +285,13 @@ pub struct ParmValue {
 /// Page returned by filter endpoints that include `totalRecords` alongside
 /// the items array. The `Map` shape declared in the OpenAPI spec is opened
 /// up here to a typed pair.
+///
+/// Both fields default — `total_records` to 0 and `items` to empty — so
+/// servers that omit one or both still parse to a usable empty page.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Page<T> {
+    #[serde(default)]
     pub total_records: i64,
     #[serde(default = "Vec::new")]
     pub items: Vec<T>,
@@ -312,7 +329,7 @@ impl Severity {
 }
 
 impl std::str::FromStr for Severity {
-    type Err = String;
+    type Err = onmsctl_core::Error;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "Indeterminate" => Ok(Self::Indeterminate),
@@ -322,9 +339,9 @@ impl std::str::FromStr for Severity {
             "Minor" => Ok(Self::Minor),
             "Major" => Ok(Self::Major),
             "Critical" => Ok(Self::Critical),
-            other => Err(format!(
+            other => Err(onmsctl_core::Error::Config(format!(
                 "unknown severity '{other}'; expected one of: Indeterminate, Cleared, Normal, Warning, Minor, Major, Critical"
-            )),
+            ))),
         }
     }
 }
@@ -485,8 +502,9 @@ mod tests {
     #[test]
     fn severity_unknown_value_lists_valid_set() {
         let err = "Bogus".parse::<Severity>().unwrap_err();
-        assert!(err.contains("Bogus"));
-        assert!(err.contains("Warning"));
-        assert!(err.contains("Critical"));
+        let msg = err.to_string();
+        assert!(msg.contains("Bogus"));
+        assert!(msg.contains("Warning"));
+        assert!(msg.contains("Critical"));
     }
 }
