@@ -5,7 +5,9 @@
 
 //! `onmsctl event ...` subcommands.
 //!
-//! `event list` dispatches to one of three endpoints depending on flags:
+//! `event list` dispatches to one of three endpoints depending on flags
+//! (the flags are clap-level mutually exclusive — the parser rejects
+//! conflicting combinations rather than silently picking a winner):
 //!
 //!   - `--source <id>`   → `GET /eventconf/filter/{id}/events`
 //!   - `--vendor <name>` (alone) → `GET /eventconf/vendors/{name}/events`
@@ -23,14 +25,27 @@ use clap::Subcommand;
 use onmsctl_core::{Context, Error, OnmsClient, Result, render_list};
 
 use crate::api::{EventConfApi, EventFilter, EventInSourceFilter};
+use crate::cmd::source::ensure_positive_id;
 use crate::dto::{Event, EventConfEventEditRequest};
+
+/// Hard cap on the size of a `-f event.yaml` input file. Events are
+/// typically a few hundred bytes; capping at 16 MiB matches the rest of
+/// the codebase and prevents accidental OOM on a misdirected path.
+const MAX_EVENT_FILE_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum EventCmd {
     /// List events. Endpoint chosen by flag combination — see module docs.
+    /// At least one filter (`--source`, `--uei`, `--vendor`, or
+    /// `--source-name`) is required. `--source` is mutually exclusive
+    /// with the cross-source filter flags.
     List {
-        /// List events for a specific source id.
-        #[arg(long)]
+        /// List events for a specific source id. Mutually exclusive with
+        /// the cross-source filter flags.
+        #[arg(
+            long,
+            conflicts_with_all = ["uei", "vendor", "source_name", "event_filter"]
+        )]
         source: Option<i64>,
         /// Cross-source filter on UEI (substring match).
         #[arg(long)]
@@ -71,18 +86,24 @@ pub enum EventCmd {
     },
 
     /// Update an event by `<sourceId>/<eventId>` from a YAML/JSON file.
-    /// `--enabled` may be passed alongside `-f` to override the enabled
-    /// flag; otherwise the file's body is taken as-is and the request's
-    /// `enabled` flag defaults to `true`.
+    /// `--enabled true|false` is **required** so the caller cannot
+    /// accidentally flip the event's enabled state by editing the body
+    /// alone.
     Update {
         /// Reference in `<sourceId>/<eventId>` form.
         reference: String,
         /// Path to a YAML or JSON file describing the event body.
         #[arg(short = 'f', long)]
         file: PathBuf,
-        /// Override the event's enabled flag for this update.
-        #[arg(long)]
-        enabled: Option<bool>,
+        /// Required explicit enabled flag. Must be `true` or `false`.
+        #[arg(
+            long,
+            action = clap::ArgAction::Set,
+            num_args = 1,
+            required = true,
+            value_name = "BOOL"
+        )]
+        enabled: bool,
     },
 
     /// Delete one or more events. Refs grouped by source-id and one
@@ -124,7 +145,14 @@ impl EventCmd {
                 offset,
                 limit,
             } => {
+                if source.is_none() && uei.is_none() && vendor.is_none() && source_name.is_none() {
+                    return Err(Error::Config(
+                        "event list: specify at least one filter (--source, --uei, --vendor, or --source-name)"
+                            .into(),
+                    ));
+                }
                 if let Some(sid) = source {
+                    ensure_positive_id(sid, "source id")?;
                     let f = EventInSourceFilter {
                         event_filter,
                         event_sort_by: sort_by,
@@ -157,6 +185,7 @@ impl EventCmd {
                 }
             }
             EventCmd::Add { source, file } => {
+                ensure_positive_id(source, "source id")?;
                 let event: Event = read_event_file(&file)?;
                 let id = api.add_event(source, &event).await?;
                 eprintln!("created event {id} under source {source}");
@@ -168,12 +197,9 @@ impl EventCmd {
             } => {
                 let (sid, eid) = parse_ref(&reference)?;
                 let event: Event = read_event_file(&file)?;
-                let req = EventConfEventEditRequest {
-                    enabled: enabled.unwrap_or(true),
-                    event,
-                };
+                let req = EventConfEventEditRequest { enabled, event };
                 api.update_event(sid, eid, &req).await?;
-                eprintln!("updated event {sid}/{eid}");
+                eprintln!("updated event {sid}/{eid} (enabled={})", enabled);
             }
             EventCmd::Delete { refs } => {
                 run_grouped(&refs, "delete", |sid, eids| {
@@ -201,20 +227,35 @@ impl EventCmd {
     }
 }
 
-/// Parse `<sourceId>/<eventId>` notation into the typed pair. Used by every
-/// event mutation command.
+/// Parse `<sourceId>/<eventId>` notation into the typed pair. Both halves
+/// must be present, non-empty, and non-negative.
 fn parse_ref(s: &str) -> Result<(i64, i64)> {
+    if s.is_empty() {
+        return Err(Error::Config(
+            "empty event reference; expected '<sourceId>/<eventId>'".into(),
+        ));
+    }
     let (left, right) = s.split_once('/').ok_or_else(|| {
         Error::Config(format!(
             "event reference '{s}' must be in '<sourceId>/<eventId>' form"
         ))
     })?;
+    if left.is_empty() || right.is_empty() {
+        return Err(Error::Config(format!(
+            "event reference '{s}' has empty id segment; expected '<sourceId>/<eventId>'"
+        )));
+    }
     let sid: i64 = left
         .parse()
         .map_err(|e| Error::Config(format!("event reference '{s}': bad sourceId: {e}")))?;
     let eid: i64 = right
         .parse()
         .map_err(|e| Error::Config(format!("event reference '{s}': bad eventId: {e}")))?;
+    if sid <= 0 || eid <= 0 {
+        return Err(Error::Config(format!(
+            "event reference '{s}': ids must be positive (got {sid}/{eid})"
+        )));
+    }
     Ok((sid, eid))
 }
 
@@ -246,8 +287,25 @@ where
 }
 
 /// Read an Event from a YAML or JSON file. `serde_norway` accepts JSON
-/// as a YAML subset so we don't need separate paths.
+/// as a YAML subset so we don't need separate paths. Caps the file size
+/// at [`MAX_EVENT_FILE_BYTES`].
 fn read_event_file(path: &std::path::Path) -> Result<Event> {
+    let meta = std::fs::metadata(path)
+        .map_err(|e| Error::Config(format!("failed to stat {}: {e}", path.display())))?;
+    if !meta.is_file() {
+        return Err(Error::Config(format!(
+            "{} is not a regular file",
+            path.display()
+        )));
+    }
+    if meta.len() > MAX_EVENT_FILE_BYTES {
+        return Err(Error::Config(format!(
+            "{} is {} bytes, exceeds event-file cap of {} bytes",
+            path.display(),
+            meta.len(),
+            MAX_EVENT_FILE_BYTES
+        )));
+    }
     let bytes = std::fs::read(path)
         .map_err(|e| Error::Config(format!("failed to read {}: {e}", path.display())))?;
     serde_norway::from_slice(&bytes).map_err(|e| {
@@ -294,6 +352,46 @@ mod tests {
         let err = parse_ref("42/108/extra").unwrap_err();
         match err {
             Error::Config(m) => assert!(m.contains("bad eventId")),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_ref_rejects_empty_string() {
+        let err = parse_ref("").unwrap_err();
+        match err {
+            Error::Config(m) => assert!(m.contains("empty event reference")),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_ref_rejects_empty_segments() {
+        for bad in ["/108", "42/", "/", " /1", "1/ "] {
+            let err = parse_ref(bad).unwrap_err();
+            assert!(matches!(err, Error::Config(_)), "for input '{bad}'");
+        }
+    }
+
+    #[test]
+    fn parse_ref_rejects_negative_ids() {
+        let err = parse_ref("-1/108").unwrap_err();
+        match err {
+            Error::Config(m) => assert!(m.contains("must be positive")),
+            other => panic!("unexpected {other:?}"),
+        }
+        let err = parse_ref("42/-5").unwrap_err();
+        match err {
+            Error::Config(m) => assert!(m.contains("must be positive")),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_ref_rejects_zero_ids() {
+        let err = parse_ref("0/108").unwrap_err();
+        match err {
+            Error::Config(m) => assert!(m.contains("must be positive")),
             other => panic!("unexpected {other:?}"),
         }
     }

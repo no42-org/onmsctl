@@ -9,6 +9,7 @@
 //! `EventConfApi`. The handlers wire flag inputs to API calls and stream
 //! output through `onmsctl_core::render_*`.
 
+use std::io::ErrorKind;
 use std::path::PathBuf;
 
 use clap::Subcommand;
@@ -16,8 +17,13 @@ use onmsctl_core::client::MultipartPart;
 use onmsctl_core::{Context, Error, OnmsClient, Result, render_list, render_one};
 
 use crate::api::{EventConfApi, SourceFilter};
-use crate::dto::{AddEventConfSourceRequest, EventConfSourceDto, SourceNameAndId};
+use crate::dto::{AddEventConfSourceRequest, SourceNameAndId};
 use crate::render::SourceName;
+
+/// Hard cap on bytes read from each upload-input file. Matches the
+/// equivalent cap in `OnmsClient::get_bytes` so we never accidentally
+/// buffer more than 16 MiB into the multipart body.
+const MAX_UPLOAD_BYTES_PER_FILE: u64 = 16 * 1024 * 1024;
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum SourceCmd {
@@ -105,6 +111,9 @@ pub enum SourceCmd {
         /// Write to this file (default: stdout).
         #[arg(short = 'O', long)]
         output_file: Option<PathBuf>,
+        /// Overwrite the output file if it already exists.
+        #[arg(long)]
+        force: bool,
     },
 
     /// List the names of all eventconf sources.
@@ -138,6 +147,7 @@ impl SourceCmd {
                 println!("{out}");
             }
             SourceCmd::Get { id } => {
+                ensure_positive_id(id, "source id")?;
                 let s = api.get_source(id).await?;
                 let out = render_one(&s, ctx.output_format)?;
                 println!("{out}");
@@ -159,11 +169,17 @@ impl SourceCmd {
                 );
             }
             SourceCmd::Delete { ids } => {
+                for id in &ids {
+                    ensure_positive_id(*id, "source id")?;
+                }
                 let n = ids.len();
                 api.delete_sources(&ids).await?;
                 eprintln!("deleted {n} source(s)");
             }
             SourceCmd::Enable { ids, cascade } => {
+                for id in &ids {
+                    ensure_positive_id(*id, "source id")?;
+                }
                 let n = ids.len();
                 api.set_sources_enabled(&ids, true, cascade).await?;
                 eprintln!(
@@ -172,6 +188,9 @@ impl SourceCmd {
                 );
             }
             SourceCmd::Disable { ids, cascade } => {
+                for id in &ids {
+                    ensure_positive_id(*id, "source id")?;
+                }
                 let n = ids.len();
                 api.set_sources_enabled(&ids, false, cascade).await?;
                 eprintln!(
@@ -184,24 +203,56 @@ impl SourceCmd {
                 let result = api.upload(&parts).await?;
                 let success_n = result.success.len();
                 let error_n = result.errors.len();
-                if !result.success.is_empty() {
-                    let out = render_list(&result.success, ctx.output_format)?;
-                    println!("{out}");
-                }
-                if !result.errors.is_empty() {
-                    let out = render_list(&result.errors, ctx.output_format)?;
-                    eprintln!("{out}");
+                // Render to a single stream depending on output format.
+                // Structured outputs (json/yaml) emit a single combined
+                // document; table mode prints success and error tables
+                // back to back to stdout for human viewing.
+                use onmsctl_core::OutputFormat;
+                match ctx.output_format {
+                    OutputFormat::Table => {
+                        if !result.success.is_empty() {
+                            let out = render_list(&result.success, OutputFormat::Table)?;
+                            println!("{out}");
+                        }
+                        if !result.errors.is_empty() {
+                            let out = render_list(&result.errors, OutputFormat::Table)?;
+                            println!("{out}");
+                        }
+                    }
+                    OutputFormat::Json => {
+                        let aggregate = serde_json::json!({
+                            "success": result.success,
+                            "errors": result.errors,
+                        });
+                        println!("{}", serde_json::to_string_pretty(&aggregate)?);
+                    }
+                    OutputFormat::Yaml => {
+                        let aggregate = serde_json::json!({
+                            "success": result.success,
+                            "errors": result.errors,
+                        });
+                        println!("{}", serde_norway::to_string(&aggregate)?);
+                    }
                 }
                 eprintln!("upload: {success_n} succeeded, {error_n} failed");
                 if error_n > 0 {
-                    return Err(Error::Config(format!(
-                        "upload completed with {error_n} file failure(s)"
-                    )));
+                    return Err(Error::PartialSuccess { failed: error_n });
                 }
             }
-            SourceCmd::Download { id, output_file } => {
+            SourceCmd::Download {
+                id,
+                output_file,
+                force,
+            } => {
+                ensure_positive_id(id, "source id")?;
                 let bytes = api.download_source_xml(id).await?;
                 if let Some(path) = output_file {
+                    if path.exists() && !force {
+                        return Err(Error::Config(format!(
+                            "refusing to overwrite existing file {}; pass --force to override",
+                            path.display()
+                        )));
+                    }
                     std::fs::write(&path, &bytes).map_err(|e| {
                         Error::Config(format!(
                             "failed to write download to {}: {e}",
@@ -212,7 +263,14 @@ impl SourceCmd {
                 } else {
                     use std::io::Write;
                     let mut stdout = std::io::stdout().lock();
-                    stdout.write_all(&bytes).map_err(Error::Io)?;
+                    match stdout.write_all(&bytes) {
+                        Ok(()) => {}
+                        // Piping to `head -c N` etc. closes stdout
+                        // mid-write. Treat that as a clean exit, not an
+                        // error.
+                        Err(e) if e.kind() == ErrorKind::BrokenPipe => {}
+                        Err(e) => return Err(Error::Io(e)),
+                    }
                 }
             }
             SourceCmd::Names => {
@@ -222,46 +280,72 @@ impl SourceCmd {
                     .into_iter()
                     .map(SourceName)
                     .collect();
-                let out = render_list(&names, ctx.output_format)?;
-                println!("{out}");
+                if names.is_empty() {
+                    eprintln!("(no sources)");
+                } else {
+                    let out = render_list(&names, ctx.output_format)?;
+                    println!("{out}");
+                }
             }
             SourceCmd::NamesAndIds => {
                 let pairs: Vec<SourceNameAndId> = api.list_source_names_and_ids().await?;
-                let out = render_list(&pairs, ctx.output_format)?;
-                println!("{out}");
+                if pairs.is_empty() {
+                    eprintln!("(no sources)");
+                } else {
+                    let out = render_list(&pairs, ctx.output_format)?;
+                    println!("{out}");
+                }
             }
         }
         Ok(())
     }
 }
 
-/// Build a `MultipartPart` per file, deriving the multipart `filename`
-/// parameter from the basename. If a file is literally named
-/// `eventconf.xml`, the upload handler will treat it as the master.
+/// Reject zero / negative ids early so we don't issue requests that the
+/// server will reject anyway with an opaque 4xx.
+pub(crate) fn ensure_positive_id(id: i64, kind: &str) -> Result<()> {
+    if id <= 0 {
+        return Err(Error::Config(format!("{kind} must be positive, got {id}")));
+    }
+    Ok(())
+}
+
+/// Build a `MultipartPart` per file. Each input is required to be a
+/// regular file (rejects FIFOs, devices, directories, symlinks to those)
+/// and capped at [`MAX_UPLOAD_BYTES_PER_FILE`].
 fn build_upload_parts(paths: &[PathBuf]) -> Result<Vec<MultipartPart>> {
     let mut out = Vec::with_capacity(paths.len());
     for p in paths {
+        let meta = std::fs::metadata(p)
+            .map_err(|e| Error::Config(format!("failed to stat {}: {e}", p.display())))?;
+        if !meta.is_file() {
+            return Err(Error::Config(format!(
+                "{} is not a regular file (got {:?})",
+                p.display(),
+                meta.file_type()
+            )));
+        }
+        if meta.len() > MAX_UPLOAD_BYTES_PER_FILE {
+            return Err(Error::Config(format!(
+                "{} is {} bytes, exceeds upload cap of {} bytes",
+                p.display(),
+                meta.len(),
+                MAX_UPLOAD_BYTES_PER_FILE
+            )));
+        }
         let body = std::fs::read(p)
             .map_err(|e| Error::Config(format!("failed to read {}: {e}", p.display())))?;
         let filename = p
             .file_name()
             .and_then(|s| s.to_str())
             .ok_or_else(|| {
-                Error::Config(format!("path {} has no filename component", p.display()))
+                Error::Config(format!(
+                    "path {} has no UTF-8 filename component",
+                    p.display()
+                ))
             })?
             .to_string();
         out.push(MultipartPart::xml(filename, body));
     }
     Ok(out)
-}
-
-// `clippy::all` is fine; this single use is intended.
-#[allow(dead_code)]
-fn _ensure_dto_renderable() -> &'static str {
-    // Compile-time check that the DTO has a TableRow impl wired in.
-    // Removed warnings about EventConfSourceDto being unused if the
-    // render impl ever gets accidentally deleted.
-    use onmsctl_core::TableRow;
-    let _: Vec<&'static str> = EventConfSourceDto::headers();
-    "ok"
 }
