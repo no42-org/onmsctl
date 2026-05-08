@@ -11,7 +11,11 @@
 //! `init-onmsctl-event-conf`.
 
 pub mod conversion;
+pub mod diff;
 pub mod local;
+pub mod target;
+
+pub use target::{EventSourceRemote, EventSourceTarget};
 
 pub use local::{
     AlarmDataDef, AutoackDef, CorrelationDef, EventDef, EventSourceLocal, EventSourceSpec,

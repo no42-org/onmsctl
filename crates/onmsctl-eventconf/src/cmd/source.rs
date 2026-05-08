@@ -121,6 +121,33 @@ pub enum SourceCmd {
 
     /// List `{id, name}` pairs for all eventconf sources.
     NamesAndIds,
+
+    /// Apply an `EventSource` YAML document declaratively.
+    ///
+    /// Reads the file, validates it locally, fetches the server's
+    /// current state, and either creates / updates / no-ops as
+    /// appropriate. With `--dry-run` no mutations are issued; with
+    /// `--diff` the structured diff prints to stderr first.
+    ///
+    /// Known limitations (per design.md §6):
+    ///   - description cannot be set or preserved through apply
+    ///   - bounded enabled-flap window when applying disabled-state
+    ///   - vendor is filename-derived (use metadata.name's prefix)
+    ///   - fileOrder is server-managed in v0.1
+    ///   - download → edit → apply round-trip may lose server-only
+    ///     fields not modeled by the local DTOs
+    Apply {
+        /// Path to the EventSource YAML/JSON document.
+        #[arg(short = 'f', long)]
+        file: PathBuf,
+        /// Show what would happen without issuing any mutating HTTP calls.
+        #[arg(long)]
+        dry_run: bool,
+        /// Print the structured diff to stderr before applying (or in
+        /// dry-run mode, before reporting WouldUpdate).
+        #[arg(long)]
+        diff: bool,
+    },
 }
 
 impl SourceCmd {
@@ -295,6 +322,27 @@ impl SourceCmd {
                     let out = render_list(&pairs, ctx.output_format)?;
                     println!("{out}");
                 }
+            }
+            SourceCmd::Apply {
+                file,
+                dry_run,
+                diff,
+            } => {
+                use onmsctl_core::{ApplyOptions, run_apply};
+
+                use crate::apply::{EventSourceTarget, local::EventSourceLocal};
+
+                let bytes = std::fs::read(&file).map_err(|e| {
+                    Error::Config(format!("failed to read {}: {e}", file.display()))
+                })?;
+                let local = EventSourceLocal::from_yaml(&bytes)?;
+
+                let opts = ApplyOptions {
+                    dry_run,
+                    show_diff: diff,
+                };
+                let outcome = run_apply::<EventSourceTarget>(local, &opts, ctx).await?;
+                println!("{outcome}");
             }
         }
         Ok(())
