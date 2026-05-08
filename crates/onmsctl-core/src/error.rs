@@ -83,6 +83,14 @@ pub enum Error {
     )]
     UnsupportedAuthScheme(String),
 
+    /// A multi-item batch operation completed with at least one failed
+    /// item. Distinct from `Error::Config` (misuse) and `Error::HttpStatus`
+    /// (single HTTP failure) so ops scripts can branch on it via exit
+    /// code 1 — same as HTTP-status failures, but semantically "the
+    /// request was understood; some items did not succeed".
+    #[error("partial success: {failed} item(s) failed")]
+    PartialSuccess { failed: usize },
+
     // -- Wrapped foreign errors --
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
@@ -107,6 +115,7 @@ impl Error {
     pub fn exit_code(&self) -> u8 {
         match self {
             Error::HttpStatus { .. } => 1,
+            Error::PartialSuccess { .. } => 1,
             Error::Dns(_) => 4,
             Error::ConnRefused(_) => 5,
             Error::Timeout(_) => 6,
@@ -179,6 +188,7 @@ mod tests {
             Error::UnsupportedAuthScheme("Negotiate".into()).exit_code(),
             9
         );
+        assert_eq!(Error::PartialSuccess { failed: 3 }.exit_code(), 1);
         assert_eq!(Error::Config("x".into()).exit_code(), 2);
         assert_eq!(Error::NoContext.exit_code(), 2);
     }

@@ -14,6 +14,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::{Context as _, Result};
+use clap::builder::TypedValueParser as _;
 use clap::{Parser, Subcommand};
 use onmsctl_core::{
     Error, OutputFormat, Overrides,
@@ -53,7 +54,12 @@ struct Cli {
     insecure_tls: bool,
 
     /// Output format.
-    #[arg(short = 'o', long = "output", global = true, value_parser = parse_output_format)]
+    #[arg(
+        short = 'o',
+        long = "output",
+        global = true,
+        value_parser = clap::builder::PossibleValuesParser::new(["table", "yaml", "json"]).map(|s| s.parse::<OutputFormat>().unwrap()),
+    )]
     output: Option<OutputFormat>,
 
     /// Verbose output (full error chains, plus capability-specific diagnostics).
@@ -75,10 +81,6 @@ enum TopCmd {
     #[command(subcommand)]
     Event(onmsctl_eventconf::cmd::EventCmd),
     // Future capabilities (Node, Alarm, …) extend here.
-}
-
-fn parse_output_format(s: &str) -> std::result::Result<OutputFormat, String> {
-    s.parse().map_err(|e: Error| e.to_string())
 }
 
 #[tokio::main]
