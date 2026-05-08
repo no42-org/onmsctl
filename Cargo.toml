@@ -13,6 +13,7 @@ rust-version = "1.95"
 [workspace.dependencies]
 # CLI & async runtime
 clap = { version = "4.5", features = ["derive"] }
+clap_complete = "4.5"
 tokio = { version = "1", features = ["full"] }
 async-trait = "0.1"
 
