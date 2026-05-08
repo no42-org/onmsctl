@@ -19,6 +19,7 @@
 //!   path renders them via comfy-table.
 
 pub mod api;
+pub mod apply;
 pub mod cmd;
 pub mod dto;
 mod render;
