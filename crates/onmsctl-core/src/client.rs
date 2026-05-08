@@ -253,7 +253,7 @@ impl OnmsClient {
         path: &str,
     ) -> Result<reqwest::Response> {
         if self.insecure {
-            warn_insecure_tls(&method, path);
+            warn_insecure_tls(&method);
         }
         let req = self.apply_auth(req);
         let resp = req.send().await?;
@@ -364,10 +364,16 @@ fn extract_schemes(challenge: &str) -> Vec<String> {
 /// Emit a per-request stderr warning that TLS certificate verification is
 /// disabled. Capability code calls this through `OnmsClient::send` so every
 /// outgoing request reminds the operator that the connection is unsafe.
-fn warn_insecure_tls(method: &Method, path: &str) {
+///
+/// The path is intentionally NOT included — request paths can leak
+/// identifying information (customer ids, account names) into log
+/// retention and explode log cardinality on paginated capability calls.
+/// The method alone is enough to anchor the warning.
+fn warn_insecure_tls(method: &Method) {
     eprintln!(
-        "warning: TLS certificate verification is disabled (insecure-skip-tls-verify) \
-         for {method} {path}. Use only on trusted networks."
+        "warning: TLS certificate verification is disabled \
+         (insecure-skip-tls-verify) for {method} request. \
+         Use only on trusted networks."
     );
 }
 
