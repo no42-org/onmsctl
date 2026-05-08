@@ -60,6 +60,7 @@ pub fn load(path: &Path) -> Result<ConfigFile> {
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct ConfigFile {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_context: Option<String>,
     #[serde(default)]
     pub contexts: Vec<NamedContext>,
@@ -152,11 +153,11 @@ impl AuthSpec {
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct BasicSpec {
     pub username: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub password: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub password_file: Option<PathBuf>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keyring: Option<KeyringRef>,
 }
 
@@ -194,11 +195,11 @@ impl BasicSpec {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct BearerSpec {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_file: Option<PathBuf>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keyring: Option<KeyringRef>,
 }
 
