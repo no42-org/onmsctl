@@ -53,6 +53,10 @@ pub struct OnmsClient {
     inner: reqwest::Client,
     base: Url,
     creds: AuthCreds,
+    /// True when the active context has `insecure-skip-tls-verify`.
+    /// Drives a per-request stderr warning so operators see the risk on
+    /// every call rather than only the first request of a process.
+    insecure: bool,
 }
 
 /// One part of a multipart upload. Capabilities construct these and pass a
@@ -88,13 +92,12 @@ impl MultipartPart {
 
 impl OnmsClient {
     /// Construct from a resolved [`Context`]. Honors `insecure_skip_tls_verify`
-    /// and emits a single stderr warning per process when it is set.
+    /// and stages a per-request stderr warning when it is set.
     pub fn from_context(ctx: &Context) -> Result<Self> {
         let mut builder = reqwest::Client::builder()
             .timeout(DEFAULT_REQUEST_TIMEOUT)
             .redirect(reqwest::redirect::Policy::limited(5));
         if ctx.insecure_skip_tls_verify {
-            warn_insecure_tls_once();
             builder = builder.danger_accept_invalid_certs(true);
         }
         let inner = builder.build()?;
@@ -102,6 +105,7 @@ impl OnmsClient {
             inner,
             base: ctx.url.clone(),
             creds: ctx.creds.clone(),
+            insecure: ctx.insecure_skip_tls_verify,
         })
     }
 
@@ -115,6 +119,7 @@ impl OnmsClient {
                 .build()?,
             base,
             creds,
+            insecure: false,
         })
     }
 
@@ -247,6 +252,9 @@ impl OnmsClient {
         method: Method,
         path: &str,
     ) -> Result<reqwest::Response> {
+        if self.insecure {
+            warn_insecure_tls(&method, path);
+        }
         let req = self.apply_auth(req);
         let resp = req.send().await?;
         if resp.status().is_success() {
@@ -353,17 +361,14 @@ fn extract_schemes(challenge: &str) -> Vec<String> {
     out
 }
 
-static INSECURE_TLS_WARNING_EMITTED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-
-fn warn_insecure_tls_once() {
-    use std::sync::atomic::Ordering;
-    if !INSECURE_TLS_WARNING_EMITTED.swap(true, Ordering::Relaxed) {
-        eprintln!(
-            "warning: TLS certificate verification is disabled (insecure-skip-tls-verify). \
-             Use only on trusted networks."
-        );
-    }
+/// Emit a per-request stderr warning that TLS certificate verification is
+/// disabled. Capability code calls this through `OnmsClient::send` so every
+/// outgoing request reminds the operator that the connection is unsafe.
+fn warn_insecure_tls(method: &Method, path: &str) {
+    eprintln!(
+        "warning: TLS certificate verification is disabled (insecure-skip-tls-verify) \
+         for {method} {path}. Use only on trusted networks."
+    );
 }
 
 #[cfg(test)]

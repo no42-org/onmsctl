@@ -25,6 +25,13 @@ pub mod dto;
 mod render;
 pub mod xml;
 
+/// Capability crate version. Surfaced by the binary's `version` subcommand
+/// so `onmsctl version` can list each linked capability and its release.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Capability name as printed by `onmsctl version`.
+pub const CAPABILITY_NAME: &str = "eventconf";
+
 pub use api::{
     CreatedEvent, CreatedSource, EventConfApi, EventFilter, EventInSourceFilter, SourceFilter,
     SourceLookup, UploadFileError, UploadFileResult, UploadResult,
