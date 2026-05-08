@@ -38,6 +38,9 @@ keyring = "3"
 thiserror = "2"
 anyhow = "1"
 
+# Filesystem
+tempfile = "3"
+
 # URL & encoding
 percent-encoding = "2"
 
