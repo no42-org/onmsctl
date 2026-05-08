@@ -910,6 +910,7 @@ dependencies = [
  "onmsctl-eventconf",
  "serde",
  "serde_norway",
+ "tempfile",
  "tokio",
 ]
 
