@@ -17,6 +17,19 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 /// so error chains do not balloon stderr or log output.
 pub const HTTP_BODY_EXCERPT_BYTES: usize = 4096;
 
+/// Why a post-upload lookup failed. Lets ops scripts distinguish "the
+/// source was deleted by another actor" from "two sources now share the
+/// name" from a transient transport failure.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PostUploadLookupKind {
+    /// The source named in the upload no longer exists on the server.
+    Absent,
+    /// More than one source on the server matches the uploaded name.
+    Ambiguous,
+    /// The lookup itself failed (transport / HTTP error).
+    Transport,
+}
+
 /// Truncate `body` to [`HTTP_BODY_EXCERPT_BYTES`] characters (not bytes —
 /// honors UTF-8 char boundaries to avoid panics) and append a marker noting
 /// the original length.
@@ -91,6 +104,20 @@ pub enum Error {
     #[error("partial success: {failed} item(s) failed")]
     PartialSuccess { failed: usize },
 
+    /// Apply succeeded with the upload, but the post-upload re-lookup
+    /// needed to perform follow-up steps (e.g. PATCH the enabled flag)
+    /// did not return exactly one match. The upload IS persisted
+    /// server-side; the follow-up state-sync did not happen. See
+    /// design.md §7 "find_source_by_name race" for the race conditions
+    /// that produce this.
+    #[error(
+        "apply: {name} uploaded, but post-upload lookup {kind:?} blocked the follow-up state sync"
+    )]
+    PostUploadLookupFailed {
+        name: String,
+        kind: PostUploadLookupKind,
+    },
+
     // -- Wrapped foreign errors --
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
@@ -116,6 +143,7 @@ impl Error {
         match self {
             Error::HttpStatus { .. } => 1,
             Error::PartialSuccess { .. } => 1,
+            Error::PostUploadLookupFailed { .. } => 1,
             Error::Dns(_) => 4,
             Error::ConnRefused(_) => 5,
             Error::Timeout(_) => 6,

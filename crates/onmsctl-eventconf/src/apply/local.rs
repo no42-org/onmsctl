@@ -169,12 +169,90 @@ pub struct CorrelationDef {
 impl EventSourceLocal {
     /// Parse YAML/JSON bytes and validate the result. Errors propagate as
     /// `Error::Config` with a single user-actionable message.
+    ///
+    /// On strict-parse failure, attempts a recovery pass that gives
+    /// guided messages for the most common spec-forbidden keys
+    /// (`spec.fileOrder`, `spec.vendor`, `spec.description`) instead of
+    /// the bare serde "unknown field" diagnostic.
     pub fn from_yaml(bytes: &[u8]) -> Result<Self> {
-        let local: Self = serde_norway::from_slice(bytes)
-            .map_err(|e| Error::Config(format!("invalid EventSource YAML: {e}")))?;
-        local.validate()?;
-        Ok(local)
+        // Reject multi-document YAML up front. `serde_norway::from_slice`
+        // silently parses only the first document; a user concatenating
+        // two EventSource docs into one file would otherwise lose all
+        // but the first.
+        if has_multiple_documents(bytes) {
+            return Err(Error::Config(
+                "multi-document YAML is not supported (one EventSource per file). \
+                 Split documents into separate files."
+                    .into(),
+            ));
+        }
+
+        match serde_norway::from_slice::<Self>(bytes) {
+            Ok(local) => {
+                local.validate()?;
+                Ok(local)
+            }
+            Err(strict_err) => {
+                // Strict parse failed. Try a recovery pass to produce a
+                // guided message for the well-known reserved spec.* keys.
+                if let Some(guided) = guided_rejection_for_known_spec_keys(bytes) {
+                    return Err(guided);
+                }
+                Err(Error::Config(format!(
+                    "invalid EventSource YAML: {strict_err}"
+                )))
+            }
+        }
     }
+}
+
+/// Detect whether `bytes` contains more than one YAML document
+/// (separated by `---` lines). Counts only top-level document
+/// separators; CDATA-style or string-literal `---` inside a document
+/// don't count. Conservative: if the parser sees more than one document
+/// stream entry, report `true`.
+fn has_multiple_documents(bytes: &[u8]) -> bool {
+    use serde_norway::Deserializer;
+    let count = Deserializer::from_slice(bytes).count();
+    count > 1
+}
+
+/// Inspect a parsed-as-Value YAML document for keys under `spec` that
+/// are explicitly forbidden by the schema. Emits guided error messages
+/// per the `event-conf` spec scenarios.
+fn guided_rejection_for_known_spec_keys(bytes: &[u8]) -> Option<Error> {
+    let raw: serde_norway::Value = serde_norway::from_slice(bytes).ok()?;
+    let spec = raw.get("spec")?.as_mapping()?;
+    for (key, _) in spec {
+        if let Some(k) = key.as_str() {
+            match k {
+                "fileOrder" => {
+                    return Some(Error::Config(
+                        "spec.fileOrder is not declarative in v0.1; ordering is server-managed. \
+                         Declarative ordering moves to a future `kind: EventConfMaster` resource."
+                            .into(),
+                    ));
+                }
+                "vendor" => {
+                    return Some(Error::Config(
+                        "spec.vendor is not allowed; vendor is server-derived from the prefix \
+                         of `metadata.name` before the first '.'. Choose `metadata.name` accordingly."
+                            .into(),
+                    ));
+                }
+                "description" => {
+                    return Some(Error::Config(
+                        "spec.description cannot be set or preserved through `apply` \
+                         (the upload endpoint blanks it). Use `onmsctl source create --description ...` \
+                         at first creation."
+                            .into(),
+                    ));
+                }
+                _ => {}
+            }
+        }
+    }
+    None
 }
 
 // -- Validation -------------------------------------------------------------
@@ -216,8 +294,28 @@ impl EventSourceLocal {
         validate_name(&self.metadata.name)?;
 
         // -- spec.events ----
+        if self.spec.events.is_empty() {
+            return Err(Error::Config(
+                "spec.events is empty; refusing to apply an EventSource with no events. \
+                 To remove a source, use `onmsctl source delete <id>`."
+                    .into(),
+            ));
+        }
         for (i, e) in self.spec.events.iter().enumerate() {
             e.validate(i)?;
+        }
+        // Reject duplicate UEIs at parse time so the user gets a clear
+        // error rather than an opaque duplicate-cluster diff at apply
+        // time. Even though the diff algorithm tolerates clusters,
+        // creating one in YAML is almost always a mistake.
+        let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+        for (i, e) in self.spec.events.iter().enumerate() {
+            if !seen.insert(&e.uei) {
+                return Err(Error::Config(format!(
+                    "spec.events[{i}].uei '{}' is a duplicate; declare each UEI at most once per source",
+                    e.uei
+                )));
+            }
         }
         Ok(())
     }
@@ -238,10 +336,26 @@ fn validate_name(name: &str) -> Result<()> {
             "metadata.name '{name}' contains invalid characters; only ASCII letters, digits, '.', '-', '_' allowed"
         )));
     }
-    // Reserved-name check runs BEFORE the dot check because at least one
-    // reserved name (`eventconf`) does not contain a dot; the user
-    // deserves the more specific error.
-    if RESERVED_NAMES.contains(&name) {
+    if name.starts_with('.') {
+        return Err(Error::Config(format!(
+            "metadata.name '{name}' must not start with a dot"
+        )));
+    }
+    if name.ends_with('.') {
+        return Err(Error::Config(format!(
+            "metadata.name '{name}' must not end with a dot"
+        )));
+    }
+    if name.contains("..") {
+        return Err(Error::Config(format!(
+            "metadata.name '{name}' must not contain consecutive dots"
+        )));
+    }
+    // Reserved-name check runs BEFORE the dot-required check because at
+    // least one reserved name (`eventconf`) does not contain a dot; the
+    // user deserves the more specific error. Case-insensitive to defend
+    // against `Eventconf` / `OPENNMS.CATCH-ALL.EVENTS` style bypass.
+    if RESERVED_NAMES.iter().any(|r| r.eq_ignore_ascii_case(name)) {
         return Err(Error::Config(format!(
             "metadata.name '{name}' is reserved by OpenNMS"
         )));
@@ -276,8 +390,16 @@ impl EventDef {
                 self.uei
             )));
         }
-        if self.label.is_empty() {
-            return Err(Error::Config(format!("spec.events[{idx}].label is empty")));
+        if self.uei.len() <= 4 {
+            return Err(Error::Config(format!(
+                "spec.events[{idx}].uei '{}' must have content after the 'uei.' prefix",
+                self.uei
+            )));
+        }
+        if self.label.trim().is_empty() {
+            return Err(Error::Config(format!(
+                "spec.events[{idx}].label is empty or whitespace-only"
+            )));
         }
         if !SEVERITIES.contains(&self.severity.as_str()) {
             return Err(Error::Config(format!(

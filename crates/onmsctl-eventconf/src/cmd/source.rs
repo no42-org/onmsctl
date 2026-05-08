@@ -332,10 +332,31 @@ impl SourceCmd {
 
                 use crate::apply::{EventSourceTarget, local::EventSourceLocal};
 
+                let meta = std::fs::metadata(&file).map_err(|e| {
+                    Error::Config(format!("failed to stat {}: {e}", file.display()))
+                })?;
+                if !meta.is_file() {
+                    return Err(Error::Config(format!(
+                        "{} is not a regular file (got {:?})",
+                        file.display(),
+                        meta.file_type()
+                    )));
+                }
+                if meta.len() > MAX_UPLOAD_BYTES_PER_FILE {
+                    return Err(Error::Config(format!(
+                        "{} is {} bytes, exceeds apply input cap of {} bytes",
+                        file.display(),
+                        meta.len(),
+                        MAX_UPLOAD_BYTES_PER_FILE
+                    )));
+                }
                 let bytes = std::fs::read(&file).map_err(|e| {
                     Error::Config(format!("failed to read {}: {e}", file.display()))
                 })?;
-                let local = EventSourceLocal::from_yaml(&bytes)?;
+                let local = EventSourceLocal::from_yaml(&bytes).map_err(|e| match e {
+                    Error::Config(msg) => Error::Config(format!("{}: {msg}", file.display())),
+                    other => other,
+                })?;
 
                 let opts = ApplyOptions {
                     dry_run,
