@@ -117,11 +117,29 @@ pub fn diff_event_sets(local: &[EventDef], remote: &[Event]) -> EventSetDiff {
         let l = local_by_uei.get(&uei);
         let r = remote_by_uei.get(&uei);
         match (l, r) {
+            // Local-only UEI, single entry → simple addition.
             (Some(ls), None) if ls.len() == 1 => {
                 diff.added.push((*ls[0]).clone());
             }
+            // Local-only UEI, multiple entries → still all additions
+            // (no remote side to disambiguate against; reporting as a
+            // "duplicate cluster" would be misleading because the
+            // semantic is "these all need to be uploaded").
+            (Some(ls), None) => {
+                for e in ls {
+                    diff.added.push((**e).clone());
+                }
+            }
+            // Remote-only UEI, single entry → simple removal.
             (None, Some(rs)) if rs.len() == 1 => {
                 diff.removed.push((*rs[0]).clone());
+            }
+            // Remote-only UEI, multiple entries → all removals (same
+            // reasoning as above; the local side is empty).
+            (None, Some(rs)) => {
+                for e in rs {
+                    diff.removed.push((**e).clone());
+                }
             }
             (Some(ls), Some(rs)) if ls.len() == 1 && rs.len() == 1 => {
                 let local_event = ls[0];
@@ -136,9 +154,10 @@ pub fn diff_event_sets(local: &[EventDef], remote: &[Event]) -> EventSetDiff {
                     });
                 }
             }
+            // Both sides have entries AND at least one is plural —
+            // genuine duplicate-UEI cluster. Per-event matching is
+            // ambiguous so we leave the cluster opaque.
             _ => {
-                // Duplicate-UEI cluster. Either side has >1 entry for
-                // this UEI; no per-event matching attempted.
                 diff.duplicate_clusters.push(DuplicateCluster {
                     uei: uei.clone(),
                     local_count: l.map(|v| v.len()).unwrap_or(0),
@@ -165,6 +184,13 @@ fn field_diff(local: &EventDef, remote: &Event) -> Vec<FieldChange> {
     out
 }
 
+/// Top-level wire fields where local is structurally always None because
+/// the YAML schema doesn't expose them (`snmp`, `parmCollection`). When
+/// the remote side has them set, walking the JSON tree would emit a
+/// FieldChange for every nested key — phantom changes the user can't
+/// have caused. Suppress at the top level.
+const PHANTOM_TOP_LEVEL_PATHS: &[&str] = &["snmp", "parmCollection"];
+
 /// Recursively walk two JSON values and accumulate per-field differences.
 /// Path segments use `.` for objects and `[i]` for arrays.
 fn walk(
@@ -174,6 +200,15 @@ fn walk(
     out: &mut Vec<FieldChange>,
 ) {
     use serde_json::Value;
+    // Phantom-change suppression. If the user can't set this top-level
+    // field via YAML, don't pollute the diff with its nested entries
+    // when the server happens to populate it.
+    if PHANTOM_TOP_LEVEL_PATHS.contains(&path)
+        && matches!(local, Value::Null)
+        && !matches!(remote, Value::Null)
+    {
+        return;
+    }
     match (local, remote) {
         (Value::Object(la), Value::Object(ra)) => {
             let mut keys: std::collections::BTreeSet<&String> = la.keys().collect();
@@ -213,11 +248,15 @@ pub fn render_diff(d: &EventSetDiff) -> String {
     use std::fmt::Write;
     let mut s = String::new();
     let (a, r, m, u, c) = d.summary_counts();
+    // Total event counts include cluster events on each side. Cluster
+    // contributions come from the per-cluster local_count / remote_count.
+    let cluster_local: usize = d.duplicate_clusters.iter().map(|c| c.local_count).sum();
+    let cluster_remote: usize = d.duplicate_clusters.iter().map(|c| c.remote_count).sum();
     writeln!(
         s,
         "spec.events: {} → {}   (+{a} added, ~{m} modified, ={u} unchanged, -{r} removed{})",
-        u + r + m,
-        u + a + m,
+        u + r + m + cluster_remote,
+        u + a + m + cluster_local,
         if c > 0 {
             format!(", {c} duplicate-UEI cluster(s)")
         } else {
@@ -356,6 +395,35 @@ mod tests {
         assert!(d.added.is_empty());
         assert!(d.removed.is_empty());
         assert!(d.modified.is_empty());
+    }
+
+    #[test]
+    fn duplicate_uei_only_on_local_yields_multiple_additions() {
+        // When local has multiple events with the same UEI but the
+        // server has none, this is just N additions — there's nothing
+        // to disambiguate against on the server side. Reporting it as
+        // a "cluster" would be misleading.
+        let l = vec![
+            local("uei.dup", "Warning", "first"),
+            local("uei.dup", "Major", "second"),
+        ];
+        let d = diff_event_sets(&l, &[]);
+        assert_eq!(d.added.len(), 2, "both should be additions");
+        assert!(
+            d.duplicate_clusters.is_empty(),
+            "no cluster — server is empty"
+        );
+    }
+
+    #[test]
+    fn duplicate_uei_only_on_remote_yields_multiple_removals() {
+        let r = vec![
+            remote("uei.dup", "Warning", "first"),
+            remote("uei.dup", "Major", "second"),
+        ];
+        let d = diff_event_sets(&[], &r);
+        assert_eq!(d.removed.len(), 2);
+        assert!(d.duplicate_clusters.is_empty());
     }
 
     #[test]

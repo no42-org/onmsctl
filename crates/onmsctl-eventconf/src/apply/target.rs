@@ -19,6 +19,7 @@
 
 use async_trait::async_trait;
 use onmsctl_core::client::MultipartPart;
+use onmsctl_core::error::PostUploadLookupKind;
 use onmsctl_core::{Context, Diff, Error, OnmsClient, Result};
 use serde::Serialize;
 
@@ -43,7 +44,7 @@ pub struct EventSourceRemote {
     pub events: Vec<Event>,
     /// Canonical (lossy-normalized) form of the server's events XML.
     /// Used as the hash-compare anchor in the unchanged check.
-    pub canonical_xml: String,
+    pub(crate) canonical_xml: String,
 }
 
 #[async_trait]
@@ -79,7 +80,7 @@ impl onmsctl_core::ApplyTarget for EventSourceTarget {
     }
 
     async fn create(local: EventSourceLocal, ctx: &Context) -> Result<()> {
-        upload_then_optionally_disable(&local, ctx).await
+        upload_then_optionally_disable(&local, ctx, false).await
     }
 
     async fn update(
@@ -90,12 +91,23 @@ impl onmsctl_core::ApplyTarget for EventSourceTarget {
         // Update is identical to create at the wire level: the upload
         // endpoint upserts (deletes existing events, inserts new) for
         // any source whose basename already exists. See design.md §3.1.
-        upload_then_optionally_disable(&local, ctx).await
+        upload_then_optionally_disable(&local, ctx, true).await
     }
 
     fn diff(local: &EventSourceLocal, remote: &EventSourceRemote) -> Diff {
-        // Build the structured diff (events bucketed by UEI + the
-        // source-level enabled-flag change), render to text, wrap.
+        // Fast path: if the rendered local XML normalizes to the same
+        // canonical form as the server's stored XML AND the enabled
+        // flag matches, there is no diff. Avoids paying for the
+        // structured diff computation when state is already synced.
+        if local.spec.enabled == remote.enabled
+            && let Some(local_canonical) = render_local_canonical_xml(local)
+            && local_canonical == remote.canonical_xml
+        {
+            return Diff::empty();
+        }
+
+        // Slow path: build the structured diff (events bucketed by UEI
+        // + the source-level enabled-flag change), render to text, wrap.
         let event_diff = compute_diff(local, remote);
         if event_diff.is_empty() && local.spec.enabled == remote.enabled {
             return Diff::empty();
@@ -114,11 +126,30 @@ impl onmsctl_core::ApplyTarget for EventSourceTarget {
     }
 }
 
+/// Render local events to canonical XML for the fast-path compare in
+/// `diff()`. Returns `None` if rendering or canonicalization fails — in
+/// that case we fall through to the structured-diff slow path rather
+/// than reporting a spurious match or surfacing a confusing error.
+fn render_local_canonical_xml(local: &EventSourceLocal) -> Option<String> {
+    let wire_events: Vec<Event> = local.spec.events.iter().map(Event::from).collect();
+    let xml = render_eventconf_xml(&wire_events).ok()?;
+    xml_canonical(xml.as_bytes()).ok()
+}
+
 /// Render the local YAML to eventconf XML, upload via multipart, and
 /// follow up with a status PATCH when `spec.enabled = false` (since the
 /// upload endpoint forces `enabled = true` server-side; see design.md
 /// §3.2).
-async fn upload_then_optionally_disable(local: &EventSourceLocal, ctx: &Context) -> Result<()> {
+///
+/// `is_update` is true when called from the update path; it gates the
+/// `--verbose` enabled-flap warning, which is only meaningful when an
+/// already-existing source is being transiently re-enabled by the
+/// upload before we PATCH it back to disabled.
+async fn upload_then_optionally_disable(
+    local: &EventSourceLocal,
+    ctx: &Context,
+    is_update: bool,
+) -> Result<()> {
     let client = OnmsClient::from_context(ctx)?;
     let api = EventConfApi::new(&client);
 
@@ -133,25 +164,40 @@ async fn upload_then_optionally_disable(local: &EventSourceLocal, ctx: &Context)
     // server unconditionally sets enabled=true on every upload, so this
     // is the only path to a disabled state.
     if !local.spec.enabled {
-        if ctx.verbose {
+        let src_id = match api.find_source_by_name(&local.metadata.name).await {
+            Ok(SourceLookup::Found(src)) => src.id,
+            Ok(SourceLookup::Absent) => {
+                return Err(Error::PostUploadLookupFailed {
+                    name: local.metadata.name.clone(),
+                    kind: PostUploadLookupKind::Absent,
+                });
+            }
+            Ok(SourceLookup::Ambiguous(_)) => {
+                return Err(Error::PostUploadLookupFailed {
+                    name: local.metadata.name.clone(),
+                    kind: PostUploadLookupKind::Ambiguous,
+                });
+            }
+            Err(_) => {
+                return Err(Error::PostUploadLookupFailed {
+                    name: local.metadata.name.clone(),
+                    kind: PostUploadLookupKind::Transport,
+                });
+            }
+        };
+        api.set_sources_enabled(&[src_id], false, false).await?;
+
+        // Only warn after the PATCH succeeds and only on the update
+        // path: a fresh create cannot have observers seeing an
+        // intermediate enabled=true state, so the warning would just
+        // be noise.
+        if is_update && ctx.verbose {
             eprintln!(
-                "warning: spec.enabled=false requires a follow-up PATCH; \
-                 the source is enabled for one round-trip duration before \
-                 being disabled. For strict avoidance, use the imperative \
+                "warning: spec.enabled=false on update; the source was \
+                 enabled for one round-trip duration before being \
+                 disabled. For strict avoidance, use the imperative \
                  path."
             );
-        }
-        match api.find_source_by_name(&local.metadata.name).await? {
-            SourceLookup::Found(src) => {
-                api.set_sources_enabled(&[src.id], false, false).await?;
-            }
-            other => {
-                return Err(Error::Config(format!(
-                    "post-upload lookup of '{}' failed: {other:?}; the upload \
-                     completed but enabled-state could not be synced",
-                    local.metadata.name
-                )));
-            }
         }
     }
 
