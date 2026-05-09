@@ -1,4 +1,4 @@
-.PHONY: build test verify fmt clippy deny licenses install-tools install-cargo-deny install-cargo-about clean
+.PHONY: build test verify fmt clippy deny licenses install-tools install-cargo-deny install-cargo-about install-cargo-cyclonedx release-build sbom clean
 
 build:
 	cargo build --workspace --all-targets
@@ -32,3 +32,21 @@ install-cargo-deny:
 
 install-cargo-about:
 	@command -v cargo-about > /dev/null 2>&1 || cargo install --locked cargo-about
+
+install-cargo-cyclonedx:
+	@command -v cargo-cyclonedx > /dev/null 2>&1 || cargo install --locked cargo-cyclonedx
+
+# Release-only targets. CI invokes these from .github/workflows/release.yml
+# so the local developer command and the CI command stay in sync.
+
+# Build a stripped, optimized binary for $(TARGET). The release workflow
+# adds the target via `rustup target add` before invoking us.
+release-build:
+	@test -n "$(TARGET)" || (echo "release-build: TARGET=<triple> required" >&2; exit 1)
+	cargo build --release --bin onmsctl --target $(TARGET)
+
+# Generate a CycloneDX SBOM for the workspace at sbom/onmsctl.cdx.json.
+sbom: install-cargo-cyclonedx
+	@mkdir -p sbom
+	cargo cyclonedx --format json --override-filename onmsctl
+	@find . -maxdepth 3 -name 'onmsctl.cdx.json' -not -path './sbom/*' -exec mv {} sbom/ \;
