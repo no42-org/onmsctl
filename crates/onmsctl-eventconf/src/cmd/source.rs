@@ -105,6 +105,11 @@ pub enum SourceCmd {
     },
 
     /// Download a source's eventconf XML.
+    ///
+    /// The XML is the authoritative form; `download → edit → apply` may
+    /// drop server-only fields the local YAML schema doesn't model
+    /// (per design.md §6 limitation 7). To round-trip lossless, edit
+    /// the XML directly and re-upload via `source upload`.
     Download {
         /// Source id.
         id: i64,

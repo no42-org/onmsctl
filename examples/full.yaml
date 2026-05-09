@@ -1,0 +1,50 @@
+# Comprehensive EventSource — exercises every nested type that v0.1
+# models. Use this as a reference when authoring your own EventSource
+# documents.
+#
+# See `design.md §5.1` for the schema rules and `onmsctl source apply
+# --help` for known limitations.
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: cisco.foo
+spec:
+  enabled: true
+  events:
+    - uei: uei.opennms.org/vendor/cisco/foo/coldStart
+      label: "Cisco Foo Cold Start"
+      severity: Warning
+      description: |
+        Foo device performed a cold start (re-initialized configuration).
+      operinstruct: "Investigate device boot logs."
+      mouseovertext: "ifIndex=%parm[ifIndex]%, type=%parm[linkType]%"
+      logmsg:
+        # logndisplay | logonly | displayonly | suppress | donotpersist | discardtraps
+        dest: logndisplay
+        text: "%nodelabel% performed a cold start"
+      alarmData:
+        reductionKey: "%uei%:%dpname%:%nodeid%"
+        # 1 = problem, 2 = resolution, 3 = pairwise correlation
+        alarmType: 1
+        autoClean: false
+        clearKey: null
+      mask:
+        elements:
+          - name: id
+            values: ["1.3.6.1.4.1.9.9.41.2.0.1"]
+          - name: severity
+            values: ["Warning", "Major"]
+        varbinds:
+          - vbnumber: 1
+            values: ["3"]
+      autoacknowledge:
+        state: "off"
+        text: null
+      tticket:
+        state: "off"
+      correlation:
+        state: "off"
+        path: null
+        cmin: 0
+        cmax: 0
+        cuei: []

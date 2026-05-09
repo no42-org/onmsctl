@@ -1,0 +1,20 @@
+# Minimal EventSource — the smallest document that `onmsctl source apply`
+# accepts. metadata.name MUST contain at least one '.' (the prefix before
+# the first '.' becomes the server-derived vendor: here, "vendor-example").
+#
+# Apply against a configured context:
+#
+#     onmsctl source apply -f examples/minimal.yaml --diff
+#
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: vendor-example.cold-start
+spec:
+  enabled: true
+  events:
+    - uei: uei.opennms.org/vendor-example/cold-start
+      label: "Vendor Example Cold Start"
+      severity: Warning
+      description: |
+        Demonstrates the minimum viable EventSource document.
