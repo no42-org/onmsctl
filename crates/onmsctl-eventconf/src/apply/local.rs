@@ -760,32 +760,81 @@ spec:
     }
 
     /// Catches drift between the published `examples/` fixtures and the
-    /// schema. If any example stops parsing, the README/help-text
-    /// documentation is silently lying — fail the build instead.
+    /// schema. Each fixture has a per-file assertion that exercises the
+    /// shape it's supposed to demonstrate — losing a nested type to a
+    /// renamed serde field fails the test instead of silently passing.
     #[test]
     fn published_examples_parse_against_the_schema() {
+        type Asserter = fn(&EventSourceLocal);
         let manifest_dir = env!("CARGO_MANIFEST_DIR");
         let examples_dir = std::path::Path::new(manifest_dir)
             .join("..")
             .join("..")
             .join("examples");
-        let fixtures = [
-            "minimal.yaml",
-            "full.yaml",
-            "severities.yaml",
-            "disabled.yaml",
+
+        let cases: &[(&str, Asserter)] = &[
+            ("minimal.yaml", |l| {
+                assert_eq!(l.spec.events.len(), 1, "minimal.yaml: one event");
+                assert!(l.spec.enabled, "minimal.yaml: enabled defaults true");
+            }),
+            ("full.yaml", |l| {
+                let e = l.spec.events.first().expect("full.yaml: ≥1 event");
+                // Every modeled nested type must populate so the fixture
+                // continues to demonstrate the full schema surface.
+                assert!(e.mask.is_some(), "full.yaml: mask must populate");
+                assert!(e.alarm_data.is_some(), "full.yaml: alarmData must populate");
+                assert!(e.logmsg.is_some(), "full.yaml: logmsg must populate");
+                assert!(
+                    e.correlation.is_some(),
+                    "full.yaml: correlation must populate"
+                );
+                assert!(
+                    e.autoacknowledge.is_some(),
+                    "full.yaml: autoacknowledge must populate"
+                );
+                assert!(e.tticket.is_some(), "full.yaml: tticket must populate");
+                assert!(
+                    e.mouseovertext.is_some(),
+                    "full.yaml: mouseovertext must populate"
+                );
+                assert!(
+                    e.operinstruct.is_some(),
+                    "full.yaml: operinstruct must populate"
+                );
+                let m = e.mask.as_ref().unwrap();
+                assert!(!m.elements.is_empty(), "full.yaml: mask.elements non-empty");
+                assert!(!m.varbinds.is_empty(), "full.yaml: mask.varbinds non-empty");
+            }),
+            ("severities.yaml", |l| {
+                assert_eq!(l.spec.events.len(), 7, "severities.yaml: 7 levels");
+                let levels: Vec<&str> = l.spec.events.iter().map(|e| e.severity.as_str()).collect();
+                for expected in [
+                    "Indeterminate",
+                    "Cleared",
+                    "Normal",
+                    "Warning",
+                    "Minor",
+                    "Major",
+                    "Critical",
+                ] {
+                    assert!(
+                        levels.contains(&expected),
+                        "severities.yaml: missing {expected}",
+                    );
+                }
+            }),
+            ("disabled.yaml", |l| {
+                assert!(!l.spec.enabled, "disabled.yaml: spec.enabled must be false");
+            }),
         ];
-        for name in fixtures {
+
+        for (name, asserter) in cases {
             let path = examples_dir.join(name);
             let bytes =
                 std::fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
             let local = EventSourceLocal::from_yaml(&bytes)
                 .unwrap_or_else(|e| panic!("parse {}: {e}", path.display()));
-            assert!(
-                !local.spec.events.is_empty(),
-                "{}: expected at least one event",
-                path.display()
-            );
+            asserter(&local);
         }
     }
 }
