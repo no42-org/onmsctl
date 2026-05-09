@@ -1,0 +1,181 @@
+name: release
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write   # create the GitHub Release and upload assets
+  id-token: write   # cosign keyless OIDC
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            cross_apt: ''
+            cross_linker: ''
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-latest
+            cross_apt: gcc-aarch64-linux-gnu
+            cross_linker: aarch64-linux-gnu-gcc
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+            cross_apt: ''
+            cross_linker: ''
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+            cross_apt: ''
+            cross_linker: ''
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install pinned Rust toolchain (honors rust-toolchain.toml)
+        run: rustup show
+
+      - name: Add cross-compile target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Install cross-compile linker (Linux aarch64 only)
+        if: matrix.cross_apt != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.cross_apt }}
+
+      - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build release binary
+        env:
+          # Empty for native builds; set only when cross_linker is non-empty.
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.cross_linker }}
+        run: make release-build TARGET=${{ matrix.target }}
+
+      - name: Stage artifact and checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          name="onmsctl-${{ github.ref_name }}-${{ matrix.target }}"
+          cp "target/${{ matrix.target }}/release/onmsctl" "dist/${name}"
+          chmod 0755 "dist/${name}"
+          ( cd dist && shasum -a 256 "${name}" > "${name}.sha256" )
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: bin-${{ matrix.target }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  sbom:
+    name: sbom (cyclonedx)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install pinned Rust toolchain
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
+        with:
+          key: sbom
+
+      - name: Generate CycloneDX SBOM
+        run: make sbom
+
+      - name: Stage SBOM with release-versioned filename
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          # cargo-cyclonedx emits one file per workspace member; concatenate
+          # the binary crate's SBOM as the canonical onmsctl artifact and
+          # ship the per-crate ones alongside for transparency.
+          for f in sbom/*.cdx.json; do
+            base="$(basename "$f" .cdx.json)"
+            cp "$f" "dist/onmsctl-${{ github.ref_name }}-${base}.cdx.json"
+          done
+          ls -la dist/
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sbom
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: release
+    needs: [build, sbom]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: artifacts/
+
+      - name: Flatten artifact layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          find artifacts/ -type f \( -name 'onmsctl-*' -o -name '*.sha256' -o -name '*.cdx.json' \) -exec cp {} release/ \;
+          ( cd release && ls -la )
+
+      - name: Combine per-binary checksums into a single file
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > release/SHA256SUMS
+          for f in release/*.sha256; do
+            cat "$f" >> release/SHA256SUMS
+          done
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@dc72c7d5c4d10cd6bcb8cf6e3fd625a9e5e537da # v3.7.0
+
+      - name: Sign artifacts (sigstore keyless OIDC)
+        shell: bash
+        env:
+          COSIGN_YES: 'true'
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          # Sign every binary, every SBOM, and the combined SHA256SUMS file.
+          # Per-file detached signature (.sig) + signing certificate (.pem)
+          # land alongside the original asset.
+          for f in release/onmsctl-*-* release/*.cdx.json release/SHA256SUMS; do
+            [ -f "$f" ] || continue
+            case "$f" in
+              *.sha256|*.sig|*.pem) continue ;;
+            esac
+            cosign sign-blob --yes \
+              --output-signature "${f}.sig" \
+              --output-certificate "${f}.pem" \
+              "$f"
+          done
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@c95fe1489396fe8a9eb87c0abf8aa5b2ef267fda # v2.2.1
+        with:
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            release/onmsctl-*-*
+            release/*.cdx.json
+            release/SHA256SUMS
+            release/*.sig
+            release/*.pem
