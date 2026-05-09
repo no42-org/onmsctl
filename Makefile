@@ -45,8 +45,14 @@ release-build:
 	@test -n "$(TARGET)" || (echo "release-build: TARGET=<triple> required" >&2; exit 1)
 	cargo build --release --bin onmsctl --target $(TARGET)
 
-# Generate a CycloneDX SBOM for the workspace at sbom/onmsctl.cdx.json.
+# Generate per-crate CycloneDX SBOMs at sbom/<crate>.cdx.json.
+#
+# cargo-cyclonedx writes one `<crate>.cdx.json` next to each member's
+# Cargo.toml. Default filenames already disambiguate — `onmsctl.cdx.json`,
+# `onmsctl-core.cdx.json`, `onmsctl-eventconf.cdx.json`. The previous
+# `--override-filename onmsctl` flag forced every crate to write to the
+# same name, causing the follow-up `mv` to clobber two of three SBOMs.
 sbom: install-cargo-cyclonedx
 	@mkdir -p sbom
-	cargo cyclonedx --format json --override-filename onmsctl
-	@find . -maxdepth 3 -name 'onmsctl.cdx.json' -not -path './sbom/*' -exec mv {} sbom/ \;
+	cargo cyclonedx --format json
+	@find . -maxdepth 3 -name '*.cdx.json' -not -path './sbom/*' -exec mv {} sbom/ \;

@@ -2,8 +2,9 @@
 # models. Use this as a reference when authoring your own EventSource
 # documents.
 #
-# See `design.md §5.1` for the schema rules and `onmsctl source apply
-# --help` for known limitations.
+# Style note: optional fields are OMITTED rather than set to `null`. The
+# schema treats absence and `null` equivalently, but keeping the document
+# minimal matches what `config view` would round-trip back.
 apiVersion: eventconf.opennms.org/v1
 kind: EventSource
 metadata:
@@ -27,7 +28,6 @@ spec:
         # 1 = problem, 2 = resolution, 3 = pairwise correlation
         alarmType: 1
         autoClean: false
-        clearKey: null
       mask:
         elements:
           - name: id
@@ -39,12 +39,13 @@ spec:
             values: ["3"]
       autoacknowledge:
         state: "off"
-        text: null
       tticket:
         state: "off"
       correlation:
         state: "off"
-        path: null
-        cmin: 0
-        cmax: 0
+        # cmin / cmax are typed as Option<String> (event-correlation
+        # parameter strings, not raw integers) — quote to keep the
+        # fixture portable across YAML and JSON loaders.
+        cmin: "0"
+        cmax: "0"
         cuei: []
