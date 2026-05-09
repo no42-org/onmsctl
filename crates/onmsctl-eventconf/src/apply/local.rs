@@ -758,4 +758,34 @@ spec:
         assert_eq!(e.autoacknowledge.as_ref().unwrap().state, "on");
         assert_eq!(e.correlation.as_ref().unwrap().cuei.len(), 1);
     }
+
+    /// Catches drift between the published `examples/` fixtures and the
+    /// schema. If any example stops parsing, the README/help-text
+    /// documentation is silently lying — fail the build instead.
+    #[test]
+    fn published_examples_parse_against_the_schema() {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let examples_dir = std::path::Path::new(manifest_dir)
+            .join("..")
+            .join("..")
+            .join("examples");
+        let fixtures = [
+            "minimal.yaml",
+            "full.yaml",
+            "severities.yaml",
+            "disabled.yaml",
+        ];
+        for name in fixtures {
+            let path = examples_dir.join(name);
+            let bytes =
+                std::fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+            let local = EventSourceLocal::from_yaml(&bytes)
+                .unwrap_or_else(|e| panic!("parse {}: {e}", path.display()));
+            assert!(
+                !local.spec.events.is_empty(),
+                "{}: expected at least one event",
+                path.display()
+            );
+        }
+    }
 }

@@ -1,0 +1,30 @@
+# One event per severity level. Severity values are case-sensitive:
+# Indeterminate, Cleared, Normal, Warning, Minor, Major, Critical.
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: example.severities
+spec:
+  enabled: true
+  events:
+    - uei: uei.opennms.org/example/severities/indeterminate
+      label: "Indeterminate severity event"
+      severity: Indeterminate
+    - uei: uei.opennms.org/example/severities/cleared
+      label: "Cleared severity event"
+      severity: Cleared
+    - uei: uei.opennms.org/example/severities/normal
+      label: "Normal severity event"
+      severity: Normal
+    - uei: uei.opennms.org/example/severities/warning
+      label: "Warning severity event"
+      severity: Warning
+    - uei: uei.opennms.org/example/severities/minor
+      label: "Minor severity event"
+      severity: Minor
+    - uei: uei.opennms.org/example/severities/major
+      label: "Major severity event"
+      severity: Major
+    - uei: uei.opennms.org/example/severities/critical
+      label: "Critical severity event"
+      severity: Critical
