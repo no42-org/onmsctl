@@ -1,0 +1,31 @@
+# Configures auto-generated release notes consumed by
+# softprops/action-gh-release (generate_release_notes: true) in
+# .github/workflows/release.yml.
+#
+# PRs labeled `internal`, `chore`, or `ignore-for-release` are hidden
+# from the public changelog so internal work-in-progress titles do not
+# surface in a permanent public record. Categorize the rest by label.
+changelog:
+  exclude:
+    labels:
+      - internal
+      - chore
+      - ignore-for-release
+  categories:
+    - title: Highlights
+      labels:
+        - release-note
+    - title: Features
+      labels:
+        - feature
+        - enhancement
+    - title: Bug Fixes
+      labels:
+        - bug
+        - fix
+    - title: Documentation
+      labels:
+        - documentation
+    - title: Other Changes
+      labels:
+        - "*"

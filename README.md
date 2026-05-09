@@ -208,6 +208,7 @@ Stable per `cli-core` spec §4.5; safe for scripting:
 | 0 | success |
 | 1 | HTTP non-success / partial-failure batch / post-upload state-sync failed |
 | 2 | misuse / config error / generic internal |
+| 3 | reserved (unassigned in v0.1) |
 | 4 | DNS resolution failure |
 | 5 | connection refused |
 | 6 | timeout |
