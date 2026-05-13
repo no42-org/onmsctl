@@ -31,7 +31,7 @@ comfy-table = "7"
 similar = "2"
 
 # Config & secrets
-directories = "5"
+directories = "6"
 keyring = "3"
 
 # Errors
