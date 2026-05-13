@@ -28,7 +28,7 @@ quick-xml = { version = "0.36", features = ["serialize"] }
 
 # Output rendering
 comfy-table = "7"
-similar = "2"
+similar = "3"
 
 # Config & secrets
 directories = "6"
