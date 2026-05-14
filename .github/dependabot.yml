@@ -10,6 +10,12 @@ updates:
       include: scope
     labels:
       - dependencies
+    ignore:
+      # keyring v4 is a sample app, not the credential-store API — that moved
+      # to the keyring-core crate. Stay on v3 until we migrate deliberately.
+      - dependency-name: keyring
+        update-types:
+          - version-update:semver-major
     groups:
       rust-deps:
         # One PR per week with all minor/patch updates across the workspace.
