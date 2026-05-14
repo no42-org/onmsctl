@@ -32,7 +32,7 @@ similar = "3"
 
 # Config & secrets
 directories = "6"
-keyring = "3"
+keyring = "4"
 
 # Errors
 thiserror = "2"
