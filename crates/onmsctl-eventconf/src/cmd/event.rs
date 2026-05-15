@@ -308,6 +308,23 @@ fn read_event_file(path: &std::path::Path) -> Result<Event> {
     }
     let bytes = std::fs::read(path)
         .map_err(|e| Error::Config(format!("failed to read {}: {e}", path.display())))?;
+
+    // Pre-flight: catch the common mistake of passing an EventSource
+    // document (top-level apiVersion / kind / spec) to `event add`.
+    // `Event`'s fields are all `Option`, so serde would silently parse
+    // such a file as a default-everything Event; the empty POST would
+    // then 400 server-side with the unhelpful "Event 'uei' is required".
+    if looks_like_event_source(&bytes) {
+        return Err(Error::Config(format!(
+            "{} looks like an EventSource document (top-level `apiVersion` / `kind` / `spec`). \
+             `event add` expects a single Event payload (uei, eventLabel, severity, …). \
+             Either extract one event from `spec.events` into its own file, \
+             or use `source apply -f {}` to upload the whole EventSource.",
+            path.display(),
+            path.display()
+        )));
+    }
+
     serde_norway::from_slice(&bytes).map_err(|e| {
         Error::Config(format!(
             "failed to parse event from {}: {e}",
@@ -316,9 +333,48 @@ fn read_event_file(path: &std::path::Path) -> Result<Event> {
     })
 }
 
+/// True when the YAML/JSON body parses to a top-level object that carries
+/// the EventSource sigil keys. Used by [`read_event_file`] to short-circuit
+/// the common "wrong doc shape" mistake before the request hits the wire.
+fn looks_like_event_source(bytes: &[u8]) -> bool {
+    let Ok(v) = serde_norway::from_slice::<serde_json::Value>(bytes) else {
+        return false;
+    };
+    let Some(obj) = v.as_object() else {
+        return false;
+    };
+    obj.contains_key("apiVersion") || obj.contains_key("kind") || obj.contains_key("spec")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn looks_like_event_source_flags_full_fixture() {
+        let yaml = r#"
+apiVersion: onmsctl.opennms.org/v1
+kind: EventSource
+metadata:
+  name: cisco.foo
+spec:
+  events:
+    - uei: uei.opennms.org/x
+      eventLabel: x
+      severity: Warning
+"#;
+        assert!(looks_like_event_source(yaml.as_bytes()));
+    }
+
+    #[test]
+    fn looks_like_event_source_does_not_flag_single_event() {
+        let yaml = r#"
+uei: uei.opennms.org/example
+eventLabel: Example
+severity: Warning
+"#;
+        assert!(!looks_like_event_source(yaml.as_bytes()));
+    }
 
     #[test]
     fn parse_ref_accepts_simple_pair() {

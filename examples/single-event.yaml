@@ -1,0 +1,18 @@
+# Single Event payload for `onmsctl event add --source <id> -f <file>`.
+#
+# This is NOT an EventSource document — it has no `apiVersion` / `kind` /
+# `spec` envelope. The fields below are posted directly to
+# `POST /eventconf/sources/{id}/events` and become a new event under the
+# named source.
+#
+# For the declarative full-source workflow, see `examples/full.yaml` and
+# `onmsctl source apply`.
+uei: uei.opennms.org/example/customEvent
+eventLabel: Example custom event
+severity: Warning
+descr: |
+  Triggered when the example condition is met. Replace with your own
+  description before deploying.
+logmsg:
+  dest: logndisplay
+  content: Example custom event observed on %nodelabel%
