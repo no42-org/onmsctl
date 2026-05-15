@@ -31,7 +31,7 @@ install-cargo-deny:
 	@command -v cargo-deny > /dev/null 2>&1 || cargo install --locked cargo-deny
 
 install-cargo-about:
-	@command -v cargo-about > /dev/null 2>&1 || cargo install --locked cargo-about
+	@command -v cargo-about > /dev/null 2>&1 || cargo install --locked --features=cli cargo-about
 
 install-cargo-cyclonedx:
 	@command -v cargo-cyclonedx > /dev/null 2>&1 || cargo install --locked cargo-cyclonedx
