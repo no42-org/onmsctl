@@ -54,7 +54,7 @@ impl TableRow for EventConfEventDto {
     fn row(&self) -> Vec<String> {
         vec![
             self.id.to_string(),
-            self.source_id.to_string(),
+            self.source_id.map(|n| n.to_string()).unwrap_or_default(),
             self.uei.clone(),
             self.event_label.clone(),
             self.severity.clone(),
@@ -127,7 +127,7 @@ mod tests {
     fn event_dto_row_aligns_with_headers() {
         let e = EventConfEventDto {
             id: 108,
-            source_id: 42,
+            source_id: Some(42),
             uei: "uei.opennms.org/test".into(),
             event_label: "Test event".into(),
             severity: "Warning".into(),
@@ -141,6 +141,7 @@ mod tests {
         let row = e.row();
         assert_eq!(row.len(), EventConfEventDto::headers().len());
         assert_eq!(row[0], "108");
+        assert_eq!(row[1], "42");
         assert_eq!(row[2], "uei.opennms.org/test");
     }
 
