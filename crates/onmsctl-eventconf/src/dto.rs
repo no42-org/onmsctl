@@ -35,10 +35,12 @@ pub struct EventConfSourceDto {
     pub file_order: i32,
     pub event_count: i32,
     pub enabled: bool,
+    /// Epoch milliseconds. Server emits as a bare integer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub created_time: Option<String>,
+    pub created_time: Option<i64>,
+    /// Epoch milliseconds. Server emits as a bare integer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_modified: Option<String>,
+    pub last_modified: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uploaded_by: Option<String>,
 }
@@ -85,13 +87,20 @@ pub struct SourceNameAndId {
 /// A row in the EventConf event table. Returned by per-source listing,
 /// filter, and vendor endpoints.
 ///
-/// Required fields (id, source_id, uei, event_label, severity, enabled)
-/// are strict on read — see [`EventConfSourceDto`] for the rationale.
+/// `source_id` is optional on read: Horizon's per-source events response
+/// (`/eventconf/filter/{id}/events`) omits it entirely — the id is
+/// implicit in the URL path — and the cross-source `/filter` response
+/// shape has been observed without it too. Callers that need the source
+/// id should track it out-of-band (e.g. from the URL they requested).
+///
+/// `created_time` and `last_modified` are epoch-milliseconds integers on
+/// the wire, not ISO strings.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct EventConfEventDto {
     pub id: i64,
-    pub source_id: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_id: Option<i64>,
     pub uei: String,
     pub event_label: String,
     pub severity: String,
@@ -103,9 +112,9 @@ pub struct EventConfEventDto {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub created_time: Option<String>,
+    pub created_time: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_modified: Option<String>,
+    pub last_modified: Option<i64>,
 }
 
 /// Body for `PUT /eventconf/sources/{sourceId}/events/{eventId}`.
@@ -283,17 +292,24 @@ pub struct ParmValue {
 // -- Pagination wrappers ----------------------------------------------------
 
 /// Page returned by filter endpoints that include `totalRecords` alongside
-/// the items array. The `Map` shape declared in the OpenAPI spec is opened
-/// up here to a typed pair.
+/// the items array.
 ///
-/// Both fields default — `total_records` to 0 and `items` to empty — so
+/// Horizon's eventconf controller emits the items array under the field
+/// name `eventConfSourceList` — including on `/eventconf/filter/{id}/events`,
+/// where the field carries `EventConfEvent` payloads despite the
+/// `Source`-shaped name (copy-paste in the controller). We accept both
+/// `eventConfSourceList` and `items` via serde aliases so wiremock tests
+/// that pre-date the contract discovery still parse, and a future Horizon
+/// rename to a generic name would not break us.
+///
+/// Both fields default — `total_records` to 0 and items to empty — so
 /// servers that omit one or both still parse to a usable empty page.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Page<T> {
     #[serde(default)]
     pub total_records: i64,
-    #[serde(default = "Vec::new")]
+    #[serde(default = "Vec::new", alias = "eventConfSourceList")]
     pub items: Vec<T>,
 }
 

@@ -39,10 +39,20 @@ const PATH_SEGMENT: &AsciiSet = &CONTROLS
     .add(b'&')
     .add(b'=');
 
+/// Default page size applied to filter endpoints when the caller passes no
+/// explicit `limit`. Horizon's eventconf filter endpoints reject the
+/// request with `400 "Invalid offset/limit values"` (and in one case 500
+/// "offset is null") when `limit` is missing — `offset` is server-defaulted
+/// on `/filter/sources` and `/filter`, but is required on
+/// `/filter/{id}/events`. Real eventconf installs have far fewer than 1000
+/// sources or events-per-source, so a single page of 1000 is effectively
+/// "show everything" without paginating.
+const DEFAULT_PAGE_LIMIT: i32 = 1000;
+
 /// Hard cap on the page size used by `find_source_by_name` so a degenerate
 /// duplicate-name pair is detected even if the server's default limit is
 /// small. Real eventconf installs have far fewer than 1000 sources.
-const FIND_SOURCE_LIMIT: i32 = 1000;
+const FIND_SOURCE_LIMIT: i32 = DEFAULT_PAGE_LIMIT;
 
 /// Base path for all eventconf endpoints. Joined onto the configured
 /// `OnmsClient` base URL.
@@ -217,6 +227,10 @@ impl EventConfApi<'_> {
     }
 
     /// `GET /eventconf/filter/sources` with `SourceFilter` parameters.
+    ///
+    /// Horizon requires `limit` on this endpoint; `offset` is optional and
+    /// server-defaulted. When the caller omits `limit` we apply
+    /// [`DEFAULT_PAGE_LIMIT`] so the request does not 400.
     pub async fn filter_sources(&self, filter: &SourceFilter) -> Result<Page<EventConfSourceDto>> {
         validate_paging(filter.offset, filter.limit, "filter_sources")?;
         let path = format!("{BASE}/filter/sources");
@@ -233,9 +247,8 @@ impl EventConfApi<'_> {
         if let Some(off) = filter.offset {
             q.push(("offset", off.to_string()));
         }
-        if let Some(lim) = filter.limit {
-            q.push(("limit", lim.to_string()));
-        }
+        let limit = filter.limit.unwrap_or(DEFAULT_PAGE_LIMIT);
+        q.push(("limit", limit.to_string()));
         // 204 No Content is normal when the filter matches nothing — turn
         // that into an empty page so callers always see a typed response.
         let result: Result<Page<EventConfSourceDto>> =
@@ -292,6 +305,11 @@ impl EventConfApi<'_> {
 
 impl EventConfApi<'_> {
     /// `GET /eventconf/filter/{sourceId}/events`.
+    ///
+    /// Horizon requires BOTH `offset` and `limit` on this endpoint —
+    /// omitting `offset` triggers a 500 NPE (`offset is null`), not a 400.
+    /// When the caller omits either, we apply `offset=0` /
+    /// [`DEFAULT_PAGE_LIMIT`] so the request does not crash the server.
     pub async fn list_events_in_source(
         &self,
         source_id: i64,
@@ -309,12 +327,10 @@ impl EventConfApi<'_> {
         if let Some(o) = &filter.event_order {
             q.push(("eventOrder", o.clone()));
         }
-        if let Some(off) = filter.offset {
-            q.push(("offset", off.to_string()));
-        }
-        if let Some(lim) = filter.limit {
-            q.push(("limit", lim.to_string()));
-        }
+        let offset = filter.offset.unwrap_or(0);
+        q.push(("offset", offset.to_string()));
+        let limit = filter.limit.unwrap_or(DEFAULT_PAGE_LIMIT);
+        q.push(("limit", limit.to_string()));
         let result: Result<Page<EventConfEventDto>> =
             self.client.get(&path, &borrow_pairs(&q)).await;
         match result {
@@ -328,6 +344,9 @@ impl EventConfApi<'_> {
     }
 
     /// `GET /eventconf/filter` — cross-source event filter.
+    ///
+    /// Horizon requires `limit` on this endpoint; `offset` is optional and
+    /// server-defaulted. Apply [`DEFAULT_PAGE_LIMIT`] when caller omits it.
     pub async fn filter_events(&self, filter: &EventFilter) -> Result<Vec<EventConfEventDto>> {
         validate_paging(filter.offset, filter.limit, "filter_events")?;
         let path = format!("{BASE}/filter");
@@ -344,9 +363,8 @@ impl EventConfApi<'_> {
         if let Some(off) = filter.offset {
             q.push(("offset", off.to_string()));
         }
-        if let Some(lim) = filter.limit {
-            q.push(("limit", lim.to_string()));
-        }
+        let limit = filter.limit.unwrap_or(DEFAULT_PAGE_LIMIT);
+        q.push(("limit", limit.to_string()));
         let result: Result<Vec<EventConfEventDto>> =
             self.client.get(&path, &borrow_pairs(&q)).await;
         match result {
@@ -981,5 +999,192 @@ mod tests {
             )
             .await
             .unwrap();
+    }
+
+    // -- contract regression: Horizon wrapper-field-name + required paging --
+
+    #[tokio::test]
+    async fn filter_sources_accepts_eventconfsourcelist_wrapper() {
+        // Horizon emits items under `eventConfSourceList`, not `items`.
+        // The serde alias on `Page<T>.items` is what makes this work; without
+        // it, deserialization silently returned an empty page even when
+        // records existed.
+        let (mock, client) = mock_with_client().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v2/eventconf/filter/sources"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "totalRecords": 1,
+                "eventConfSourceList": [
+                    {"id": 7, "name": "horizon-shape", "fileOrder": 5,
+                     "eventCount": 0, "enabled": true}
+                ]
+            })))
+            .mount(&mock)
+            .await;
+        let api = EventConfApi::new(&client);
+        let p = api.filter_sources(&SourceFilter::default()).await.unwrap();
+        assert_eq!(p.total_records, 1);
+        assert_eq!(p.items.len(), 1);
+        assert_eq!(p.items[0].name, "horizon-shape");
+    }
+
+    #[tokio::test]
+    async fn list_events_in_source_accepts_eventconfsourcelist_wrapper() {
+        // The per-source endpoint reuses the same wrapper field name as
+        // /filter/sources, despite carrying event payloads — a Horizon
+        // controller copy-paste quirk we must absorb.
+        let (mock, client) = mock_with_client().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v2/eventconf/filter/42/events"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "totalRecords": 1,
+                "eventConfSourceList": [
+                    {"id": 108, "sourceId": 42, "uei": "uei.opennms.org/x",
+                     "eventLabel": "x", "severity": "Warning", "enabled": true}
+                ]
+            })))
+            .mount(&mock)
+            .await;
+        let api = EventConfApi::new(&client);
+        let p = api
+            .list_events_in_source(42, &EventInSourceFilter::default())
+            .await
+            .unwrap();
+        assert_eq!(p.total_records, 1);
+        assert_eq!(p.items.len(), 1);
+        assert_eq!(p.items[0].uei, "uei.opennms.org/x");
+    }
+
+    #[tokio::test]
+    async fn filter_sources_defaults_limit_when_caller_omits_it() {
+        // Server requires `limit` on /filter/sources; without it the
+        // request 400s. Caller passes no limit — we apply DEFAULT_PAGE_LIMIT.
+        let (mock, client) = mock_with_client().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v2/eventconf/filter/sources"))
+            .and(query_param("limit", "1000"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "totalRecords": 0,
+                "eventConfSourceList": []
+            })))
+            .mount(&mock)
+            .await;
+        let api = EventConfApi::new(&client);
+        api.filter_sources(&SourceFilter::default()).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn list_events_in_source_defaults_offset_and_limit() {
+        // Server NPEs (500) on this endpoint when `offset` is missing,
+        // even if `limit` is present. We default both.
+        let (mock, client) = mock_with_client().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v2/eventconf/filter/42/events"))
+            .and(query_param("offset", "0"))
+            .and(query_param("limit", "1000"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "totalRecords": 0,
+                "eventConfSourceList": []
+            })))
+            .mount(&mock)
+            .await;
+        let api = EventConfApi::new(&client);
+        api.list_events_in_source(42, &EventInSourceFilter::default())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn get_source_decodes_real_horizon_shape() {
+        // Captured from a live Horizon /eventconf/sources/{id} response:
+        // `createdTime` and `lastModified` are epoch-millis integers, not
+        // ISO strings. `uploadedBy` is a plain string.
+        let (mock, client) = mock_with_client().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v2/eventconf/sources/1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": 1,
+                "name": "opennms.snmp.trap.translator.events",
+                "description": "",
+                "vendor": "opennms",
+                "fileOrder": 23,
+                "enabled": true,
+                "eventCount": 8,
+                "createdTime": 1778799087519_i64,
+                "lastModified": 1778799087519_i64,
+                "uploadedBy": "system-migration"
+            })))
+            .mount(&mock)
+            .await;
+        let api = EventConfApi::new(&client);
+        let s = api
+            .get_source(1)
+            .await
+            .expect("must decode the real Horizon source shape");
+        assert_eq!(s.id, 1);
+        assert_eq!(s.file_order, 23);
+        assert_eq!(s.created_time, Some(1778799087519));
+        assert_eq!(s.last_modified, Some(1778799087519));
+        assert_eq!(s.uploaded_by.as_deref(), Some("system-migration"));
+    }
+
+    #[tokio::test]
+    async fn list_events_in_source_decodes_real_horizon_shape() {
+        // Captured from a live Horizon /eventconf/filter/{id}/events
+        // response: `sourceId` is absent (implicit in path), `createdTime`
+        // and `lastModified` are epoch-millis integers, and unmodeled
+        // fields like `xmlContent` / `modifiedBy` / `fileOrder` are
+        // present alongside.
+        let (mock, client) = mock_with_client().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v2/eventconf/filter/23/events"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "totalRecords": 1,
+                "eventConfSourceList": [
+                    {
+                        "id": 154,
+                        "uei": "MATCH-ANY-UEI",
+                        "eventLabel": "OpenNMS-defined event: MATCH-ANY-UEI",
+                        "description": "<p>x</p>",
+                        "enabled": true,
+                        "xmlContent": "<event/>",
+                        "createdTime": 1778799087558_i64,
+                        "lastModified": 1778799087558_i64,
+                        "modifiedBy": "system-migration",
+                        "sourceName": "opennms.catch-all.events",
+                        "vendor": "opennms",
+                        "fileOrder": 1,
+                        "severity": "Indeterminate"
+                    }
+                ]
+            })))
+            .mount(&mock)
+            .await;
+        let api = EventConfApi::new(&client);
+        let p = api
+            .list_events_in_source(23, &EventInSourceFilter::default())
+            .await
+            .expect("must decode the real Horizon response shape");
+        assert_eq!(p.total_records, 1);
+        assert_eq!(p.items.len(), 1);
+        let e = &p.items[0];
+        assert_eq!(e.id, 154);
+        assert!(e.source_id.is_none());
+        assert_eq!(e.severity, "Indeterminate");
+        assert_eq!(e.created_time, Some(1778799087558));
+        assert_eq!(e.last_modified, Some(1778799087558));
+    }
+
+    #[tokio::test]
+    async fn filter_events_defaults_limit_when_caller_omits_it() {
+        let (mock, client) = mock_with_client().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v2/eventconf/filter"))
+            .and(query_param("limit", "1000"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&mock)
+            .await;
+        let api = EventConfApi::new(&client);
+        api.filter_events(&EventFilter::default()).await.unwrap();
     }
 }
