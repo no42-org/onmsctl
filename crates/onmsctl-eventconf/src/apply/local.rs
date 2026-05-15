@@ -19,6 +19,7 @@
 //! Conversion to the wire-format `Event` DTO lives in
 //! [`crate::apply::conversion`].
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use onmsctl_core::{Error, Result};
@@ -26,7 +27,7 @@ use onmsctl_core::{Error, Result};
 // -- Top-level shape --------------------------------------------------------
 
 /// The kubectl-style document the user authors. Validated at load time.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EventSourceLocal {
     pub api_version: String,
@@ -35,13 +36,13 @@ pub struct EventSourceLocal {
     pub spec: EventSourceSpec,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Metadata {
     pub name: String,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EventSourceSpec {
     /// Defaults to `true` when absent.
@@ -57,7 +58,7 @@ fn default_enabled() -> bool {
 
 // -- Event-level shape ------------------------------------------------------
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EventDef {
     pub uei: String,
@@ -83,7 +84,7 @@ pub struct EventDef {
     pub correlation: Option<CorrelationDef>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LogmsgDef {
     pub dest: String,
@@ -93,7 +94,7 @@ pub struct LogmsgDef {
     pub notify: Option<bool>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AlarmDataDef {
     pub reduction_key: String,
@@ -105,7 +106,7 @@ pub struct AlarmDataDef {
     pub clear_key: Option<String>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MaskDef {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -114,7 +115,7 @@ pub struct MaskDef {
     pub varbinds: Vec<MaskVarbindDef>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MaskElementDef {
     /// Element name. Maps to `mename` on the wire.
@@ -124,7 +125,7 @@ pub struct MaskElementDef {
     pub values: Vec<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MaskVarbindDef {
     pub vbnumber: i32,
@@ -133,7 +134,7 @@ pub struct MaskVarbindDef {
     pub values: Vec<String>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AutoackDef {
     /// "on" or "off".
@@ -143,14 +144,14 @@ pub struct AutoackDef {
     pub text: Option<String>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TticketDef {
     /// "on" or "off".
     pub state: String,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CorrelationDef {
     pub state: String,

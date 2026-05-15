@@ -1,4 +1,4 @@
-.PHONY: build test verify fmt clippy deny licenses install-tools install-cargo-deny install-cargo-about install-cargo-cyclonedx release-build sbom integration clean
+.PHONY: build test verify fmt clippy deny licenses install-tools install-cargo-deny install-cargo-about install-cargo-cyclonedx release-build sbom integration schema clean
 
 build:
 	cargo build --workspace --all-targets
@@ -63,3 +63,13 @@ sbom: install-cargo-cyclonedx
 # (and the matching CI job) exercises them.
 integration:
 	cargo test -p onmsctl-it -- --include-ignored --nocapture
+
+# Regenerate schemas/event-source.schema.json from EventSourceLocal.
+# Atomic write so a generator crash doesn't corrupt the file. The
+# `schema_matches_committed` test fails CI if this drifts from the
+# type definitions.
+schema:
+	@mkdir -p schemas
+	cargo run --quiet --release --example gen_schema -p onmsctl-eventconf \
+		> schemas/event-source.schema.json.tmp \
+		&& mv schemas/event-source.schema.json.tmp schemas/event-source.schema.json
