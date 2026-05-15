@@ -16,6 +16,13 @@ ignore = []
 
 [licenses]
 version = 2
+# The allowlist mirrors the proposal's Apache-2.0-compatible set. We keep
+# entries that aren't currently encountered (e.g. BSD-2-Clause, Zlib,
+# Unicode-DFS-2016) so a future dep using them passes without ceremony —
+# the proposal already pre-approved them. `unused-allowed-license =
+# "allow"` suppresses the bookkeeping warning cargo-deny would otherwise
+# emit for each unused entry.
+unused-allowed-license = "allow"
 allow = [
     "Apache-2.0",
     "MIT",
@@ -36,6 +43,24 @@ confidence-threshold = 0.95
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# Acknowledged transitive duplicates. Each entry names *why* the older
+# version is in the tree and what it would take to remove it. The
+# `multiple-versions = "warn"` policy still fires on new duplicates;
+# only the listed pairs are silenced.
+skip = [
+    # `ring` 0.17 pins `getrandom` 0.2 for its rand-source. The rest of
+    # the tree has moved to 0.4. Remove this skip once ring publishes a
+    # release that bumps to getrandom 0.3+.
+    { crate = "getrandom@0.2.17", reason = "ring 0.17 still pins getrandom 0.2" },
+    # `ring` 0.17 also pins `windows-sys` 0.52; the rest of the tree
+    # uses 0.61. Same upstream bump unblocks both.
+    { crate = "windows-sys@0.52.0", reason = "ring 0.17 still pins windows-sys 0.52" },
+    # `wit-bindgen` 0.51 vs 0.57 split lives entirely in the wasi
+    # target subtree (wasip2 / wasip3 RC). Inactive on our shipped
+    # targets (linux / macOS / windows); will collapse when the
+    # wasm-bindgen ecosystem aligns.
+    { crate = "wit-bindgen@0.51.0", reason = "wasip3 RC pins an older wit-bindgen than wasip2 (no impact on shipped targets)" },
+]
 
 [sources]
 unknown-registry = "deny"
