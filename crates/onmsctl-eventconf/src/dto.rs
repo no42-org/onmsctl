@@ -155,8 +155,15 @@ pub struct EnableDisableConfSourceEventsPayload {
 /// `PUT /…/events/{id}`. Only the eventconf-relevant fields are modeled;
 /// runtime fields (nodeid, dbid, time, …) are intentionally absent because
 /// they are server-assigned at runtime, not eventconf inputs.
+///
+/// Wire format is **kebab-case** (e.g. `event-label`, `alarm-data`) —
+/// Horizon's eventconf Event class uses the same property names as the
+/// eventconf XML, not the camelCase shape the filter-endpoint DTOs use.
+/// A POST with `eventLabel` returns 500 `Unrecognized field` from the
+/// Jackson layer. This is asymmetric with [`EventConfEventDto`] (read
+/// shape), which is camelCase.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", default)]
+#[serde(rename_all = "kebab-case", default)]
 pub struct Event {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub uei: Option<String>,
@@ -254,7 +261,7 @@ pub struct Tticket {
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", default)]
+#[serde(rename_all = "kebab-case", default)]
 pub struct AlarmData {
     pub reduction_key: Option<String>,
     pub alarm_type: Option<i32>,
@@ -438,11 +445,12 @@ mod tests {
         // Required fields appear:
         assert!(json.contains("uei.opennms.org/foo"));
         assert!(json.contains("\"severity\":\"Warning\""));
-        // Unset nested fields are NOT serialized:
+        // Unset nested fields are NOT serialized. Names are the wire
+        // (kebab-case) shape — see Event's serde annotation.
         for missing in [
             "mask",
             "logmsg",
-            "alarmData",
+            "alarm-data",
             "correlation",
             "autoacknowledge",
             "tticket",
@@ -451,6 +459,45 @@ mod tests {
             "parmCollection",
         ] {
             assert!(!json.contains(missing), "unexpected '{missing}' in {json}");
+        }
+    }
+
+    #[test]
+    fn event_serializes_multi_word_fields_as_kebab_case() {
+        // Horizon's eventconf Event POST endpoint rejects camelCase
+        // field names. Pin the wire shape so a future refactor doesn't
+        // silently regress us back to e.g. `eventLabel`.
+        let e = Event {
+            uei: Some("uei.opennms.org/x".into()),
+            event_label: Some("L".into()),
+            alarm_data: Some(AlarmData {
+                reduction_key: Some("k".into()),
+                alarm_type: Some(1),
+                clear_key: Some("c".into()),
+                auto_clean: Some(true),
+            }),
+            ..Event::default()
+        };
+        let json = serde_json::to_string(&e).unwrap();
+        assert!(json.contains("\"event-label\":\"L\""));
+        assert!(json.contains("\"alarm-data\""));
+        assert!(json.contains("\"reduction-key\":\"k\""));
+        assert!(json.contains("\"alarm-type\":1"));
+        assert!(json.contains("\"clear-key\":\"c\""));
+        assert!(json.contains("\"auto-clean\":true"));
+        // Negative: no leftover camelCase.
+        for camel in [
+            "eventLabel",
+            "alarmData",
+            "reductionKey",
+            "alarmType",
+            "clearKey",
+            "autoClean",
+        ] {
+            assert!(
+                !json.contains(camel),
+                "unexpected camelCase '{camel}' in {json}"
+            );
         }
     }
 
