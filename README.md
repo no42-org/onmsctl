@@ -78,7 +78,7 @@ contexts:
 |-----------------|-----------------------------------------------|-------|
 | `password`      | `password: hunter2`                           | Inline. Convenient, plain-text on disk. |
 | `password-file` | `password-file: /run/secrets/onms-prod`       | Mode `0600` recommended; trailing newlines stripped. |
-| `keyring`       | `keyring: { service: onmsctl, account: prod }` | OS keyring (macOS Keychain, Windows Credential Manager, Linux Secret Service via `keyring` crate). |
+| `keyring`       | `keyring: { service: onmsctl, account: prod }` | OS keyring. macOS Keychain and Windows Credential Manager work out of the box. On Linux the default build links only the kernel keyutils backend; for GNOME Keyring / KWallet support rebuild with `--features keyring/sync-secret-service` (adds a `libdbus-1` build dependency). |
 
 `auth.bearer` accepts the same shapes with `token` / `token-file` /
 `keyring`.

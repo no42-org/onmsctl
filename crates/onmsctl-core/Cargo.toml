@@ -35,11 +35,18 @@ similar = { workspace = true }
 # crate compiles to a no-op stub whose reads return "No matching entry
 # found" for every credential — silently broken. See the keyring crate's
 # feature matrix; we pick the synchronous variant on each platform.
+#
+# Linux uses kernel keyutils only (no D-Bus secret-service). This keeps
+# the dependency closure pure-Rust and lets `aarch64-unknown-linux-gnu`
+# cross-builds in CI run without multiarch `libdbus-1-dev`. Desktop users
+# who want GNOME Keyring / KWallet support can rebuild with
+# `--features=keyring/sync-secret-service` (and accept the libdbus-1
+# system dependency at build time).
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { workspace = true, features = ["apple-native"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-keyring = { workspace = true, features = ["linux-native-sync-persistent", "crypto-rust"] }
+keyring = { workspace = true, features = ["linux-native"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { workspace = true, features = ["windows-native"] }
