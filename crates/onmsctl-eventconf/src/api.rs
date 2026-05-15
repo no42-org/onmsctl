@@ -204,8 +204,7 @@ impl EventConfApi<'_> {
             cascade_to_events,
             source_ids: source_ids.to_vec(),
         };
-        let _: serde_json::Value = self.client.patch(&path, &payload).await?;
-        Ok(())
+        self.client.patch_drain(&path, &payload).await
     }
 
     /// `GET /eventconf/sources/names`.
@@ -398,8 +397,7 @@ impl EventConfApi<'_> {
         req: &EventConfEventEditRequest,
     ) -> Result<()> {
         let path = format!("{BASE}/sources/{source_id}/events/{event_id}");
-        let _: serde_json::Value = self.client.put(&path, req).await?;
-        Ok(())
+        self.client.put_drain(&path, req).await
     }
 
     /// `DELETE /eventconf/sources/{sourceId}/events` with `{eventIds: [...]}`.
@@ -427,8 +425,7 @@ impl EventConfApi<'_> {
             enable,
             events_ids: event_ids.to_vec(),
         };
-        let _: serde_json::Value = self.client.patch(&path, &payload).await?;
-        Ok(())
+        self.client.patch_drain(&path, &payload).await
     }
 }
 
@@ -1173,6 +1170,24 @@ mod tests {
         assert_eq!(e.severity, "Indeterminate");
         assert_eq!(e.created_time, Some(1778799087558));
         assert_eq!(e.last_modified, Some(1778799087558));
+    }
+
+    #[tokio::test]
+    async fn set_sources_enabled_tolerates_plaintext_success_body() {
+        // Captured from live Horizon: PATCH /eventconf/sources/status
+        // returns `200 OK` with body `EventConf sources updated successfully.`
+        // (plaintext, not JSON). The drain helper must not try to JSON-parse it.
+        let (mock, client) = mock_with_client().await;
+        Mock::given(method("PATCH"))
+            .and(path("/api/v2/eventconf/sources/status"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string("EventConf sources updated successfully."),
+            )
+            .mount(&mock)
+            .await;
+        let api = EventConfApi::new(&client);
+        api.set_sources_enabled(&[24], false, true).await.unwrap();
     }
 
     #[tokio::test]

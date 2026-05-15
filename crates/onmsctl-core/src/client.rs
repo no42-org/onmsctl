@@ -182,6 +182,35 @@ impl OnmsClient {
         self.json_request(Method::PATCH, path, body).await
     }
 
+    /// `PATCH` with a JSON body, discarding the response body. For Horizon
+    /// mutation endpoints that reply with a plaintext success string (e.g.
+    /// "EventConf sources updated successfully.") rather than a JSON body —
+    /// trying to deserialize those via [`Self::patch`] yields a transport
+    /// error on the response decode.
+    pub async fn patch_drain<B: Serialize>(&self, path: &str, body: &B) -> Result<()> {
+        self.mutate_drain(Method::PATCH, path, body).await
+    }
+
+    /// `PUT` with a JSON body, discarding the response body. Same rationale
+    /// as [`Self::patch_drain`].
+    pub async fn put_drain<B: Serialize>(&self, path: &str, body: &B) -> Result<()> {
+        self.mutate_drain(Method::PUT, path, body).await
+    }
+
+    /// Shared body for the `*_drain` mutation helpers — apply auth, send,
+    /// drain the body so the connection can return to the pool, return `()`.
+    async fn mutate_drain<B: Serialize>(&self, method: Method, path: &str, body: &B) -> Result<()> {
+        let url = self.url_for(path)?;
+        let req = self
+            .inner
+            .request(method.clone(), url)
+            .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
+            .json(body);
+        let resp = self.send(req, method, path).await?;
+        let _ = resp.bytes().await?;
+        Ok(())
+    }
+
     /// `DELETE` with optional JSON body. Returns unit on success since the
     /// EventConf delete endpoints return either 200 or 204 with no
     /// caller-actionable payload. The body is read and discarded so the
