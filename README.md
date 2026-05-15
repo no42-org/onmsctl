@@ -292,6 +292,28 @@ retention.
 |-------------------------|------------------------------------------------------------------------|
 | OpenNMS Horizon **36+** | Primary target. The EventConf REST surface this CLI consumes was introduced here. |
 
+### Known server-side issues
+
+`GET /api/v2/eventconf/filter/sources` on current Horizon builds reports
+the correct `totalRecords` count but returns an empty
+`eventConfSourceList` regardless of filter or pagination. The data is
+present (`/eventconf/sources/names-and-ids` returns it fine), but the
+filter controller's list query never populates. Two user-visible
+consequences:
+
+- **`onmsctl source list` prints an empty table** even when sources
+  exist. Use `onmsctl source names-and-ids` as a working alternative
+  until Horizon is fixed.
+- **`onmsctl source apply` always takes the *create* path** because the
+  underlying `find_source_by_name` lookup always reports `Absent`. The
+  data outcome stays correct (Horizon's upload endpoint upserts on
+  basename collision), but the printed outcome reads `Created` even
+  when the source already exists — i.e. the `Updated` and `Unchanged`
+  outcomes are unreachable until the controller is fixed.
+
+`/eventconf/filter/{id}/events` and `/eventconf/filter` are not
+affected.
+
 ---
 
 ## License
