@@ -46,6 +46,66 @@ pub fn excerpt_body(body: &str) -> String {
     format!("{} [… truncated, {} bytes total]", &body[..end], total)
 }
 
+/// Reduce a Horizon error-body envelope to the message inside, when the
+/// envelope is one of the common shapes:
+///
+///   * `<error>message</error>` / `<message>message</message>` — XML
+///   * `{"error":"message"}` / `{"message":"message"}` — JSON
+///
+/// Falls back to the raw input when no envelope matches. Used purely for
+/// the user-facing [`Error::HttpStatus`] message; the stored `body` field
+/// is unchanged so log analyzers still see the wire form.
+pub fn prettify_body(body: &str) -> String {
+    let trimmed = body.trim();
+
+    // XML-ish single-tag envelope.
+    for tag in ["error", "message"] {
+        let open = format!("<{tag}>");
+        let close = format!("</{tag}>");
+        if let Some(rest) = trimmed.strip_prefix(&open)
+            && let Some(inner) = rest.strip_suffix(&close)
+        {
+            return inner.trim().to_string();
+        }
+    }
+
+    // JSON object with a single string-valued `error` or `message` key.
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed)
+        && let Some(obj) = v.as_object()
+        && obj.len() == 1
+    {
+        for key in ["error", "message"] {
+            if let Some(s) = obj.get(key).and_then(|v| v.as_str()) {
+                return s.to_string();
+            }
+        }
+    }
+
+    trimmed.to_string()
+}
+
+/// Map common HTTP status codes to their canonical reason phrases. Returns
+/// an empty string for codes we don't recognize, so the formatter doesn't
+/// emit a misleading phrase.
+pub fn status_reason(status: u16) -> &'static str {
+    match status {
+        400 => "Bad Request",
+        401 => "Unauthorized",
+        403 => "Forbidden",
+        404 => "Not Found",
+        405 => "Method Not Allowed",
+        409 => "Conflict",
+        415 => "Unsupported Media Type",
+        422 => "Unprocessable Entity",
+        429 => "Too Many Requests",
+        500 => "Internal Server Error",
+        502 => "Bad Gateway",
+        503 => "Service Unavailable",
+        504 => "Gateway Timeout",
+        _ => "",
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum Error {
     // -- Config / context resolution --
@@ -67,7 +127,12 @@ pub enum Error {
     /// HTTP non-success response. The `body` field is capped at
     /// [`HTTP_BODY_EXCERPT_BYTES`] to avoid dumping multi-MB error pages
     /// (e.g. Tomcat HTML stack traces) into stderr / log output.
-    #[error("{method} {path} returned {status}: {body}")]
+    ///
+    /// The Display form prettifies common envelope shapes (XML `<error>…`,
+    /// JSON `{"error":"…"}`) so the user sees the message, not the wrapper.
+    /// The stored `body` is the raw wire form — analytics / log scrapers
+    /// see the original.
+    #[error("HTTP {status} {} ({method} {path}): {}", status_reason(*status), prettify_body(body))]
     HttpStatus {
         method: String,
         path: String,
@@ -233,6 +298,51 @@ mod tests {
         assert!(msg.contains("404"));
         assert!(msg.contains("GET"));
         assert!(msg.contains("/eventconf/sources/9999"));
+        assert!(msg.contains("Not Found"));
+    }
+
+    #[test]
+    fn http_status_strips_xml_error_envelope() {
+        let e = Error::HttpStatus {
+            method: "GET".into(),
+            path: "/x".into(),
+            status: 404,
+            body: "<error>No events found for source ID: 24</error>".into(),
+        };
+        let msg = e.to_string();
+        assert!(msg.contains("No events found for source ID: 24"));
+        assert!(!msg.contains("<error>"));
+        assert!(!msg.contains("</error>"));
+    }
+
+    #[test]
+    fn http_status_strips_json_error_envelope() {
+        let e = Error::HttpStatus {
+            method: "GET".into(),
+            path: "/x".into(),
+            status: 400,
+            body: r#"{"error":"Invalid offset/limit values"}"#.into(),
+        };
+        let msg = e.to_string();
+        assert!(msg.contains("Invalid offset/limit values"));
+        assert!(!msg.contains("\"error\""));
+        assert!(msg.contains("Bad Request"));
+    }
+
+    #[test]
+    fn prettify_body_passes_through_unrecognized_shape() {
+        assert_eq!(prettify_body("plain text"), "plain text");
+        // Multi-key JSON: not a single-error envelope, leave intact.
+        assert_eq!(
+            prettify_body(r#"{"error":"a","detail":"b"}"#),
+            r#"{"error":"a","detail":"b"}"#
+        );
+    }
+
+    #[test]
+    fn status_reason_returns_empty_for_unknown_codes() {
+        assert_eq!(status_reason(404), "Not Found");
+        assert_eq!(status_reason(418), "");
     }
 
     #[test]
