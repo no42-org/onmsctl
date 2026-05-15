@@ -5,8 +5,8 @@
 
 //! CLI subcommand surface for the EventConf capability.
 //!
-//! Exposed to the binary crate as [`SourceCmd`] (and in commit 2 of Phase 4,
-//! `EventCmd`). The binary composes them into its top-level command tree.
+//! Exposed to the binary crate as [`SourceCmd`] and [`EventCmd`]; the
+//! binary composes them into its top-level command tree.
 
 pub mod event;
 pub mod source;

@@ -6,7 +6,7 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "EventConf capability for onmsctl (Phase 1 stub; source/event lifecycle and apply -f land in Phases 3–5)"
+description = "EventConf capability for onmsctl: source / event lifecycle (16 REST endpoints), declarative `apply -f` at source granularity, and the multipart upload path"
 publish = false
 
 [dependencies]

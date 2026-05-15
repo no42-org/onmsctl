@@ -6,7 +6,7 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Shared infrastructure for onmsctl capabilities (Phase 1 stub; HTTP / auth / config / render / ApplyTarget land in Phase 2)"
+description = "Shared infrastructure for onmsctl capabilities: HTTP client, auth (Basic / Bearer / keyring), kubectl-style contexts, output rendering (table / JSON / YAML), and the ApplyTarget driver"
 publish = false
 
 [dependencies]
