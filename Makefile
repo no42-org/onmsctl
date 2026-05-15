@@ -61,8 +61,12 @@ sbom: install-cargo-cyclonedx
 # _PASSWORD; tests that don't see all three print "SKIP:" and return.
 # Tests are #[ignore]d so `make test` is unaffected — only this target
 # (and the matching CI job) exercises them.
+#
+# --test-threads=1 forces serial execution. Each test does a broad
+# `onmsctl-it-*` cleanup before and after its own work; parallel tests
+# would clobber each other's in-flight resources.
 integration:
-	cargo test -p onmsctl-it -- --include-ignored --nocapture
+	cargo test -p onmsctl-it -- --include-ignored --nocapture --test-threads=1
 
 # Regenerate schemas/event-source.schema.json from EventSourceLocal.
 # Atomic write so a generator crash doesn't corrupt the file. The
