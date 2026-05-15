@@ -5,10 +5,14 @@
 
 //! `apply -f` for `EventSource`.
 //!
-//! Phase 5 commit 1 — local YAML schema, validation, and the
-//! Local→wire-Event conversion. Diff algorithm and `ApplyTarget`
-//! impl land in commits 2 and 3 per the OpenSpec change
-//! `init-onmsctl-event-conf`.
+//! Submodules:
+//!   - [`local`] — the user-authored YAML schema (`EventSourceLocal`)
+//!     and validation.
+//!   - [`conversion`] — `EventSourceLocal` → wire-format `Event` DTO.
+//!   - [`diff`] — UEI-bucketed structured diff between local and
+//!     server-state shapes (see `design.md §5.3`).
+//!   - [`target`] — the [`onmsctl_core::ApplyTarget`] impl that wires
+//!     fetch / create / update / diff for the EventConf capability.
 
 pub mod conversion;
 pub mod diff;
