@@ -148,6 +148,39 @@ schema models:
 | 3 | `vendor` is filename-derived, not declared. | Encode the vendor as the prefix before the first `.` in `metadata.name`. |
 | 4 | `fileOrder` is server-managed in v0.1. | Declarative ordering deferred to a future `kind: EventConfMaster`. |
 
+#### Editor integration
+
+A JSON Schema (draft 2020-12) for `EventSource` documents lives at
+[`schemas/event-source.schema.json`](schemas/event-source.schema.json).
+Drop a one-line directive at the top of your YAML so editors using
+[`yaml-language-server`](https://github.com/redhat-developer/yaml-language-server)
+(VS Code's Red Hat YAML extension, Helix, Neovim) validate on save:
+
+```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/no42-org/onmsctl/main/schemas/event-source.schema.json
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: cisco.foo
+spec:
+  events:
+    - uei: uei.opennms.org/cisco/foo/coldStart
+      label: "Cisco Foo Cold Start"
+      severity: Warning
+```
+
+For a stable reference, pin to a release tag instead of `main` —
+`…/onmsctl/v0.1.0/schemas/event-source.schema.json`. Working from a
+clone? Reference the file directly:
+
+```yaml
+# yaml-language-server: $schema=./schemas/event-source.schema.json
+```
+
+Regenerate after type changes with `make schema`; the
+`committed_schema_matches_generated` test fails CI if the committed
+artifact lags behind the Rust definitions.
+
 ### 2. Imperative source ops
 
 ```sh
