@@ -2,7 +2,7 @@
 
 A `kubectl`-style command-line interface for [OpenNMS Horizon][horizon] —
 declarative `apply -f`, imperative source / event verbs, and live
-introspection — talking to the EventConf REST API introduced in Horizon 35.
+introspection — talking to the EventConf REST API introduced in Horizon 36.
 
 [horizon]: https://www.opennms.com/horizon/
 
@@ -257,8 +257,7 @@ retention.
 
 | Server                  | Status                                                                 |
 |-------------------------|------------------------------------------------------------------------|
-| OpenNMS Horizon **35+** | Primary target. The EventConf REST surface this CLI consumes was introduced here. |
-| OpenNMS Meridian        | Unsupported until verified against a live instance.                    |
+| OpenNMS Horizon **36+** | Primary target. The EventConf REST surface this CLI consumes was introduced here. |
 
 ---
 
