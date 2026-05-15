@@ -33,8 +33,8 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const CAPABILITY_NAME: &str = "eventconf";
 
 pub use api::{
-    CreatedEvent, CreatedSource, EventConfApi, EventFilter, EventInSourceFilter, SourceFilter,
-    SourceLookup, UploadFileError, UploadFileResult, UploadResult,
+    CreatedSource, EventConfApi, EventFilter, EventInSourceFilter, SourceFilter, SourceLookup,
+    UploadFileError, UploadFileResult, UploadResult,
 };
 pub use cmd::{EventCmd, SourceCmd};
 pub use dto::{

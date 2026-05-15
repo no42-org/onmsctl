@@ -121,13 +121,6 @@ pub struct CreatedSource {
     pub file_order: i32,
 }
 
-/// Result of `POST /eventconf/sources/{sourceId}/events`.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct CreatedEvent {
-    pub id: i64,
-}
-
 /// Aggregated result of `POST /eventconf/upload`. Per the upload handler
 /// (design.md §3.1), the server returns one entry per attached file in
 /// either `success` or `errors`.
@@ -382,11 +375,13 @@ impl EventConfApi<'_> {
         self.client.get(&path, &[]).await
     }
 
-    /// `POST /eventconf/sources/{sourceId}/events`.
+    /// `POST /eventconf/sources/{sourceId}/events`. The endpoint returns
+    /// the new event id as a bare integer body (e.g. `159`) — not the
+    /// `{"id":N}` object shape `create_source` uses. Top-level integers
+    /// are valid JSON so reqwest's `json` decoder handles it directly.
     pub async fn add_event(&self, source_id: i64, event: &Event) -> Result<i64> {
         let path = format!("{BASE}/sources/{source_id}/events");
-        let created: CreatedEvent = self.client.post(&path, event).await?;
-        Ok(created.id)
+        self.client.post(&path, event).await
     }
 
     /// `PUT /eventconf/sources/{sourceId}/events/{eventId}`.
@@ -697,10 +692,14 @@ mod tests {
 
     #[tokio::test]
     async fn add_event_returns_id() {
+        // Horizon returns the new event id as a bare integer body
+        // (e.g. `108`), not the `{"id":N}` shape used by create_source.
+        // Top-level integer is valid JSON so reqwest's json decoder
+        // handles it; the test pins the wire shape.
         let (mock, client) = mock_with_client().await;
         Mock::given(method("POST"))
             .and(path("/api/v2/eventconf/sources/42/events"))
-            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({"id": 108})))
+            .respond_with(ResponseTemplate::new(201).set_body_string("108"))
             .mount(&mock)
             .await;
         let api = EventConfApi::new(&client);
