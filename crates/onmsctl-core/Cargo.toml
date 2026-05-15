@@ -21,7 +21,6 @@ serde_norway = { workspace = true }
 
 # Config & secrets
 directories = { workspace = true }
-keyring = { workspace = true }
 
 # HTTP & async
 reqwest = { workspace = true }
@@ -31,6 +30,19 @@ async-trait = { workspace = true }
 # Output rendering
 comfy-table = { workspace = true }
 similar = { workspace = true }
+
+# Keyring needs a platform-native backend selected per OS, otherwise the
+# crate compiles to a no-op stub whose reads return "No matching entry
+# found" for every credential — silently broken. See the keyring crate's
+# feature matrix; we pick the synchronous variant on each platform.
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { workspace = true, features = ["apple-native"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { workspace = true, features = ["linux-native-sync-persistent", "crypto-rust"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { workspace = true, features = ["windows-native"] }
 
 [dev-dependencies]
 tempfile = "3"
