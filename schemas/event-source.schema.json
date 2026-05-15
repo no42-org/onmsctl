@@ -1,0 +1,339 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "EventSourceLocal",
+  "description": "The kubectl-style document the user authors. Validated at load time.",
+  "type": "object",
+  "properties": {
+    "apiVersion": {
+      "type": "string"
+    },
+    "kind": {
+      "type": "string"
+    },
+    "metadata": {
+      "$ref": "#/$defs/Metadata"
+    },
+    "spec": {
+      "$ref": "#/$defs/EventSourceSpec"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "spec"
+  ],
+  "$defs": {
+    "AlarmDataDef": {
+      "type": "object",
+      "properties": {
+        "alarmType": {
+          "description": "1 = problem, 2 = resolution.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "autoClean": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "clearKey": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reductionKey": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "reductionKey",
+        "alarmType"
+      ]
+    },
+    "AutoackDef": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "description": "\"on\" or \"off\".",
+          "type": "string"
+        },
+        "text": {
+          "description": "Maps to `content` on the wire.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "state"
+      ]
+    },
+    "CorrelationDef": {
+      "type": "object",
+      "properties": {
+        "cmax": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cmin": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cuei": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "state"
+      ]
+    },
+    "EventDef": {
+      "type": "object",
+      "properties": {
+        "alarmData": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AlarmDataDef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "autoacknowledge": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AutoackDef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "correlation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CorrelationDef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "label": {
+          "type": "string"
+        },
+        "logmsg": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LogmsgDef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mask": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MaskDef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mouseovertext": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operinstruct": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "severity": {
+          "type": "string"
+        },
+        "tticket": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TticketDef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "uei": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "uei",
+        "label",
+        "severity"
+      ]
+    },
+    "EventSourceSpec": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Defaults to `true` when absent.",
+          "type": "boolean",
+          "default": true
+        },
+        "events": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/EventDef"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "LogmsgDef": {
+      "type": "object",
+      "properties": {
+        "dest": {
+          "type": "string"
+        },
+        "notify": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "text": {
+          "description": "Human-readable substitution template. Maps to `content` on the wire.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "dest",
+        "text"
+      ]
+    },
+    "MaskDef": {
+      "type": "object",
+      "properties": {
+        "elements": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MaskElementDef"
+          }
+        },
+        "varbinds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MaskVarbindDef"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "MaskElementDef": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "Element name. Maps to `mename` on the wire.",
+          "type": "string"
+        },
+        "values": {
+          "description": "Match values. Maps to `mevalues` on the wire.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ]
+    },
+    "MaskVarbindDef": {
+      "type": "object",
+      "properties": {
+        "values": {
+          "description": "Match values. Maps to `vbvalues` on the wire.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "vbnumber": {
+          "type": "integer",
+          "format": "int32"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "vbnumber"
+      ]
+    },
+    "Metadata": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ]
+    },
+    "TticketDef": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "description": "\"on\" or \"off\".",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "state"
+      ]
+    }
+  }
+}

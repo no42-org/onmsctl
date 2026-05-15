@@ -19,6 +19,7 @@ async-trait = { workspace = true }
 quick-xml = { workspace = true }
 percent-encoding = { workspace = true }
 clap = { workspace = true }
+schemars = { workspace = true }
 
 [dev-dependencies]
 wiremock = "0.6"
