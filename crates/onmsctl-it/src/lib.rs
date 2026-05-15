@@ -28,7 +28,7 @@ use std::env;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context as _, Result, anyhow};
-use onmsctl_core::{AuthCreds, OnmsClient, Url};
+use onmsctl_core::{AuthCreds, Context, OnmsClient, OutputFormat, Url};
 use onmsctl_eventconf::EventConfApi;
 
 /// Prefix every integration-test-owned resource name SHALL carry. The
@@ -47,6 +47,13 @@ static COUNTER: AtomicU64 = AtomicU64::new(0);
 /// Outcome of [`Harness::from_env`]. `Skipped` is not an error — it
 /// means the harness env is intentionally absent and the test should
 /// no-op.
+//
+// Clippy's `large_enum_variant` lint flags the size delta between
+// `Ready(Harness)` and `Skipped(String)`. This enum is constructed
+// exactly once per test process, so the size overhead is nil; boxing
+// would just add an indirection that the harness macro has to thread
+// through.
+#[allow(clippy::large_enum_variant)]
 pub enum Setup {
     Ready(Harness),
     Skipped(String),
@@ -54,6 +61,8 @@ pub enum Setup {
 
 pub struct Harness {
     client: OnmsClient,
+    url: Url,
+    creds: AuthCreds,
 }
 
 impl Harness {
@@ -77,13 +86,33 @@ impl Harness {
 
         let parsed =
             Url::parse(&url).with_context(|| format!("{ENV_URL}='{url}' is not a valid URL"))?;
-        let client = OnmsClient::from_parts(parsed, AuthCreds::basic(user, password))
+        let creds = AuthCreds::basic(user, password);
+        let client = OnmsClient::from_parts(parsed.clone(), creds.clone())
             .map_err(|e| anyhow!("OnmsClient::from_parts failed: {e}"))?;
-        Ok(Setup::Ready(Harness { client }))
+        Ok(Setup::Ready(Harness {
+            client,
+            url: parsed,
+            creds,
+        }))
     }
 
     pub fn client(&self) -> &OnmsClient {
         &self.client
+    }
+
+    /// Build a [`Context`] suitable for `run_apply::<EventSourceTarget>`
+    /// and other driver-level entry points that rebuild their own
+    /// client from `Context`. `verbose` toggles the stderr warnings
+    /// guarded by `ctx.verbose` (notably the disabled-state apply
+    /// flap notice).
+    pub fn context(&self, verbose: bool) -> Context {
+        Context {
+            url: self.url.clone(),
+            creds: self.creds.clone(),
+            insecure_skip_tls_verify: false,
+            output_format: OutputFormat::Table,
+            verbose,
+        }
     }
 
     /// Build a resource name unique to this test process. The
