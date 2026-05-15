@@ -1,0 +1,42 @@
+# Live-instance integration tests. Runs only on the upstream repo's
+# `main` branch (not on PRs, not on forks) so the lab credentials in
+# repository secrets never traverse PR-from-fork context.
+#
+# Tests are no-ops when the secrets are unset (the harness prints
+# `SKIP:` and returns), so this workflow is safe to land before the
+# secrets are configured.
+name: integration
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  integration:
+    if: github.repository == 'no42-org/onmsctl'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ONMSCTL_TEST_URL: ${{ secrets.ONMSCTL_TEST_URL }}
+      ONMSCTL_TEST_USER: ${{ secrets.ONMSCTL_TEST_USER }}
+      ONMSCTL_TEST_PASSWORD: ${{ secrets.ONMSCTL_TEST_PASSWORD }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install pinned Rust toolchain (honors rust-toolchain.toml)
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
+        with:
+          key: integration
+
+      - name: Run integration tests
+        run: make integration

@@ -1,4 +1,4 @@
-.PHONY: build test verify fmt clippy deny licenses install-tools install-cargo-deny install-cargo-about install-cargo-cyclonedx release-build sbom clean
+.PHONY: build test verify fmt clippy deny licenses install-tools install-cargo-deny install-cargo-about install-cargo-cyclonedx release-build sbom integration clean
 
 build:
 	cargo build --workspace --all-targets
@@ -56,3 +56,10 @@ sbom: install-cargo-cyclonedx
 	@mkdir -p sbom
 	cargo cyclonedx --format json
 	@find . -maxdepth 3 -name '*.cdx.json' -not -path './sbom/*' -exec mv {} sbom/ \;
+
+# Live-instance integration tests. Reads ONMSCTL_TEST_URL / _USER /
+# _PASSWORD; tests that don't see all three print "SKIP:" and return.
+# Tests are #[ignore]d so `make test` is unaffected — only this target
+# (and the matching CI job) exercises them.
+integration:
+	cargo test -p onmsctl-it -- --include-ignored --nocapture
