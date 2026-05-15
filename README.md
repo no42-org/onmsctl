@@ -257,12 +257,42 @@ Stable per `cli-core` spec §4.5; safe for scripting:
 # Bash
 onmsctl completion bash > /etc/bash_completion.d/onmsctl
 
-# Zsh
-onmsctl completion zsh > "${fpath[1]}/_onmsctl"
-
 # Fish
 onmsctl completion fish > ~/.config/fish/completions/onmsctl.fish
 ```
+
+### Zsh
+
+The right directory depends on how your zsh is configured. Pick the
+matching row:
+
+| Setup | Target |
+|---|---|
+| Oh My Zsh | `~/.oh-my-zsh/custom/completions/_onmsctl` |
+| Homebrew zsh (macOS) | `"$(brew --prefix)/share/zsh/site-functions/_onmsctl"` |
+| System-wide on Linux | `/usr/local/share/zsh/site-functions/_onmsctl` |
+| Plain user-local zsh | `~/.zsh/completions/_onmsctl` (then add the dir to `$fpath`) |
+
+```sh
+# Oh My Zsh
+mkdir -p ~/.oh-my-zsh/custom/completions
+onmsctl completion zsh > ~/.oh-my-zsh/custom/completions/_onmsctl
+```
+
+Oh My Zsh does not pick up `$ZSH_CUSTOM/completions/` automatically.
+Add this line to `~/.zshrc` (above `source $ZSH/oh-my-zsh.sh`) once:
+
+```sh
+fpath=("$ZSH_CUSTOM/completions" $fpath)
+```
+
+Then either start a new shell or run `compinit` to reload.
+
+**Avoid** the convenient-looking `> "${fpath[1]}/_onmsctl"` — on Oh My
+Zsh `${fpath[1]}` is typically `~/.oh-my-zsh/plugins/git`, which is
+both wrong and confusing.
+
+### Renaming
 
 The generated script targets the literal binary name `onmsctl`. If
 you've repackaged or symlinked the binary under a different name,
