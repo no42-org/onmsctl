@@ -15,7 +15,7 @@
 //!     `GET /eventconf/filter`
 //!
 //! Mutations (add / update / delete / enable / disable) take
-//! `<sourceId>/<eventId>` references; bulk delete / enable / disable group
+//! `<source-id>/<event-id>` references; bulk delete / enable / disable group
 //! refs by source-id so the per-source endpoints can be invoked
 //! efficiently.
 
@@ -85,12 +85,12 @@ pub enum EventCmd {
         file: PathBuf,
     },
 
-    /// Update an event by `<sourceId>/<eventId>` from a YAML/JSON file.
+    /// Update an event by `<source-id>/<event-id>` from a YAML/JSON file.
     /// `--enabled true|false` is **required** so the caller cannot
     /// accidentally flip the event's enabled state by editing the body
     /// alone.
     Update {
-        /// Reference in `<sourceId>/<eventId>` form.
+        /// Reference in `<source-id>/<event-id>` form.
         reference: String,
         /// Path to a YAML or JSON file describing the event body.
         #[arg(short = 'f', long)]
@@ -109,21 +109,21 @@ pub enum EventCmd {
     /// Delete one or more events. Refs grouped by source-id and one
     /// `DELETE /sources/{id}/events` issued per group.
     Delete {
-        /// References in `<sourceId>/<eventId>` form.
+        /// References in `<source-id>/<event-id>` form.
         #[arg(required = true)]
         refs: Vec<String>,
     },
 
     /// Enable one or more events.
     Enable {
-        /// References in `<sourceId>/<eventId>` form.
+        /// References in `<source-id>/<event-id>` form.
         #[arg(required = true)]
         refs: Vec<String>,
     },
 
     /// Disable one or more events.
     Disable {
-        /// References in `<sourceId>/<eventId>` form.
+        /// References in `<source-id>/<event-id>` form.
         #[arg(required = true)]
         refs: Vec<String>,
     },
@@ -227,22 +227,22 @@ impl EventCmd {
     }
 }
 
-/// Parse `<sourceId>/<eventId>` notation into the typed pair. Both halves
+/// Parse `<source-id>/<event-id>` notation into the typed pair. Both halves
 /// must be present, non-empty, and non-negative.
 fn parse_ref(s: &str) -> Result<(i64, i64)> {
     if s.is_empty() {
         return Err(Error::Config(
-            "empty event reference; expected '<sourceId>/<eventId>'".into(),
+            "empty event reference; expected '<source-id>/<event-id>'".into(),
         ));
     }
     let (left, right) = s.split_once('/').ok_or_else(|| {
         Error::Config(format!(
-            "event reference '{s}' must be in '<sourceId>/<eventId>' form"
+            "event reference '{s}' must be in '<source-id>/<event-id>' form"
         ))
     })?;
     if left.is_empty() || right.is_empty() {
         return Err(Error::Config(format!(
-            "event reference '{s}' has empty id segment; expected '<sourceId>/<eventId>'"
+            "event reference '{s}' has empty id segment; expected '<source-id>/<event-id>'"
         )));
     }
     let sid: i64 = left
