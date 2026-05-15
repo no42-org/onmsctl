@@ -7,7 +7,7 @@ version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
 authors = ["Ronny Trommer <ronny@no42.org>"]
-repository = "https://github.com/labmonkeys-space/onmsctl"
+repository = "https://github.com/no42-org/onmsctl"
 rust-version = "1.95"
 
 [workspace.dependencies]

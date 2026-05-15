@@ -19,7 +19,7 @@ concurrency:
 jobs:
   verify:
     # Skip scheduled runs on forks — only the upstream repo's cron should fire.
-    if: github.event_name != 'schedule' || github.repository == 'labmonkeys-space/onmsctl'
+    if: github.event_name != 'schedule' || github.repository == 'no42-org/onmsctl'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -41,7 +41,7 @@ jobs:
     # Open a tracking issue when the scheduled run fails, so a freshly-disclosed
     # RUSTSEC advisory does not silently rot. Only fires for the cron event.
     needs: verify
-    if: failure() && github.event_name == 'schedule' && github.repository == 'labmonkeys-space/onmsctl'
+    if: failure() && github.event_name == 'schedule' && github.repository == 'no42-org/onmsctl'
     runs-on: ubuntu-latest
     permissions:
       issues: write

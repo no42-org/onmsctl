@@ -42,4 +42,4 @@ unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 # When introducing a git dependency, add it here as e.g.:
-#   allow-git = ["https://github.com/labmonkeys-space/<repo>"]
+#   allow-git = ["https://github.com/no42-org/<repo>"]

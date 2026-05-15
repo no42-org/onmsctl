@@ -27,15 +27,15 @@ use crate::error::{Error, Result};
 ///    `config.yaml`. Per the [`directories`] crate's conventions this is:
 ///    - **Linux:** `$XDG_CONFIG_HOME/onmsctl/config.yaml`
 ///      (typically `~/.config/onmsctl/config.yaml`)
-///    - **macOS:** `~/Library/Application Support/org.labmonkeys-space.onmsctl/config.yaml`
-///    - **Windows:** `%APPDATA%\labmonkeys-space\onmsctl\config\config.yaml`
+///    - **macOS:** `~/Library/Application Support/org.no42-org.onmsctl/config.yaml`
+///    - **Windows:** `%APPDATA%\no42-org\onmsctl\config\config.yaml`
 pub fn default_path() -> Result<PathBuf> {
     if let Ok(p) = std::env::var("ONMSCTL_CONFIG")
         && !p.is_empty()
     {
         return Ok(PathBuf::from(p));
     }
-    let dirs = directories::ProjectDirs::from("org", "labmonkeys-space", "onmsctl")
+    let dirs = directories::ProjectDirs::from("org", "no42-org", "onmsctl")
         .ok_or_else(|| Error::Config("unable to resolve config directory".into()))?;
     Ok(dirs.config_dir().join("config.yaml"))
 }

@@ -20,7 +20,7 @@ Requires the toolchain pinned in `rust-toolchain.toml` (currently Rust
 1.95). On a workstation that has `rustup`:
 
 ```sh
-git clone https://github.com/labmonkeys-space/onmsctl
+git clone https://github.com/no42-org/onmsctl
 cd onmsctl
 make build              # debug build at target/debug/onmsctl
 cargo build --release   # optimized build at target/release/onmsctl
@@ -48,8 +48,8 @@ Default config path:
 | OS      | Path |
 |---------|------|
 | Linux   | `$XDG_CONFIG_HOME/onmsctl/config.yaml` (typically `~/.config/onmsctl/config.yaml`) |
-| macOS   | `~/Library/Application Support/org.labmonkeys-space.onmsctl/config.yaml` |
-| Windows | `%APPDATA%\labmonkeys-space\onmsctl\config\config.yaml` |
+| macOS   | `~/Library/Application Support/org.no42-org.onmsctl/config.yaml` |
+| Windows | `%APPDATA%\no42-org\onmsctl\config\config.yaml` |
 
 Override with `--config <path>` or `$ONMSCTL_CONFIG`.
 
