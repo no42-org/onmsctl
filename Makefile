@@ -1,28 +1,36 @@
-.PHONY: build test verify fmt clippy deny licenses install-tools install-cargo-deny install-cargo-about install-cargo-cyclonedx release-build sbom integration schema clean
+.PHONY: help build test verify fmt clippy deny licenses install-tools install-cargo-deny install-cargo-about install-cargo-cyclonedx release-build sbom integration schema clean
 
-build:
+# Self-documenting: annotate each user-facing target with `## description`
+# and it shows up in `make help`. Sorted in declaration order.
+help:  ## Show available make targets
+	@awk 'BEGIN {FS = ":.*?## "} \
+	  /^[a-zA-Z][a-zA-Z0-9_-]*:.*?## / { \
+	    printf "  %-16s %s\n", $$1, $$2 \
+	  }' $(MAKEFILE_LIST)
+
+build:  ## Compile the workspace (all crates, all targets)
 	cargo build --workspace --all-targets
 
-test:
+test:  ## Run the workspace unit and doc tests
 	cargo test --workspace --all-targets
 
-fmt:
+fmt:  ## Check formatting (rustfmt --check; does not modify files)
 	cargo fmt --all -- --check
 
-clippy:
+clippy:  ## Run clippy across the workspace, warnings fail
 	cargo clippy --workspace --all-targets -- -D warnings
 
-deny: install-cargo-deny
+deny: install-cargo-deny  ## Check advisories, bans, licenses, sources (cargo-deny)
 	cargo deny check
 
-verify: fmt clippy build test deny
+verify: fmt clippy build test deny  ## Full quality gate: fmt + clippy + build + test + deny
 
-licenses: install-cargo-about
+licenses: install-cargo-about  ## Regenerate THIRD-PARTY-LICENSES.md from the dep tree
 	# Atomic write: failure leaves the existing file untouched.
 	cargo about generate -c about.toml -o THIRD-PARTY-LICENSES.md.tmp about.hbs && \
 		mv THIRD-PARTY-LICENSES.md.tmp THIRD-PARTY-LICENSES.md
 
-clean:
+clean:  ## Remove the cargo target directory
 	cargo clean
 
 install-tools: install-cargo-deny install-cargo-about
@@ -41,7 +49,7 @@ install-cargo-cyclonedx:
 
 # Build a stripped, optimized binary for $(TARGET). The release workflow
 # adds the target via `rustup target add` before invoking us.
-release-build:
+release-build:  ## Build a stripped release binary for TARGET=<triple>
 	@test -n "$(TARGET)" || (echo "release-build: TARGET=<triple> required" >&2; exit 1)
 	cargo build --release --bin onmsctl --target $(TARGET)
 
@@ -52,7 +60,7 @@ release-build:
 # `onmsctl-core.cdx.json`, `onmsctl-eventconf.cdx.json`. The previous
 # `--override-filename onmsctl` flag forced every crate to write to the
 # same name, causing the follow-up `mv` to clobber two of three SBOMs.
-sbom: install-cargo-cyclonedx
+sbom: install-cargo-cyclonedx  ## Generate per-crate CycloneDX SBOMs under sbom/
 	@mkdir -p sbom
 	cargo cyclonedx --format json
 	@find . -maxdepth 3 -name '*.cdx.json' -not -path './sbom/*' -exec mv {} sbom/ \;
@@ -65,14 +73,14 @@ sbom: install-cargo-cyclonedx
 # --test-threads=1 forces serial execution. Each test does a broad
 # `onmsctl-it-*` cleanup before and after its own work; parallel tests
 # would clobber each other's in-flight resources.
-integration:
+integration:  ## Run live-Horizon integration tests (needs ONMSCTL_TEST_URL/USER/PASSWORD)
 	cargo test -p onmsctl-it -- --include-ignored --nocapture --test-threads=1
 
 # Regenerate schemas/event-source.schema.json from EventSourceLocal.
 # Atomic write so a generator crash doesn't corrupt the file. The
 # `schema_matches_committed` test fails CI if this drifts from the
 # type definitions.
-schema:
+schema:  ## Regenerate schemas/event-source.schema.json from the Rust types
 	@mkdir -p schemas
 	cargo run --quiet --release --example gen_schema -p onmsctl-eventconf \
 		> schemas/event-source.schema.json.tmp \
