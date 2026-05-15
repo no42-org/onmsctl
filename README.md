@@ -203,12 +203,17 @@ Events live under a source. Refs use `<source-id>/<event-id>`:
 onmsctl event list --source 42
 onmsctl event list --uei "uei.opennms.org/vendor/cisco/.*"    # cross-source UEI filter
 onmsctl event list --vendor cisco                             # vendor-scoped
-onmsctl event add --source 42 -f event.yaml
+onmsctl event add --source 42 -f examples/single-event.yaml
 onmsctl event update 42/108 -f event.yaml --enabled true      # --enabled is required
 onmsctl event delete 42/108 42/109
 onmsctl event enable 42/108
 onmsctl event disable 42/108
 ```
+
+`event add` / `event update` expect a **single Event** payload (uei,
+eventLabel, severity, …). `examples/single-event.yaml` is a starter.
+For the declarative full-source workflow see `examples/full.yaml` and
+`onmsctl source apply`.
 
 ### 4. Upload / download (XML round-trip)
 
