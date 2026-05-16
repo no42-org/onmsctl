@@ -387,6 +387,11 @@ pub(crate) fn ensure_positive_id(id: i64, kind: &str) -> Result<()> {
 /// Build a `MultipartPart` per file. Each input is required to be a
 /// regular file (rejects FIFOs, devices, directories, symlinks to those)
 /// and capped at [`MAX_UPLOAD_BYTES_PER_FILE`].
+///
+/// Each file is parsed and pre-flight-validated: duplicate UEIs within a
+/// single file are rejected client-side with a guided message, since
+/// Horizon's upload validator rejects them too but only surfaces an
+/// empty-body 400.
 fn build_upload_parts(paths: &[PathBuf]) -> Result<Vec<MultipartPart>> {
     let mut out = Vec::with_capacity(paths.len());
     for p in paths {
@@ -409,6 +414,7 @@ fn build_upload_parts(paths: &[PathBuf]) -> Result<Vec<MultipartPart>> {
         }
         let body = std::fs::read(p)
             .map_err(|e| Error::Config(format!("failed to read {}: {e}", p.display())))?;
+        validate_upload_xml(p, &body)?;
         let filename = p
             .file_name()
             .and_then(|s| s.to_str())
@@ -422,4 +428,101 @@ fn build_upload_parts(paths: &[PathBuf]) -> Result<Vec<MultipartPart>> {
         out.push(MultipartPart::xml(filename, body));
     }
     Ok(out)
+}
+
+/// Pre-flight validate an eventconf upload payload before it hits the wire.
+/// Catches duplicate UEIs (Horizon rejects with an opaque 400) and
+/// surfaces a malformed-XML problem with the file path attached.
+fn validate_upload_xml(path: &std::path::Path, body: &[u8]) -> Result<()> {
+    let events = crate::xml::parse_events_from_xml(body).map_err(|e| {
+        Error::Config(format!(
+            "{}: failed to parse as eventconf XML: {e}",
+            path.display()
+        ))
+    })?;
+
+    let mut seen: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::with_capacity(events.len());
+    let mut dups: Vec<String> = Vec::new();
+    for e in &events {
+        let Some(uei) = e.uei.as_ref() else { continue };
+        let count = seen.entry(uei.clone()).or_insert(0);
+        *count += 1;
+        if *count == 2 {
+            dups.push(uei.clone());
+        }
+    }
+    if !dups.is_empty() {
+        dups.sort();
+        return Err(Error::Config(format!(
+            "{}: {} duplicate UEI(s) in upload: {}. \
+             Horizon's eventconf upload rejects duplicate UEIs within a single \
+             source with an opaque 400; give each event a distinct UEI.",
+            path.display(),
+            dups.len(),
+            dups.join(", ")
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const XML_DUPLICATE_UEI: &[u8] = br#"<events xmlns="http://xmlns.opennms.org/xsd/eventconf">
+  <event>
+    <uei>uei.opennms.org/example/dup</uei>
+    <event-label>A</event-label>
+    <severity>Warning</severity>
+  </event>
+  <event>
+    <uei>uei.opennms.org/example/dup</uei>
+    <event-label>B</event-label>
+    <severity>Warning</severity>
+  </event>
+</events>"#;
+
+    const XML_CLEAN: &[u8] = br#"<events xmlns="http://xmlns.opennms.org/xsd/eventconf">
+  <event>
+    <uei>uei.opennms.org/example/a</uei>
+    <event-label>A</event-label>
+    <severity>Warning</severity>
+  </event>
+  <event>
+    <uei>uei.opennms.org/example/b</uei>
+    <event-label>B</event-label>
+    <severity>Warning</severity>
+  </event>
+</events>"#;
+
+    #[test]
+    fn validate_upload_xml_rejects_duplicate_uei() {
+        let path = std::path::Path::new("/tmp/example.events.xml");
+        let err = validate_upload_xml(path, XML_DUPLICATE_UEI).unwrap_err();
+        match err {
+            Error::Config(m) => {
+                assert!(m.contains("duplicate UEI"));
+                assert!(m.contains("uei.opennms.org/example/dup"));
+                assert!(m.contains("/tmp/example.events.xml"));
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_upload_xml_accepts_distinct_ueis() {
+        let path = std::path::Path::new("/tmp/example.events.xml");
+        validate_upload_xml(path, XML_CLEAN).expect("clean payload must validate");
+    }
+
+    #[test]
+    fn validate_upload_xml_rejects_malformed_xml() {
+        let path = std::path::Path::new("/tmp/bad.xml");
+        let err = validate_upload_xml(path, b"not xml").unwrap_err();
+        match err {
+            Error::Config(m) => assert!(m.contains("failed to parse as eventconf XML")),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
 }
