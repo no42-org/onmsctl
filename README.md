@@ -329,34 +329,31 @@ retention.
 
 ### Known server-side issues
 
-Two `/eventconf/*` endpoints are broken on current Horizon builds. Both
-are server-side; onmsctl can't work around them.
+Four `/eventconf/*` endpoint bugs are reproducible on both Horizon
+35.0.5 and 36.0.0. All are tracked upstream — onmsctl can't work
+around them.
 
-**1. `GET /eventconf/filter/sources` returns empty list with non-zero
-`totalRecords`.** The filter controller's count query returns the
-right number but its list query never populates. The data exists —
-`/eventconf/sources/names-and-ids` returns it fine. Consequences:
+| # | Endpoint | Symptom | Upstream |
+|---|---|---|---|
+| 1 | `GET /eventconf/filter/sources` | returns empty `eventConfSourceList` despite non-zero `totalRecords` | [NMS-19810](https://opennms.atlassian.net/browse/NMS-19810) |
+| 2 | `GET /eventconf/filter/{id}/events` | HTTP 500 NPE when `offset` is omitted | [NMS-19811](https://opennms.atlassian.net/browse/NMS-19811) |
+| 3 | `/eventconf/filter/*` | paging-parameter requirements differ per endpoint, undocumented | [NMS-19812](https://opennms.atlassian.net/browse/NMS-19812) |
+| 4 | `POST /eventconf/upload` | HTTP 400 with empty body for every payload | [NMS-19813](https://opennms.atlassian.net/browse/NMS-19813) |
+
+**User-visible cascade:**
 
 - `onmsctl source list` prints an empty table even when sources
-  exist. Use `onmsctl source names-and-ids` as a working alternative.
-- `find_source_by_name` always reports `Absent`, which affects the
-  outcome reporting of `source apply` (see below).
+  exist (NMS-19810). Use `onmsctl source names-and-ids` as a working
+  alternative.
+- `find_source_by_name` always reports `Absent` (NMS-19810), so
+  `source apply` always takes the *create* path.
+- `source apply -f <eventsource.yaml>` and
+  `source upload <file.xml>` are both effectively dead because they
+  upload via `/eventconf/upload` (NMS-19813). The duplicate-UEI
+  client-side guardrail in `source upload` still catches malformed
+  payloads, but a well-formed payload also gets a 400.
 
-`/eventconf/filter/{id}/events` and `/eventconf/filter` (cross-source
-events) are not affected by this bug.
-
-**2. `POST /eventconf/upload` returns `400 Bad Request` with an empty
-body for every payload**, including the server's own XML round-tripped
-back under its original source name. This breaks:
-
-- `onmsctl source upload <file.xml>` — the imperative XML upload path.
-- `onmsctl source apply -f <eventsource.yaml>` — apply uses the same
-  upload endpoint to push events to the server, so apply is
-  effectively dead until upload is fixed.
-
-The duplicate-UEI client-side guardrail in `source upload` still
-fires for malformed payloads, but a well-formed payload also gets a
-400. Until upstream is fixed, build event configurations with
+Until upstream is fixed, build event configurations with
 `source create` + `event add` per individual event, or push XML
 directly to the file system the Horizon process reads at startup.
 
