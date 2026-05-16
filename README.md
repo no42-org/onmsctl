@@ -329,25 +329,36 @@ retention.
 
 ### Known server-side issues
 
-`GET /api/v2/eventconf/filter/sources` on current Horizon builds reports
-the correct `totalRecords` count but returns an empty
-`eventConfSourceList` regardless of filter or pagination. The data is
-present (`/eventconf/sources/names-and-ids` returns it fine), but the
-filter controller's list query never populates. Two user-visible
-consequences:
+Two `/eventconf/*` endpoints are broken on current Horizon builds. Both
+are server-side; onmsctl can't work around them.
 
-- **`onmsctl source list` prints an empty table** even when sources
-  exist. Use `onmsctl source names-and-ids` as a working alternative
-  until Horizon is fixed.
-- **`onmsctl source apply` always takes the *create* path** because the
-  underlying `find_source_by_name` lookup always reports `Absent`. The
-  data outcome stays correct (Horizon's upload endpoint upserts on
-  basename collision), but the printed outcome reads `Created` even
-  when the source already exists — i.e. the `Updated` and `Unchanged`
-  outcomes are unreachable until the controller is fixed.
+**1. `GET /eventconf/filter/sources` returns empty list with non-zero
+`totalRecords`.** The filter controller's count query returns the
+right number but its list query never populates. The data exists —
+`/eventconf/sources/names-and-ids` returns it fine. Consequences:
 
-`/eventconf/filter/{id}/events` and `/eventconf/filter` are not
-affected.
+- `onmsctl source list` prints an empty table even when sources
+  exist. Use `onmsctl source names-and-ids` as a working alternative.
+- `find_source_by_name` always reports `Absent`, which affects the
+  outcome reporting of `source apply` (see below).
+
+`/eventconf/filter/{id}/events` and `/eventconf/filter` (cross-source
+events) are not affected by this bug.
+
+**2. `POST /eventconf/upload` returns `400 Bad Request` with an empty
+body for every payload**, including the server's own XML round-tripped
+back under its original source name. This breaks:
+
+- `onmsctl source upload <file.xml>` — the imperative XML upload path.
+- `onmsctl source apply -f <eventsource.yaml>` — apply uses the same
+  upload endpoint to push events to the server, so apply is
+  effectively dead until upload is fixed.
+
+The duplicate-UEI client-side guardrail in `source upload` still
+fires for malformed payloads, but a well-formed payload also gets a
+400. Until upstream is fixed, build event configurations with
+`source create` + `event add` per individual event, or push XML
+directly to the file system the Horizon process reads at startup.
 
 ---
 
