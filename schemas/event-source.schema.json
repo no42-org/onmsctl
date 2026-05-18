@@ -29,7 +29,7 @@
       "type": "object",
       "properties": {
         "alarmType": {
-          "description": "1 = problem, 2 = resolution.",
+          "description": "Alarm semantic. Must be one of:\n  - `1` — Problem: raises an alarm, paired with a Resolution event\n  - `2` — Resolution: clears a paired Problem alarm by `reductionKey`\n  - `3` — Unresolvable: a Problem-class event with no auto-clear from\n    the device. Common for hardware-failure traps. Requires manual\n    close or an alarmd cleanup policy.",
           "type": "integer",
           "format": "int32"
         },
@@ -109,6 +109,24 @@
       "additionalProperties": false,
       "required": [
         "state"
+      ]
+    },
+    "DecodeDef": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "description": "The human-readable label. Maps to `varbinddecodedstring` on the wire.",
+          "type": "string"
+        },
+        "value": {
+          "description": "The raw varbind value being annotated. Maps to `varbindvalue` on\nthe wire (an XSD attribute on `<decode>`).",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "value",
+        "label"
       ]
     },
     "EventDef": {
@@ -200,6 +218,15 @@
         },
         "uei": {
           "type": "string"
+        },
+        "varbindsdecode": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/VarbindsdecodeDef"
+          }
         }
       },
       "additionalProperties": false,
@@ -301,14 +328,22 @@
           }
         },
         "vbnumber": {
-          "type": "integer",
+          "description": "Match the SNMP trap PDU's varbind by 1-indexed position. Mutually\nexclusive with [`vboid`]; the validator enforces exactly one is set.",
+          "type": [
+            "integer",
+            "null"
+          ],
           "format": "int32"
+        },
+        "vboid": {
+          "description": "Match the SNMP trap PDU's varbind by OID (e.g. `.1.3.6.1.4.1.61509.1.2.0`).\nMutually exclusive with [`vbnumber`].",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
-      "additionalProperties": false,
-      "required": [
-        "vbnumber"
-      ]
+      "additionalProperties": false
     },
     "Metadata": {
       "type": "object",
@@ -333,6 +368,27 @@
       "additionalProperties": false,
       "required": [
         "state"
+      ]
+    },
+    "VarbindsdecodeDef": {
+      "type": "object",
+      "properties": {
+        "decode": {
+          "description": "Value→label mappings rendered in the Horizon event UI.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DecodeDef"
+          }
+        },
+        "parmid": {
+          "description": "Identifies which event parameter this decode group annotates.\nString-typed per the eventconf XSD; typical values are numeric.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "parmid",
+        "decode"
       ]
     }
   }

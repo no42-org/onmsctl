@@ -189,6 +189,12 @@ pub struct Event {
     pub mouseovertext: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub alarm_data: Option<AlarmData>,
+    /// Display-time decode tables that map raw varbind values to
+    /// human-readable labels (e.g. `"0"` → `"success(0)"`). One group per
+    /// `parmid`. Local validation forbids duplicate `parmid` values within
+    /// the list — see `apply/local.rs::EventDef::validate`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub varbindsdecode: Option<Vec<Varbindsdecode>>,
     #[serde(skip_serializing_if = "Option::is_none", rename = "snmp")]
     pub snmp: Option<Snmp>,
     /// Parameters extracted from the event payload. Mapped from
@@ -218,12 +224,41 @@ pub struct MaskElement {
     pub mevalues: Vec<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
 pub struct MaskVarbind {
-    pub vbnumber: i32,
+    /// Match the SNMP trap PDU's varbind by 1-indexed position. Mutually
+    /// exclusive with [`vboid`]; the local validator enforces exactly one
+    /// is set. The wire layer accepts either form.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vbnumber: Option<i32>,
+    /// Match the SNMP trap PDU's varbind by OID. Mutually exclusive with
+    /// [`vbnumber`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vboid: Option<String>,
     #[serde(default)]
     pub vbvalues: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct Varbindsdecode {
+    /// Identifies which event parameter this decode group annotates. XSD
+    /// types it as `xs:string`; real-world values are typically numeric.
+    pub parmid: String,
+    #[serde(default)]
+    pub decode: Vec<Decode>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct Decode {
+    /// The raw varbind value to match. Wire-format name matches the XSD
+    /// attribute (`varbindvalue`).
+    pub varbindvalue: String,
+    /// The human-readable label shown in the Horizon event UI. Wire-format
+    /// name matches the XSD attribute (`varbinddecodedstring`).
+    pub varbinddecodedstring: String,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -264,6 +299,11 @@ pub struct Tticket {
 #[serde(rename_all = "kebab-case", default)]
 pub struct AlarmData {
     pub reduction_key: Option<String>,
+    /// Alarm semantic. Valid values:
+    ///   - `1` Problem (raises alarm, paired with Resolution)
+    ///   - `2` Resolution (clears a paired Problem by reductionKey)
+    ///   - `3` Unresolvable (no auto-clear from device; needs manual close
+    ///     or alarmd policy)
     pub alarm_type: Option<i32>,
     pub clear_key: Option<String>,
     pub auto_clean: Option<bool>,

@@ -26,8 +26,8 @@ use quick_xml::se::to_string as xml_to_string;
 use serde::{Deserialize, Serialize};
 
 use crate::dto::{
-    AlarmData, Autoacknowledge, Correlation, Event, Logmsg, Mask, MaskElement, MaskVarbind, Snmp,
-    Tticket,
+    AlarmData, Autoacknowledge, Correlation, Decode, Event, Logmsg, Mask, MaskElement, MaskVarbind,
+    Snmp, Tticket, Varbindsdecode,
 };
 
 /// Render a slice of [`Event`]s as an eventconf XML `<events>` document.
@@ -131,6 +131,11 @@ struct XmlEvent {
     autoacknowledge: Option<XmlAutoack>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tticket: Option<XmlTticket>,
+    /// Display-time decode tables for varbind values. Zero or more groups
+    /// per event, each scoped to one `parmid`. Placed before
+    /// `mouseovertext`/`alarm-data` to match the eventconf XSD sequence.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    varbindsdecode: Vec<XmlVarbindsdecode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     mouseovertext: Option<String>,
     #[serde(rename = "alarm-data", skip_serializing_if = "Option::is_none")]
@@ -156,9 +161,27 @@ struct XmlMaskElement {
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct XmlMaskVarbind {
-    vbnumber: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    vbnumber: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    vboid: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     vbvalue: Vec<String>,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct XmlVarbindsdecode {
+    parmid: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    decode: Vec<XmlDecode>,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct XmlDecode {
+    #[serde(rename = "@varbindvalue")]
+    varbindvalue: String,
+    #[serde(rename = "@varbinddecodedstring")]
+    varbinddecodedstring: String,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -246,6 +269,11 @@ impl From<&Event> for XmlEvent {
             operinstruct: e.operinstruct.clone(),
             autoacknowledge: e.autoacknowledge.as_ref().map(XmlAutoack::from),
             tticket: e.tticket.as_ref().map(XmlTticket::from),
+            varbindsdecode: e
+                .varbindsdecode
+                .as_ref()
+                .map(|v| v.iter().map(XmlVarbindsdecode::from).collect())
+                .unwrap_or_default(),
             mouseovertext: e.mouseovertext.clone(),
             alarm_data: e.alarm_data.as_ref().map(XmlAlarmData::from),
             snmp: e.snmp.as_ref().map(XmlSnmp::from),
@@ -268,6 +296,16 @@ impl From<XmlEvent> for Event {
             tticket: x.tticket.map(Tticket::from),
             mouseovertext: x.mouseovertext,
             alarm_data: x.alarm_data.map(AlarmData::from),
+            varbindsdecode: if x.varbindsdecode.is_empty() {
+                None
+            } else {
+                Some(
+                    x.varbindsdecode
+                        .into_iter()
+                        .map(Varbindsdecode::from)
+                        .collect(),
+                )
+            },
             snmp: x.snmp.map(Snmp::from),
             parm_collection: None,
         }
@@ -330,6 +368,7 @@ impl From<&MaskVarbind> for XmlMaskVarbind {
     fn from(m: &MaskVarbind) -> Self {
         Self {
             vbnumber: m.vbnumber,
+            vboid: m.vboid.clone(),
             vbvalue: m.vbvalues.clone(),
         }
     }
@@ -339,7 +378,44 @@ impl From<XmlMaskVarbind> for MaskVarbind {
     fn from(x: XmlMaskVarbind) -> Self {
         Self {
             vbnumber: x.vbnumber,
+            vboid: x.vboid,
             vbvalues: x.vbvalue,
+        }
+    }
+}
+
+impl From<&Varbindsdecode> for XmlVarbindsdecode {
+    fn from(v: &Varbindsdecode) -> Self {
+        Self {
+            parmid: v.parmid.clone(),
+            decode: v.decode.iter().map(XmlDecode::from).collect(),
+        }
+    }
+}
+
+impl From<XmlVarbindsdecode> for Varbindsdecode {
+    fn from(x: XmlVarbindsdecode) -> Self {
+        Self {
+            parmid: x.parmid,
+            decode: x.decode.into_iter().map(Decode::from).collect(),
+        }
+    }
+}
+
+impl From<&Decode> for XmlDecode {
+    fn from(d: &Decode) -> Self {
+        Self {
+            varbindvalue: d.varbindvalue.clone(),
+            varbinddecodedstring: d.varbinddecodedstring.clone(),
+        }
+    }
+}
+
+impl From<XmlDecode> for Decode {
+    fn from(x: XmlDecode) -> Self {
+        Self {
+            varbindvalue: x.varbindvalue,
+            varbinddecodedstring: x.varbinddecodedstring,
         }
     }
 }
@@ -555,17 +631,16 @@ mod tests {
 
     #[test]
     fn parse_tolerates_unmodeled_elements_by_skipping_them() {
-        // `<varbindsdecode>` and `<forward>` are real eventconf elements
-        // we don't model. Parsing should succeed and produce the modeled
-        // subset.
+        // `<forward>`, `<script>`, `<parameter>` are real eventconf elements
+        // we don't model yet. Parsing should succeed and produce the
+        // modeled subset, silently skipping the unknown ones.
         let xml = r#"<events>
             <event>
                 <uei>uei.opennms.org/test</uei>
                 <severity>Warning</severity>
-                <varbindsdecode>
-                    <varbind vbnumber="1"/>
-                </varbindsdecode>
                 <forward state="off"/>
+                <script language="beanshell">do_thing();</script>
+                <parameter name="foo" value="bar"/>
             </event>
         </events>"#;
         let parsed = parse_events_from_xml(xml.as_bytes()).unwrap();
@@ -642,6 +717,166 @@ mod tests {
         let third = xml.find("uei.third").unwrap();
         assert!(first < second);
         assert!(second < third);
+    }
+
+    #[test]
+    fn vboid_varbind_round_trips() {
+        let event = Event {
+            uei: Some("uei.test".into()),
+            severity: Some("Normal".into()),
+            mask: Some(Mask {
+                maskelements: None,
+                varbinds: Some(vec![MaskVarbind {
+                    vbnumber: None,
+                    vboid: Some(".1.3.6.1.4.1.61509.1.2.0".into()),
+                    vbvalues: vec!["0".into()],
+                }]),
+            }),
+            ..Event::default()
+        };
+        let xml = render_eventconf_xml(std::slice::from_ref(&event)).unwrap();
+        assert!(xml.contains("<vboid>.1.3.6.1.4.1.61509.1.2.0</vboid>"));
+        assert!(!xml.contains("<vbnumber>"));
+        let parsed = parse_events_from_xml(xml.as_bytes()).unwrap();
+        assert_eq!(parsed[0], event);
+    }
+
+    #[test]
+    fn vbnumber_varbind_renders_unchanged_after_schema_change() {
+        let event = Event {
+            uei: Some("uei.test".into()),
+            severity: Some("Normal".into()),
+            mask: Some(Mask {
+                maskelements: None,
+                varbinds: Some(vec![MaskVarbind {
+                    vbnumber: Some(1),
+                    vboid: None,
+                    vbvalues: vec!["0".into()],
+                }]),
+            }),
+            ..Event::default()
+        };
+        let xml = render_eventconf_xml(std::slice::from_ref(&event)).unwrap();
+        assert!(xml.contains("<vbnumber>1</vbnumber>"));
+        assert!(!xml.contains("<vboid>"));
+        let parsed = parse_events_from_xml(xml.as_bytes()).unwrap();
+        assert_eq!(parsed[0], event);
+    }
+
+    #[test]
+    fn varbindsdecode_round_trips_with_canonical_equivalence() {
+        use crate::dto::{Decode, Varbindsdecode};
+        let event = Event {
+            uei: Some("uei.test".into()),
+            severity: Some("Normal".into()),
+            varbindsdecode: Some(vec![Varbindsdecode {
+                parmid: "1".into(),
+                decode: vec![
+                    Decode {
+                        varbindvalue: "0".into(),
+                        varbinddecodedstring: "success(0)".into(),
+                    },
+                    Decode {
+                        varbindvalue: "1".into(),
+                        varbinddecodedstring: "failed(1)".into(),
+                    },
+                ],
+            }]),
+            ..Event::default()
+        };
+        let xml = render_eventconf_xml(std::slice::from_ref(&event)).unwrap();
+        assert!(xml.contains("<varbindsdecode>"));
+        assert!(xml.contains("<parmid>1</parmid>"));
+        assert!(xml.contains("varbindvalue=\"0\""));
+        assert!(xml.contains("varbinddecodedstring=\"success(0)\""));
+
+        // Round-trip: canonical equivalence (not byte-equal raw bytes —
+        // attribute order and whitespace may shift).
+        let parsed = parse_events_from_xml(xml.as_bytes()).unwrap();
+        assert_eq!(parsed[0], event);
+
+        let xml2 = render_eventconf_xml(std::slice::from_ref(&parsed[0])).unwrap();
+        let c1 = xml_canonical(xml.as_bytes()).unwrap();
+        let c2 = xml_canonical(xml2.as_bytes()).unwrap();
+        assert_eq!(c1, c2, "round-trip must be canonically equivalent");
+    }
+
+    #[test]
+    fn event_with_vboid_mask_and_varbindsdecode_round_trips() {
+        // Task 6.10: fixture exercising BOTH new shapes simultaneously.
+        // parse → render → parse must produce canonically equivalent XML.
+        use crate::dto::{Decode, Varbindsdecode};
+        let event = Event {
+            uei: Some("uei.no42.org/snmp/trap/backup/success".into()),
+            event_label: Some("No42: Backup Successful".into()),
+            descr: Some("Backup operation completed successfully.".into()),
+            severity: Some("Normal".into()),
+            mask: Some(Mask {
+                maskelements: Some(vec![MaskElement {
+                    mename: "id".into(),
+                    mevalues: vec![".1.3.6.1.4.1.61509.1".into()],
+                }]),
+                varbinds: Some(vec![MaskVarbind {
+                    vbnumber: None,
+                    vboid: Some(".1.3.6.1.4.1.61509.1.2.0".into()),
+                    vbvalues: vec!["0".into()],
+                }]),
+            }),
+            varbindsdecode: Some(vec![Varbindsdecode {
+                parmid: "1".into(),
+                decode: vec![
+                    Decode {
+                        varbindvalue: "0".into(),
+                        varbinddecodedstring: "success(0)".into(),
+                    },
+                    Decode {
+                        varbindvalue: "1".into(),
+                        varbinddecodedstring: "failed(1)".into(),
+                    },
+                ],
+            }]),
+            ..Event::default()
+        };
+        let xml1 = render_eventconf_xml(std::slice::from_ref(&event)).unwrap();
+        let parsed = parse_events_from_xml(xml1.as_bytes()).unwrap();
+        assert_eq!(parsed[0], event);
+        let xml2 = render_eventconf_xml(std::slice::from_ref(&parsed[0])).unwrap();
+        assert_eq!(
+            xml_canonical(xml1.as_bytes()).unwrap(),
+            xml_canonical(xml2.as_bytes()).unwrap()
+        );
+    }
+
+    #[test]
+    fn varbindsdecode_multiple_groups_preserved_through_xml_round_trip() {
+        use crate::dto::{Decode, Varbindsdecode};
+        let event = Event {
+            uei: Some("uei.test".into()),
+            severity: Some("Normal".into()),
+            varbindsdecode: Some(vec![
+                Varbindsdecode {
+                    parmid: "1".into(),
+                    decode: vec![Decode {
+                        varbindvalue: "a".into(),
+                        varbinddecodedstring: "Alpha".into(),
+                    }],
+                },
+                Varbindsdecode {
+                    parmid: "2".into(),
+                    decode: vec![Decode {
+                        varbindvalue: "b".into(),
+                        varbinddecodedstring: "Bravo".into(),
+                    }],
+                },
+            ]),
+            ..Event::default()
+        };
+        let xml = render_eventconf_xml(std::slice::from_ref(&event)).unwrap();
+        let parsed = parse_events_from_xml(xml.as_bytes()).unwrap();
+        let groups = parsed[0].varbindsdecode.as_ref().unwrap();
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].parmid, "1");
+        assert_eq!(groups[1].parmid, "2");
     }
 
     #[test]

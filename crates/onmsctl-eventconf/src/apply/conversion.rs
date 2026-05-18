@@ -12,10 +12,12 @@
 //! one place that translation lives.
 
 use crate::apply::local::{
-    AlarmDataDef, AutoackDef, CorrelationDef, EventDef, LogmsgDef, MaskDef, TticketDef,
+    AlarmDataDef, AutoackDef, CorrelationDef, DecodeDef, EventDef, LogmsgDef, MaskDef, TticketDef,
+    VarbindsdecodeDef,
 };
 use crate::dto::{
-    AlarmData, Autoacknowledge, Correlation, Event, Logmsg, Mask, MaskElement, MaskVarbind, Tticket,
+    AlarmData, Autoacknowledge, Correlation, Decode, Event, Logmsg, Mask, MaskElement, MaskVarbind,
+    Tticket, Varbindsdecode,
 };
 
 impl From<&EventDef> for Event {
@@ -33,8 +35,30 @@ impl From<&EventDef> for Event {
             tticket: e.tticket.as_ref().map(Tticket::from),
             mouseovertext: e.mouseovertext.clone(),
             alarm_data: e.alarm_data.as_ref().map(AlarmData::from),
+            varbindsdecode: e
+                .varbindsdecode
+                .as_ref()
+                .map(|groups| groups.iter().map(Varbindsdecode::from).collect()),
             snmp: None,
             parm_collection: None,
+        }
+    }
+}
+
+impl From<&VarbindsdecodeDef> for Varbindsdecode {
+    fn from(g: &VarbindsdecodeDef) -> Self {
+        Varbindsdecode {
+            parmid: g.parmid.clone(),
+            decode: g.decode.iter().map(Decode::from).collect(),
+        }
+    }
+}
+
+impl From<&DecodeDef> for Decode {
+    fn from(d: &DecodeDef) -> Self {
+        Decode {
+            varbindvalue: d.value.clone(),
+            varbinddecodedstring: d.label.clone(),
         }
     }
 }
@@ -84,6 +108,7 @@ impl From<&MaskDef> for Mask {
                         .iter()
                         .map(|v| MaskVarbind {
                             vbnumber: v.vbnumber,
+                            vboid: v.vboid.clone(),
                             vbvalues: v.values.clone(),
                         })
                         .collect(),
@@ -159,7 +184,8 @@ mod tests {
                     values: vec!["1.2.3".into()],
                 }],
                 varbinds: vec![MaskVarbindDef {
-                    vbnumber: 1,
+                    vbnumber: Some(1),
+                    vboid: None,
                     values: vec!["3".into()],
                 }],
             }),
@@ -195,7 +221,8 @@ mod tests {
         assert_eq!(me.mename, "id");
         assert_eq!(me.mevalues, vec!["1.2.3"]);
         let vb = &mask.varbinds.as_ref().unwrap()[0];
-        assert_eq!(vb.vbnumber, 1);
+        assert_eq!(vb.vbnumber, Some(1));
+        assert!(vb.vboid.is_none());
         assert_eq!(vb.vbvalues, vec!["3"]);
     }
 
