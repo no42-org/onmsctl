@@ -18,7 +18,6 @@
 //! See the `source-convert-with-migration-report` OpenSpec change for the
 //! design rationale and the spec scenarios that drive this code.
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -98,8 +97,6 @@ pub struct ConversionMetrics {
 /// `EC` (event-conf) and never renumbered or repurposed across releases.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum FindingCode {
-    /// EC001 — duplicate UEI declared within the same source.
-    Ec001,
     /// EC002 — source has zero events after parse.
     Ec002,
     /// EC003 — derived metadata.name is reserved by OpenNMS.
@@ -127,7 +124,6 @@ pub enum FindingCode {
 impl FindingCode {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Ec001 => "EC001",
             Self::Ec002 => "EC002",
             Self::Ec003 => "EC003",
             Self::Ec004 => "EC004",
@@ -140,7 +136,6 @@ impl FindingCode {
 
     pub fn parse(s: &str) -> Option<Self> {
         match s.to_ascii_uppercase().as_str() {
-            "EC001" => Some(Self::Ec001),
             "EC002" => Some(Self::Ec002),
             "EC003" => Some(Self::Ec003),
             "EC004" => Some(Self::Ec004),
@@ -154,11 +149,11 @@ impl FindingCode {
 
     /// All defined codes. Used by `--explain` for "unknown code" error
     /// listings and by the compile-time explanation-completeness test.
-    /// EC006 was descoped in 2026-05-18 review — its number stays
-    /// fallow to preserve the stability promise.
+    /// EC001 and EC006 are reserved — both were defined-then-removed.
+    /// Their numbers are not reused for future finding codes. Future
+    /// codes append (EC010, EC011, ...) rather than recycling slots.
     pub fn all() -> &'static [Self] {
         &[
-            Self::Ec001,
             Self::Ec002,
             Self::Ec003,
             Self::Ec004,
@@ -201,10 +196,6 @@ pub struct Finding {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum FindingDetails {
-    DuplicateUei {
-        uei: String,
-        occurrences: Vec<SourceLocation>,
-    },
     ZeroEvents,
     ParseFailure {
         error: String,
@@ -241,24 +232,11 @@ pub enum FindingDetails {
 }
 
 /// Options passed to [`convert`].
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct ConvertOpts {
     /// Override the metadata.name derived from the input filename. Required
     /// when the input has no filename (stdin).
     pub name_override: Option<String>,
-    /// When set, EC001 findings become warnings instead of errors and the
-    /// YAML is written despite duplicate UEIs. The resulting YAML will not
-    /// pass `onmsctl source apply` without manual edits.
-    pub keep_duplicates: bool,
-}
-
-impl Default for ConvertOpts {
-    fn default() -> Self {
-        Self {
-            name_override: None,
-            keep_duplicates: false,
-        }
-    }
 }
 
 /// Default cap on bytes read per input. Mirrors the upload pipeline's
@@ -416,7 +394,6 @@ pub fn convert(xml: &[u8], source_path: &Path, opts: &ConvertOpts) -> Conversion
 
     // Step 5: per-event conversion with normalization detection
     let mut event_defs: Vec<EventDef> = Vec::new();
-    let mut event_locations: Vec<SourceLocation> = Vec::new();
 
     for (wire_event, location) in &parsed {
         let mut local_wire = wire_event.clone();
@@ -477,7 +454,6 @@ pub fn convert(xml: &[u8], source_path: &Path, opts: &ConvertOpts) -> Conversion
         match EventDef::try_from(&local_wire) {
             Ok(def) => {
                 event_defs.push(def);
-                event_locations.push(location.clone());
                 metrics.events_converted += 1;
             }
             Err(err) => {
@@ -500,17 +476,15 @@ pub fn convert(xml: &[u8], source_path: &Path, opts: &ConvertOpts) -> Conversion
         }
     }
 
-    // Step 6: cross-event validation
-    //   6a — hand-rolled duplicate-UEI check (location-rich)
-    let dup_findings = find_duplicate_uei_findings(&event_defs, &event_locations);
-    findings.extend(dup_findings);
-
-    //   6b — EC009 post-validate safety net (D3 hybrid). We invoke the
-    //   authoritative validator on the assembled local document; any
-    //   rejection here represents a schema rule the converter did not
-    //   already surface via EC001-EC008. Skipped when the document is
-    //   already known not to make sense (e.g. no events at all — but
-    //   that case returned early above).
+    // Step 6: cross-event validation — EC009 post-validate safety net
+    //   (D3 hybrid). We invoke the authoritative validator on the
+    //   assembled local document; any rejection here represents a schema
+    //   rule the converter did not already surface via EC002-EC008.
+    //   Skipped when the document is already known not to make sense
+    //   (e.g. no events at all — but that case returned early above).
+    //
+    //   Duplicate-UEI checking was removed in the
+    //   `permit-duplicate-ueis-as-normalization-pattern` change.
     let local_for_validate = EventSourceLocal {
         api_version: "eventconf.opennms.org/v1".into(),
         kind: "EventSource".into(),
@@ -526,10 +500,7 @@ pub fn convert(xml: &[u8], source_path: &Path, opts: &ConvertOpts) -> Conversion
         let already_covered = findings.iter().any(|f| {
             matches!(
                 f.code,
-                FindingCode::Ec001
-                    | FindingCode::Ec003
-                    | FindingCode::Ec004
-                    | FindingCode::Ec008
+                FindingCode::Ec003 | FindingCode::Ec004 | FindingCode::Ec008
             )
         });
         if !already_covered {
@@ -555,10 +526,7 @@ pub fn convert(xml: &[u8], source_path: &Path, opts: &ConvertOpts) -> Conversion
     }
 
     // Step 7: decide whether to emit YAML
-    let has_blocking = findings.iter().any(|f| {
-        f.severity == Severity::Error
-            && !(opts.keep_duplicates && f.code == FindingCode::Ec001)
-    });
+    let has_blocking = findings.iter().any(|f| f.severity == Severity::Error);
 
     let yaml = if has_blocking {
         None
@@ -596,15 +564,6 @@ pub fn convert(xml: &[u8], source_path: &Path, opts: &ConvertOpts) -> Conversion
     } else {
         0.0
     };
-
-    // Demote EC001 errors to warnings if --keep-duplicates is set.
-    if opts.keep_duplicates {
-        for finding in &mut findings {
-            if finding.code == FindingCode::Ec001 {
-                finding.severity = Severity::Warning;
-            }
-        }
-    }
 
     ConversionResult {
         input,
@@ -707,42 +666,6 @@ fn field_name_for(err: WireToLocalError) -> &'static str {
     }
 }
 
-fn find_duplicate_uei_findings(
-    events: &[EventDef],
-    locations: &[SourceLocation],
-) -> Vec<Finding> {
-    let mut by_uei: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
-    for (idx, ev) in events.iter().enumerate() {
-        by_uei.entry(ev.uei.as_str()).or_default().push(idx);
-    }
-    by_uei
-        .into_iter()
-        .filter(|(_, idxs)| idxs.len() > 1)
-        .map(|(uei, idxs)| {
-            let occurrences: Vec<SourceLocation> =
-                idxs.iter().map(|&i| locations[i].clone()).collect();
-            Finding {
-                code: FindingCode::Ec001,
-                severity: Severity::Error,
-                message: format!(
-                    "duplicate UEI within source: '{uei}' declared {} times",
-                    idxs.len()
-                ),
-                details: FindingDetails::DuplicateUei {
-                    uei: uei.to_string(),
-                    occurrences,
-                },
-                suggested_fix: "Recommended: rename the duplicated UEIs to encode their origin \
-                    (e.g. uei.opennms.org/vendor/cisco/fasthub/rpsFailed and \
-                    /ethernet/rpsFailed). Alternative: split into separate source files. \
-                    Escape hatch: --keep-duplicates writes the YAML anyway (apply will reject \
-                    it). Run with --explain EC001 for the full rationale."
-                    .into(),
-            }
-        })
-        .collect()
-}
-
 // -- explain() table -------------------------------------------------------
 
 /// Long-form explanation for a finding code. Returned by
@@ -750,7 +673,6 @@ fn find_duplicate_uei_findings(
 /// releases — wording may shift but the section structure does not.
 pub fn explain(code: FindingCode) -> &'static str {
     match code {
-        FindingCode::Ec001 => include_str!("explain/EC001.txt"),
         FindingCode::Ec002 => include_str!("explain/EC002.txt"),
         FindingCode::Ec003 => include_str!("explain/EC003.txt"),
         FindingCode::Ec004 => include_str!("explain/EC004.txt"),
@@ -766,17 +688,6 @@ pub fn explain(code: FindingCode) -> &'static str {
 /// Render a [`ConversionResult`] as a human-readable text report. Output
 /// is suitable for stderr; multi-section, one block per finding.
 pub fn render_report_text(result: &ConversionResult) -> String {
-    render_report_text_with(result, false)
-}
-
-/// Render a [`ConversionResult`] with the `--keep-duplicates` banner
-/// surfaced when `keep_duplicates_active` is true. The banner warns
-/// operators that the produced YAML will NOT pass `onmsctl source
-/// apply` until the EC001 duplicates are resolved.
-pub fn render_report_text_with(
-    result: &ConversionResult,
-    keep_duplicates_active: bool,
-) -> String {
     let mut out = String::new();
     let input_label = match &result.input {
         Some(p) => p.display().to_string(),
@@ -793,20 +704,6 @@ pub fn render_report_text_with(
     }
     out.push_str(&line);
     out.push('\n');
-
-    if keep_duplicates_active
-        && result
-            .findings
-            .iter()
-            .any(|f| f.code == FindingCode::Ec001)
-    {
-        out.push('\n');
-        out.push_str(
-            "  ⚠  --keep-duplicates is set: EC001 demoted to warning and YAML\n     was \
-             written despite duplicate UEIs. The resulting document will NOT\n     pass \
-             `onmsctl source apply` without further manual edits.\n",
-        );
-    }
 
     if result.findings.is_empty() {
         out.push_str("  ✓ no findings\n");
@@ -865,13 +762,6 @@ fn fmt_location(loc: &SourceLocation) -> String {
 
 fn render_finding_details(out: &mut String, d: &FindingDetails) {
     match d {
-        FindingDetails::DuplicateUei { uei, occurrences } => {
-            out.push_str(&format!("    UEI: {uei}\n"));
-            out.push_str(&format!("    Occurrences ({}):\n", occurrences.len()));
-            for loc in occurrences {
-                out.push_str(&format!("      {}\n", fmt_location(loc)));
-            }
-        }
         FindingDetails::ZeroEvents => {
             out.push_str("    (no <event> children under the <events> root)\n");
         }
@@ -964,55 +854,32 @@ mod tests {
     }
 
     #[test]
-    fn undotted_name_produces_ec009_via_post_validate() {
-        // The converter's own validate_name allows undotted names like
-        // "test", but EventSourceLocal::validate requires at least one
-        // dot for the vendor prefix. EC009 catches this drift.
+    fn undotted_name_converts_cleanly() {
+        // Undotted metadata.name (e.g. just "Cisco") is now accepted —
+        // the vendor derivation tolerates undotted names (matching
+        // Horizon's server-side `StringUtils.substringBefore`, which
+        // returns the whole name when no '.' is present).
         let result = convert(MINIMAL_XML, Path::new("/tmp/test.xml"), &ConvertOpts::default());
-        assert!(result.yaml.is_none());
-        let f = result
-            .findings
-            .iter()
-            .find(|f| f.code == FindingCode::Ec009)
-            .expect("EC009 emitted by post-validate");
-        assert_eq!(f.severity, Severity::Error);
+        assert!(result.yaml.is_some(), "undotted name must convert cleanly");
+        assert!(result.findings.is_empty(), "no findings for undotted name");
+        assert_eq!(result.exit_code(), 0);
     }
 
     #[test]
-    fn duplicate_uei_produces_ec001_and_no_yaml() {
+    fn duplicate_uei_across_events_converts_cleanly() {
+        // Shared UEIs across events are a first-class OpenNMS normalization
+        // pattern. The converter passes them through without emitting any
+        // finding. See archived `permit-duplicate-ueis-as-normalization-pattern`.
         let opts = ConvertOpts::default();
         let result = convert(DUPLICATE_UEI_XML, Path::new("/tmp/foo.test.xml"), &opts);
-        assert!(result.yaml.is_none(), "blocking finding → no YAML");
-        assert_eq!(result.exit_code(), 2);
-        assert_eq!(result.findings.len(), 1);
-        let f = &result.findings[0];
-        assert_eq!(f.code, FindingCode::Ec001);
-        assert_eq!(f.severity, Severity::Error);
-        match &f.details {
-            FindingDetails::DuplicateUei { uei, occurrences } => {
-                assert_eq!(uei, "uei.test/dup");
-                assert_eq!(occurrences.len(), 2);
-                assert_eq!(occurrences[0].event_index, 0);
-                assert_eq!(occurrences[1].event_index, 1);
-                assert!(occurrences[0].line > 0);
-                assert!(occurrences[1].line > 0);
-            }
-            other => panic!("unexpected details {other:?}"),
-        }
-    }
-
-    #[test]
-    fn duplicate_uei_with_keep_duplicates_writes_yaml_with_warning() {
-        let opts = ConvertOpts {
-            keep_duplicates: true,
-            ..ConvertOpts::default()
-        };
-        let result = convert(DUPLICATE_UEI_XML, Path::new("/tmp/foo.test.xml"), &opts);
-        assert!(result.yaml.is_some());
-        assert_eq!(result.exit_code(), 1);
-        assert_eq!(result.findings.len(), 1);
-        assert_eq!(result.findings[0].code, FindingCode::Ec001);
-        assert_eq!(result.findings[0].severity, Severity::Warning);
+        assert!(result.yaml.is_some(), "YAML must be emitted; duplicates are first-class");
+        assert!(result.findings.is_empty(), "no finding for shared UEIs");
+        assert_eq!(result.exit_code(), 0);
+        let yaml = result.yaml.unwrap();
+        // Both events are present in the output.
+        assert!(yaml.contains("uei.test/dup"));
+        // The UEI appears twice (once per event).
+        assert_eq!(yaml.matches("uei.test/dup").count(), 2);
     }
 
     #[test]
@@ -1235,15 +1102,12 @@ mod tests {
         assert_eq!(r_clean.exit_code(), 0);
         assert!(r_clean.yaml.is_some());
 
+        // Duplicate UEIs are first-class (normalization pattern) — the
+        // converter passes them through cleanly.
         let r_dup = convert(DUP_UEI, Path::new("/tmp/b.foo.events.xml"), &ConvertOpts::default());
-        assert_eq!(r_dup.exit_code(), 2);
-        assert!(r_dup.yaml.is_none());
-        assert!(
-            r_dup
-                .findings
-                .iter()
-                .any(|f| f.code == FindingCode::Ec001)
-        );
+        assert_eq!(r_dup.exit_code(), 0);
+        assert!(r_dup.yaml.is_some());
+        assert!(r_dup.findings.is_empty());
 
         let r_missing = convert(
             MISSING_UEI,
@@ -1259,7 +1123,8 @@ mod tests {
                 .any(|f| f.code == FindingCode::Ec004)
         );
 
-        // Batch dispatcher behavior: max(0, 2, 2) = 2
+        // Batch dispatcher behavior: max(0, 0, 2) = 2  (clean + dup-UEI now
+        // both exit 0; the missing-UEI blocker drives the worst-case to 2).
         let worst = [r_clean.exit_code(), r_dup.exit_code(), r_missing.exit_code()]
             .iter()
             .max()
@@ -1303,13 +1168,29 @@ mod tests {
     }
 
     #[test]
+    fn finding_code_ec001_remains_fallow_and_unparseable() {
+        // EC001 was removed by the
+        // permit-duplicate-ueis-as-normalization-pattern change (duplicate
+        // UEIs are first-class, not a finding). Its number stays fallow —
+        // parsing it should return None, and it should not appear in all().
+        assert!(FindingCode::parse("EC001").is_none());
+        assert!(!FindingCode::all().iter().any(|c| c.as_str() == "EC001"));
+    }
+
+    #[test]
     fn render_report_text_includes_finding_section_per_finding() {
-        let result = convert(DUPLICATE_UEI_XML, Path::new("/tmp/foo.bar.xml"), &ConvertOpts::default());
+        // Use a missing-UEI fixture (produces EC004) since duplicate UEIs
+        // no longer produce findings after the
+        // permit-duplicate-ueis-as-normalization-pattern change.
+        let xml = br#"<events>
+  <event>
+    <event-label>Missing UEI</event-label>
+    <severity>Warning</severity>
+  </event>
+</events>"#;
+        let result = convert(xml, Path::new("/tmp/foo.bar.xml"), &ConvertOpts::default());
         let report = render_report_text(&result);
-        assert!(report.contains("EC001"));
-        assert!(report.contains("uei.test/dup"));
-        assert!(report.contains("event[0]"));
-        assert!(report.contains("event[1]"));
+        assert!(report.contains("EC004"));
         assert!(report.contains("Exit: 2"));
     }
 }

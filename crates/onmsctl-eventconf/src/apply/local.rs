@@ -341,19 +341,11 @@ impl EventSourceLocal {
         for (i, e) in self.spec.events.iter().enumerate() {
             e.validate(i)?;
         }
-        // Reject duplicate UEIs at parse time so the user gets a clear
-        // error rather than an opaque duplicate-cluster diff at apply
-        // time. Even though the diff algorithm tolerates clusters,
-        // creating one in YAML is almost always a mistake.
-        let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
-        for (i, e) in self.spec.events.iter().enumerate() {
-            if !seen.insert(&e.uei) {
-                return Err(Error::Config(format!(
-                    "spec.events[{i}].uei '{}' is a duplicate; declare each UEI at most once per source",
-                    e.uei
-                )));
-            }
-        }
+        // Duplicate UEIs across events are explicitly permitted —
+        // they are a first-class OpenNMS normalization pattern (the
+        // mask conditions are the runtime discriminators; the shared
+        // UEI is the operator-visible event class). See the archived
+        // `permit-duplicate-ueis-as-normalization-pattern` change.
         Ok(())
     }
 }
@@ -397,15 +389,18 @@ fn validate_name(name: &str) -> Result<()> {
             "metadata.name '{name}' is reserved by OpenNMS"
         )));
     }
-    if !name.contains('.') {
-        return Err(Error::Config(format!(
-            "metadata.name '{name}' must contain at least one '.' (the prefix becomes the server-derived vendor)"
-        )));
-    }
-    let vendor = name.split('.').next().unwrap_or("");
+    // Vendor derivation matches Horizon's server-side
+    // `StringUtils.substringBefore(name, ".")`: when no '.' is present,
+    // the whole name becomes the vendor. So `Cisco` → vendor `Cisco`;
+    // `cisco.foo` → vendor `cisco`. Empty-vendor still rejected (e.g.
+    // `.foo` would be caught by the earlier starts_with('.') check).
+    let vendor = match name.split_once('.') {
+        Some((prefix, _)) => prefix,
+        None => name,
+    };
     if vendor.is_empty() {
         return Err(Error::Config(format!(
-            "metadata.name '{name}' has empty vendor segment (prefix before first '.')"
+            "metadata.name '{name}' has empty vendor segment"
         )));
     }
     if vendor.len() > 128 {
@@ -643,13 +638,13 @@ spec:
     }
 
     #[test]
-    fn rejects_name_without_dot() {
-        let yaml = minimal_yaml().replace("cisco.foo", "nodot");
-        let err = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap_err();
-        match err {
-            Error::Config(m) => assert!(m.contains("must contain at least one '.'")),
-            other => panic!("unexpected {other:?}"),
-        }
+    fn accepts_name_without_dot_and_derives_vendor_as_whole_name() {
+        // Horizon's server-side `StringUtils.substringBefore(name, ".")`
+        // returns the whole string when no '.' is present, so vendor =
+        // name itself. The local validator matches that behavior.
+        let yaml = minimal_yaml().replace("cisco.foo", "Cisco");
+        let local = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap();
+        assert_eq!(local.metadata.name, "Cisco");
     }
 
     #[test]
@@ -1306,6 +1301,32 @@ spec:
             }
             other => panic!("unexpected {other:?}"),
         }
+    }
+
+    #[test]
+    fn duplicate_uei_across_events_is_accepted_as_normalization_pattern() {
+        // Multiple events sharing a UEI is a first-class OpenNMS
+        // normalization pattern (mask conditions discriminate at runtime;
+        // the UEI is the operator-visible event class). See the archived
+        // `permit-duplicate-ueis-as-normalization-pattern` change.
+        let yaml = r#"
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: cisco.foo
+spec:
+  events:
+    - uei: uei.opennms.org/vendor/cisco/traps/rpsFailed
+      label: "CISCO-FASTHUB-MIB defined trap event: rpsFailed"
+      severity: Minor
+    - uei: uei.opennms.org/vendor/cisco/traps/rpsFailed
+      label: "STAND-ALONE-ETHERNET-SWITCH-MIB defined trap event: rpsFailed"
+      severity: Minor
+"#;
+        let local = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap();
+        assert_eq!(local.spec.events.len(), 2);
+        assert_eq!(local.spec.events[0].uei, local.spec.events[1].uei);
+        assert_ne!(local.spec.events[0].label, local.spec.events[1].label);
     }
 
     #[test]

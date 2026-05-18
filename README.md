@@ -247,37 +247,37 @@ explaining the rule, and suggesting a fix:
 
 ```
 ─────────────────────────────────────────────────────────────────────
-  Cisco.events.xml → no YAML written
+  bad.events.xml → no YAML written
 ─────────────────────────────────────────────────────────────────────
 
-  EC001  error    duplicate UEI within source: '...' declared 2 times
-    UEI: uei.opennms.org/vendor/Cisco/traps/rpsFailed
-    Occurrences (2):
-      Cisco.events.xml:4768  (event[138])
-      Cisco.events.xml:11519 (event[344])
-    Fix: Rename the duplicated UEIs to encode their origin (e.g.
-         .../fasthub/rpsFailed and .../ethernet/rpsFailed)...
-    For the full rationale: onmsctl source convert --explain EC001
+  EC004  error    event missing required field: uei
+    Field: uei
+    At:    bad.events.xml:14:5  (event[3])
+    Fix: Add the required uei to the event in the source XML; the
+         local schema requires it for a well-formed EventSource.
+    For the full rationale: onmsctl source convert --explain EC004
 ```
 
-Each finding carries a stable code (currently `EC001`, `EC002`, `EC003`,
-`EC004`, `EC005`, `EC007`, `EC008`, `EC009`; `EC006` is reserved but
-unassigned). Run `onmsctl source convert --explain <code>` to read the
-full rule rationale and worked remediation, e.g.:
+**Duplicate UEIs are first-class.** Multiple events sharing the same UEI
+within a source is the canonical OpenNMS *normalization pattern* — the
+mask conditions (e.g. SNMP trap id + generic + specific + varbind matchers)
+discriminate at runtime, and the shared UEI is the operator-visible event
+class that downstream tooling (alarmd reduction keys, automations,
+dashboards) operates on. Vendor MIBs routinely use this pattern (e.g.
+`CISCO-FASTHUB-MIB` and `STAND-ALONE-ETHERNET-SWITCH-MIB` both producing
+`uei.opennms.org/vendor/Cisco/traps/rpsFailed`). The converter passes
+shared-UEI clusters through cleanly with no finding emitted.
+
+Each finding carries a stable code (currently `EC002`, `EC003`, `EC004`,
+`EC005`, `EC007`, `EC008`, `EC009`; `EC001` and `EC006` are reserved
+fallow numbers that won't be reused). Run `onmsctl source convert
+--explain <code>` to read the full rule rationale and worked remediation,
+e.g.:
 
 ```sh
-$ onmsctl source convert --explain EC001
-EC001 — Duplicate UEI within source
-
-Rule
-----
-A single EventSource YAML document MUST NOT declare the same UEI twice.
-The local-schema validator (EventSourceLocal::validate) enforces this at
-parse time before any HTTP request is issued.
-
-Why
----
-In an EventSource, the UEI is the logical event identity ...
+$ onmsctl source convert --explain EC004
+EC004 — Event missing required field
+...
 ```
 
 Exit codes:
@@ -288,11 +288,6 @@ Exit codes:
 | 1 | Warnings emitted, YAML written |
 | 2 | Blocking findings, no YAML written |
 | 3 | CLI usage error |
-
-The `--keep-duplicates` flag relaxes EC001 (duplicate UEI) from blocking
-to warning so the YAML is written despite the duplicates; the resulting
-file will not pass `source apply` without further edits, but is useful
-for hand-resolution.
 
 Input-size cap (default 16 MiB) applies to both stdin and file inputs.
 Override with `--max-bytes`:

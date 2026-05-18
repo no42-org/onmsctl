@@ -35,10 +35,11 @@ How to fix
 3. STDIN — when reading from stdin, `--name` is REQUIRED because there
    is no filename to derive from.
 
-Note on the vendor-prefix requirement: the local-schema's full validator
-requires at least one `.` in `metadata.name` (so the prefix before the
-first dot becomes the server-derived vendor). The converter's own
-EC008 check is structural-only and does NOT enforce this — a name like
-`cisco` passes EC008 but will be rejected by the post-conversion
-validator as EC009 with a clear "must contain at least one '.'"
-message. Both pathways guide the operator to the same fix.
+Note on the vendor: the prefix before the first `.` becomes the
+server-derived vendor (matching Horizon's `StringUtils.substringBefore`).
+A name with no `.` is accepted — the whole name becomes the vendor.
+Examples:
+
+  - `cisco.foo`  → vendor = `cisco`
+  - `Cisco`      → vendor = `Cisco`
+  - `Juniper`    → vendor = `Juniper`
