@@ -258,7 +258,7 @@ pub fn render_diff(d: &EventSetDiff) -> String {
         u + r + m + cluster_remote,
         u + a + m + cluster_local,
         if c > 0 {
-            format!(", {c} duplicate-UEI cluster(s)")
+            format!(", {c} shared-UEI cluster(s)")
         } else {
             String::new()
         }
@@ -287,7 +287,7 @@ pub fn render_diff(d: &EventSetDiff) -> String {
     for c in &d.duplicate_clusters {
         writeln!(
             s,
-            "  ! {}    [duplicate-UEI cluster: local={}, remote={}]",
+            "  ! {}    [shared-UEI cluster: local={}, remote={}]",
             c.uei, c.local_count, c.remote_count
         )
         .unwrap();
@@ -513,7 +513,7 @@ mod tests {
         let r = vec![remote("uei.dup", "Warning", "x")];
         let d = diff_event_sets(&l, &r);
         let s = render_diff(&d);
-        assert!(s.contains("duplicate-UEI cluster"));
+        assert!(s.contains("shared-UEI cluster"));
         assert!(s.contains("uei.dup"));
     }
 }

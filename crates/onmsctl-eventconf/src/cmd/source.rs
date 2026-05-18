@@ -130,12 +130,6 @@ pub enum SourceCmd {
         /// stderr).
         #[arg(long, default_value = "xml")]
         format: String,
-        /// Only valid with `--format yaml`: EC001 (duplicate UEI) becomes
-        /// a warning; YAML is written despite duplicates. The resulting
-        /// YAML will NOT pass `onmsctl source apply` without further
-        /// edits.
-        #[arg(long)]
-        keep_duplicates: bool,
     },
 
     /// List the names of all eventconf sources.
@@ -205,11 +199,6 @@ pub enum SourceCmd {
         /// empty).
         #[arg(long, default_value = "text")]
         format: String,
-        /// EC001 (duplicate UEI) becomes a warning; YAML is written
-        /// despite duplicates. The resulting YAML will NOT pass
-        /// `onmsctl source apply` without further edits.
-        #[arg(long)]
-        keep_duplicates: bool,
         /// Overwrite output files that already exist. Required when
         /// `-O <path>` or `--output-dir <dir>` would clobber an existing
         /// YAML file. Stdout output is never gated.
@@ -350,20 +339,12 @@ impl SourceCmd {
                 output_file,
                 force,
                 format,
-                keep_duplicates,
             } => {
                 ensure_positive_id(id, "source id")?;
                 let bytes = api.download_source_xml(id).await?;
                 let format = format.to_ascii_lowercase();
                 let (out_bytes, is_yaml, exit_code) = match format.as_str() {
-                    "xml" => {
-                        if keep_duplicates {
-                            return Err(Error::Config(
-                                "--keep-duplicates is only valid with --format yaml".into(),
-                            ));
-                        }
-                        (bytes, false, 0i32)
-                    }
+                    "xml" => (bytes, false, 0i32),
                     "yaml" => {
                         // Look up the source name so the converted YAML's
                         // metadata.name comes from authoritative server
@@ -371,20 +352,13 @@ impl SourceCmd {
                         let source = api.get_source(id).await?;
                         let opts = crate::convert::ConvertOpts {
                             name_override: Some(source.name.clone()),
-                            keep_duplicates,
                         };
                         let pseudo_path = Path::new("-");
                         let result = crate::convert::convert(&bytes, pseudo_path, &opts);
                         // Report to stderr (text format only; JSON would
                         // conflict with stdout YAML).
                         if !result.findings.is_empty() || result.yaml.is_none() {
-                            eprint!(
-                                "{}",
-                                crate::convert::render_report_text_with(
-                                    &result,
-                                    keep_duplicates
-                                )
-                            );
+                            eprint!("{}", crate::convert::render_report_text(&result));
                         }
                         let exit_code = result.exit_code();
                         match result.yaml {
@@ -513,7 +487,6 @@ impl SourceCmd {
                 output_dir,
                 name,
                 format,
-                keep_duplicates,
                 force,
                 max_bytes,
                 explain,
@@ -524,7 +497,6 @@ impl SourceCmd {
                     output_dir,
                     name,
                     format,
-                    keep_duplicates,
                     force,
                     max_bytes,
                     explain,
@@ -546,7 +518,6 @@ struct ConvertCli {
     output_dir: Option<PathBuf>,
     name: Option<String>,
     format: String,
-    keep_duplicates: bool,
     force: bool,
     max_bytes: String,
     explain: Option<String>,
@@ -638,7 +609,6 @@ fn run_convert(args: ConvertCli) -> Result<i32> {
         };
         let opts = ConvertOpts {
             name_override: if single_input { args.name.clone() } else { None },
-            keep_duplicates: args.keep_duplicates,
         };
         let mut result = convert::convert(&xml_bytes, input, &opts);
         let written_path = emit_convert_result(
@@ -648,7 +618,6 @@ fn run_convert(args: ConvertCli) -> Result<i32> {
             &format,
             single_input,
             args.force,
-            args.keep_duplicates,
         )?;
         if let Some(_p) = written_path {
             // result.input could be augmented with output path here if
@@ -736,9 +705,8 @@ fn emit_convert_result(
     format: &str,
     single_input: bool,
     force: bool,
-    keep_duplicates: bool,
 ) -> Result<Option<PathBuf>> {
-    use crate::convert::render_report_text_with;
+    use crate::convert::render_report_text;
 
     // Determine the on-disk write target (if any) before anything else.
     // For batch mode with --output-dir, derive a per-input path. For
@@ -803,7 +771,7 @@ fn emit_convert_result(
     // Always render the text report when there are findings, regardless
     // of YAML emission outcome.
     if !result.findings.is_empty() || result.yaml.is_none() {
-        eprint!("{}", render_report_text_with(result, keep_duplicates));
+        eprint!("{}", render_report_text(result));
     }
     Ok(target_path)
 }
@@ -891,38 +859,19 @@ fn build_upload_parts(paths: &[PathBuf]) -> Result<Vec<MultipartPart>> {
 }
 
 /// Pre-flight validate an eventconf upload payload before it hits the wire.
-/// Catches duplicate UEIs (Horizon rejects with an opaque 400) and
-/// surfaces a malformed-XML problem with the file path attached.
+/// Catches malformed XML and surfaces the file path on parse failure.
+/// Does not enforce structural rules that Horizon's persistence layer
+/// permits — specifically, duplicate UEIs across events within a single
+/// source are first-class (a documented OpenNMS normalization pattern)
+/// and pass the pre-flight unchanged. See the archived
+/// `permit-duplicate-ueis-as-normalization-pattern` change.
 fn validate_upload_xml(path: &std::path::Path, body: &[u8]) -> Result<()> {
-    let events = crate::xml::parse_events_from_xml(body).map_err(|e| {
+    crate::xml::parse_events_from_xml(body).map_err(|e| {
         Error::Config(format!(
             "{}: failed to parse as eventconf XML: {e}",
             path.display()
         ))
     })?;
-
-    let mut seen: std::collections::HashMap<String, usize> =
-        std::collections::HashMap::with_capacity(events.len());
-    let mut dups: Vec<String> = Vec::new();
-    for e in &events {
-        let Some(uei) = e.uei.as_ref() else { continue };
-        let count = seen.entry(uei.clone()).or_insert(0);
-        *count += 1;
-        if *count == 2 {
-            dups.push(uei.clone());
-        }
-    }
-    if !dups.is_empty() {
-        dups.sort();
-        return Err(Error::Config(format!(
-            "{}: {} duplicate UEI(s) in upload: {}. \
-             Horizon's eventconf upload rejects duplicate UEIs within a single \
-             source with an opaque 400; give each event a distinct UEI.",
-            path.display(),
-            dups.len(),
-            dups.join(", ")
-        )));
-    }
     Ok(())
 }
 
@@ -957,17 +906,13 @@ mod tests {
 </events>"#;
 
     #[test]
-    fn validate_upload_xml_rejects_duplicate_uei() {
+    fn validate_upload_xml_accepts_duplicate_uei() {
+        // Duplicate UEIs across events are a first-class normalization
+        // pattern (see archived `permit-duplicate-ueis-as-normalization-pattern`).
+        // The upload pre-flight no longer rejects them.
         let path = std::path::Path::new("/tmp/example.events.xml");
-        let err = validate_upload_xml(path, XML_DUPLICATE_UEI).unwrap_err();
-        match err {
-            Error::Config(m) => {
-                assert!(m.contains("duplicate UEI"));
-                assert!(m.contains("uei.opennms.org/example/dup"));
-                assert!(m.contains("/tmp/example.events.xml"));
-            }
-            other => panic!("unexpected {other:?}"),
-        }
+        validate_upload_xml(path, XML_DUPLICATE_UEI)
+            .expect("duplicate UEIs must pass the upload pre-flight");
     }
 
     #[test]
