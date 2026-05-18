@@ -330,15 +330,15 @@ retention.
 ### Known server-side issues
 
 Four `/eventconf/*` endpoint bugs are reproducible on both Horizon
-35.0.5 and 36.0.0. All are tracked upstream — onmsctl can't work
-around them.
+35.0.5 and 36.0.0. All are tracked upstream; onmsctl works around
+NMS-19813 client-side.
 
 | # | Endpoint | Symptom | Upstream |
 |---|---|---|---|
 | 1 | `GET /eventconf/filter/sources` | returns empty `eventConfSourceList` despite non-zero `totalRecords` | [NMS-19810](https://opennms.atlassian.net/browse/NMS-19810) |
 | 2 | `GET /eventconf/filter/{id}/events` | HTTP 500 NPE when `offset` is omitted | [NMS-19811](https://opennms.atlassian.net/browse/NMS-19811) |
 | 3 | `/eventconf/filter/*` | paging-parameter requirements differ per endpoint, undocumented | [NMS-19812](https://opennms.atlassian.net/browse/NMS-19812) |
-| 4 | `POST /eventconf/upload` | HTTP 400 with empty body for every payload | [NMS-19813](https://opennms.atlassian.net/browse/NMS-19813) |
+| 4 | `POST /eventconf/upload` | HTTP 400 (empty body) unless the multipart field name is literally `upload` — CXF `@Multipart("upload")` qualifier on the JAX-RS interface | [NMS-19813](https://opennms.atlassian.net/browse/NMS-19813) |
 
 **User-visible cascade:**
 
@@ -346,16 +346,14 @@ around them.
   exist (NMS-19810). Use `onmsctl source names-and-ids` as a working
   alternative.
 - `find_source_by_name` always reports `Absent` (NMS-19810), so
-  `source apply` always takes the *create* path.
-- `source apply -f <eventsource.yaml>` and
-  `source upload <file.xml>` are both effectively dead because they
-  upload via `/eventconf/upload` (NMS-19813). The duplicate-UEI
-  client-side guardrail in `source upload` still catches malformed
-  payloads, but a well-formed payload also gets a 400.
-
-Until upstream is fixed, build event configurations with
-`source create` + `event add` per individual event, or push XML
-directly to the file system the Horizon process reads at startup.
+  `source apply --diff` shows the whole local document as "added"
+  rather than a true delta against server state. The upload itself
+  still succeeds — Horizon's upsert path replaces events under an
+  existing basename — so the source materializes correctly; treat
+  the diff display as advisory until NMS-19810 is fixed upstream.
+- `source apply -f <eventsource.yaml>` and `source upload <file.xml>`
+  work today: onmsctl sends `name="upload"` on every multipart part
+  to satisfy the CXF qualifier (NMS-19813 workaround).
 
 ---
 
