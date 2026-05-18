@@ -65,9 +65,13 @@ pub struct OnmsClient {
 /// reqwest types.
 #[derive(Clone, Debug)]
 pub struct MultipartPart {
-    /// Multipart form-field name. Horizon's `/eventconf/upload` uses CXF's
-    /// "all parts in a list-of-Attachment" binding; the field name is
-    /// effectively ignored, so capabilities typically pass `"file"`.
+    /// Multipart form-field name. Horizon's `/eventconf/upload` is annotated
+    /// `@Multipart("upload")` on the JAX-RS interface (NMS-19813), so CXF
+    /// only binds parts whose `Content-Disposition: form-data; name=...`
+    /// is literally `"upload"` — any other name is rejected with an empty
+    /// HTTP 400. The annotation has been removed upstream, but unpatched
+    /// servers are still common in the wild; keep `"upload"` as the
+    /// default for compatibility with both fixed and unfixed Horizon.
     pub field_name: String,
     /// Filename associated with this part. `EventConfRestService.uploadEventConfFiles`
     /// reads `getContentDisposition().getParameter("filename")` to derive
@@ -82,7 +86,7 @@ pub struct MultipartPart {
 impl MultipartPart {
     pub fn xml(filename: impl Into<String>, body: impl Into<Vec<u8>>) -> Self {
         Self {
-            field_name: "file".into(),
+            field_name: "upload".into(),
             filename: filename.into(),
             content_type: "application/xml".into(),
             body: body.into(),
