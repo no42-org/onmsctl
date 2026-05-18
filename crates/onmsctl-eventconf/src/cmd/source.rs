@@ -10,7 +10,7 @@
 //! output through `onmsctl_core::render_*`.
 
 use std::io::ErrorKind;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::Subcommand;
 use onmsctl_core::client::MultipartPart;
@@ -110,6 +110,12 @@ pub enum SourceCmd {
     /// drop server-only fields that the local YAML schema doesn't
     /// model. For lossless round-trips, edit the XML directly and
     /// re-upload via `source upload`.
+    ///
+    /// With `--format yaml`, the downloaded XML is piped through
+    /// `source convert` and the EventSource YAML is emitted instead.
+    /// Findings (if any) go to stderr just like standalone convert.
+    /// Conversion exit codes (1 = warnings, 2 = blocking) propagate to
+    /// the process exit code.
     Download {
         /// Source id.
         id: i64,
@@ -119,6 +125,17 @@ pub enum SourceCmd {
         /// Overwrite the output file if it already exists.
         #[arg(long)]
         force: bool,
+        /// Output format: `xml` (default, authoritative wire form) or
+        /// `yaml` (converted via the migration pipeline; findings to
+        /// stderr).
+        #[arg(long, default_value = "xml")]
+        format: String,
+        /// Only valid with `--format yaml`: EC001 (duplicate UEI) becomes
+        /// a warning; YAML is written despite duplicates. The resulting
+        /// YAML will NOT pass `onmsctl source apply` without further
+        /// edits.
+        #[arg(long)]
+        keep_duplicates: bool,
     },
 
     /// List the names of all eventconf sources.
@@ -152,6 +169,63 @@ pub enum SourceCmd {
         /// dry-run mode, before reporting WouldUpdate).
         #[arg(long)]
         diff: bool,
+    },
+
+    /// Convert eventconf XML to EventSource YAML with a migration report.
+    ///
+    /// Pure local file transform — issues no HTTP requests and requires
+    /// no Horizon context. Use this to migrate existing /etc/events/
+    /// files to declarative YAML for git-managed apply workflows.
+    ///
+    /// Findings (rule violations, normalizations, dropped elements) are
+    /// reported to stderr in a structured form. Run with
+    /// `--explain <code>` to read the rule rationale for any reported
+    /// finding code.
+    Convert {
+        /// Path(s) to eventconf XML file(s). Use `-` to read from stdin
+        /// (single input only; --name is required).
+        #[arg(num_args = 0..)]
+        inputs: Vec<PathBuf>,
+        /// Write converted YAML to this file (single input only). Default:
+        /// stdout for single input, per-input files in --output-dir for
+        /// batch input.
+        #[arg(short = 'O', long, conflicts_with = "output_dir")]
+        output: Option<PathBuf>,
+        /// Write per-input YAML files into this directory. Each output is
+        /// named by stripping `.events.xml`/`.xml` from the input filename
+        /// and appending `.yaml`.
+        #[arg(long)]
+        output_dir: Option<PathBuf>,
+        /// Override the derived `metadata.name`. Required when input is
+        /// `-` (stdin). Only valid with a single input.
+        #[arg(long)]
+        name: Option<String>,
+        /// Report format: `text` (default, human-readable) or `json`
+        /// (machine-readable; entire ConversionResult to stdout, stderr
+        /// empty).
+        #[arg(long, default_value = "text")]
+        format: String,
+        /// EC001 (duplicate UEI) becomes a warning; YAML is written
+        /// despite duplicates. The resulting YAML will NOT pass
+        /// `onmsctl source apply` without further edits.
+        #[arg(long)]
+        keep_duplicates: bool,
+        /// Overwrite output files that already exist. Required when
+        /// `-O <path>` or `--output-dir <dir>` would clobber an existing
+        /// YAML file. Stdout output is never gated.
+        #[arg(long)]
+        force: bool,
+        /// Maximum bytes to read per input. Accepts a raw integer or a
+        /// humanized suffix (`16M`, `1G`). Default: 16 MiB. Applies to
+        /// both stdin and file-path inputs. Over-cap inputs fail loudly
+        /// rather than truncate silently.
+        #[arg(long, default_value = "16M")]
+        max_bytes: String,
+        /// Print the rule rationale for the given finding code (e.g.
+        /// `--explain EC001`) and exit without converting. Inputs may
+        /// be empty when this flag is used.
+        #[arg(long)]
+        explain: Option<String>,
     },
 }
 
@@ -275,9 +349,60 @@ impl SourceCmd {
                 id,
                 output_file,
                 force,
+                format,
+                keep_duplicates,
             } => {
                 ensure_positive_id(id, "source id")?;
                 let bytes = api.download_source_xml(id).await?;
+                let format = format.to_ascii_lowercase();
+                let (out_bytes, is_yaml, exit_code) = match format.as_str() {
+                    "xml" => {
+                        if keep_duplicates {
+                            return Err(Error::Config(
+                                "--keep-duplicates is only valid with --format yaml".into(),
+                            ));
+                        }
+                        (bytes, false, 0i32)
+                    }
+                    "yaml" => {
+                        // Look up the source name so the converted YAML's
+                        // metadata.name comes from authoritative server
+                        // state, not a synthesized filename.
+                        let source = api.get_source(id).await?;
+                        let opts = crate::convert::ConvertOpts {
+                            name_override: Some(source.name.clone()),
+                            keep_duplicates,
+                        };
+                        let pseudo_path = Path::new("-");
+                        let result = crate::convert::convert(&bytes, pseudo_path, &opts);
+                        // Report to stderr (text format only; JSON would
+                        // conflict with stdout YAML).
+                        if !result.findings.is_empty() || result.yaml.is_none() {
+                            eprint!(
+                                "{}",
+                                crate::convert::render_report_text_with(
+                                    &result,
+                                    keep_duplicates
+                                )
+                            );
+                        }
+                        let exit_code = result.exit_code();
+                        match result.yaml {
+                            Some(y) => (y.into_bytes(), true, exit_code),
+                            None => {
+                                // Blocking findings — exit with the
+                                // converter's exit code rather than
+                                // bubbling an opaque Error::Config.
+                                std::process::exit(exit_code);
+                            }
+                        }
+                    }
+                    other => {
+                        return Err(Error::Config(format!(
+                            "--format must be 'xml' or 'yaml', got '{other}'"
+                        )));
+                    }
+                };
                 if let Some(path) = output_file {
                     if path.exists() && !force {
                         return Err(Error::Config(format!(
@@ -285,17 +410,22 @@ impl SourceCmd {
                             path.display()
                         )));
                     }
-                    std::fs::write(&path, &bytes).map_err(|e| {
+                    std::fs::write(&path, &out_bytes).map_err(|e| {
                         Error::Config(format!(
                             "failed to write download to {}: {e}",
                             path.display()
                         ))
                     })?;
-                    eprintln!("wrote {} bytes to {}", bytes.len(), path.display());
+                    eprintln!(
+                        "wrote {} bytes ({}) to {}",
+                        out_bytes.len(),
+                        if is_yaml { "yaml" } else { "xml" },
+                        path.display()
+                    );
                 } else {
                     use std::io::Write;
                     let mut stdout = std::io::stdout().lock();
-                    match stdout.write_all(&bytes) {
+                    match stdout.write_all(&out_bytes) {
                         Ok(()) => {}
                         // Piping to `head -c N` etc. closes stdout
                         // mid-write. Treat that as a clean exit, not an
@@ -303,6 +433,13 @@ impl SourceCmd {
                         Err(e) if e.kind() == ErrorKind::BrokenPipe => {}
                         Err(e) => return Err(Error::Io(e)),
                     }
+                }
+                // Propagate the conversion's exit code when --format
+                // yaml produced warnings (exit 1). Blocking findings
+                // (exit 2) already terminated the process via
+                // std::process::exit in the conversion branch above.
+                if exit_code != 0 {
+                    std::process::exit(exit_code);
                 }
             }
             SourceCmd::Names => {
@@ -370,9 +507,332 @@ impl SourceCmd {
                 let outcome = run_apply::<EventSourceTarget>(local, &opts, ctx).await?;
                 println!("{outcome}");
             }
+            SourceCmd::Convert {
+                inputs,
+                output,
+                output_dir,
+                name,
+                format,
+                keep_duplicates,
+                force,
+                max_bytes,
+                explain,
+            } => {
+                let exit_code = run_convert(ConvertCli {
+                    inputs,
+                    output,
+                    output_dir,
+                    name,
+                    format,
+                    keep_duplicates,
+                    force,
+                    max_bytes,
+                    explain,
+                })?;
+                if exit_code != 0 {
+                    std::process::exit(exit_code);
+                }
+            }
         }
         Ok(())
     }
+}
+
+/// Parsed shape of `onmsctl source convert ...` arguments. Aggregated
+/// into a struct so the dispatcher and the runner pass the same shape.
+struct ConvertCli {
+    inputs: Vec<PathBuf>,
+    output: Option<PathBuf>,
+    output_dir: Option<PathBuf>,
+    name: Option<String>,
+    format: String,
+    keep_duplicates: bool,
+    force: bool,
+    max_bytes: String,
+    explain: Option<String>,
+}
+
+/// Run `source convert`. Pure local file transform; the eventconf API is
+/// not touched. Returns the exit code (0/1/2/3) that the dispatcher
+/// passes to `std::process::exit` only when non-zero — exit code `0`
+/// returns cleanly so destructors run normally.
+fn run_convert(args: ConvertCli) -> Result<i32> {
+    use crate::convert::{self, ConvertOpts, FindingCode};
+
+    // --explain short-circuits everything else.
+    if let Some(code_str) = args.explain {
+        match FindingCode::parse(&code_str) {
+            Some(code) => {
+                println!("{}", convert::explain(code));
+                if !args.inputs.is_empty() {
+                    eprintln!(
+                        "note: --explain was set; the {} input path(s) on the command line \
+                         were not converted. Drop --explain to run the conversion.",
+                        args.inputs.len()
+                    );
+                }
+                return Ok(0);
+            }
+            None => {
+                let codes: Vec<&str> =
+                    FindingCode::all().iter().map(|c| c.as_str()).collect();
+                eprintln!("error: unknown explain code '{code_str}'");
+                eprintln!("available codes: {}", codes.join(", "));
+                return Ok(3);
+            }
+        }
+    }
+
+    if args.inputs.is_empty() {
+        eprintln!(
+            "error: at least one input is required (path or `-` for stdin); \
+             use --explain <code> to read finding documentation"
+        );
+        return Ok(3);
+    }
+
+    let format = args.format.to_ascii_lowercase();
+    if format != "text" && format != "json" {
+        eprintln!("error: --format must be 'text' or 'json', got '{format}'");
+        return Ok(3);
+    }
+
+    let max_bytes = match parse_byte_size(&args.max_bytes) {
+        Ok(n) => n,
+        Err(e) => {
+            eprintln!("error: invalid --max-bytes value: {e}");
+            return Ok(3);
+        }
+    };
+
+    // Single-input mode permits -O / --name. Batch mode forbids them.
+    if args.inputs.len() > 1 {
+        if args.output.is_some() {
+            eprintln!(
+                "error: -O/--output is only valid with a single input; use --output-dir for batch mode"
+            );
+            return Ok(3);
+        }
+        if args.name.is_some() {
+            eprintln!("error: --name is only valid with a single input");
+            return Ok(3);
+        }
+        if args.output_dir.is_none() {
+            eprintln!(
+                "error: batch input requires --output-dir <dir>; refusing to write *.yaml files \
+                 alongside inputs without explicit consent"
+            );
+            return Ok(3);
+        }
+    }
+
+    let mut worst_exit = 0i32;
+    let single_input = args.inputs.len() == 1;
+    for input in &args.inputs {
+        let xml_bytes = match read_input_bytes(input, max_bytes) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("error reading {}: {e}", input.display());
+                return Ok(3);
+            }
+        };
+        let opts = ConvertOpts {
+            name_override: if single_input { args.name.clone() } else { None },
+            keep_duplicates: args.keep_duplicates,
+        };
+        let mut result = convert::convert(&xml_bytes, input, &opts);
+        let written_path = emit_convert_result(
+            &mut result,
+            args.output.as_deref(),
+            args.output_dir.as_deref(),
+            &format,
+            single_input,
+            args.force,
+            args.keep_duplicates,
+        )?;
+        if let Some(_p) = written_path {
+            // result.input could be augmented with output path here if
+            // we wanted to carry it through ConversionResult — for now
+            // the JSON envelope is constructed externally in emit_*
+        }
+        worst_exit = worst_exit.max(result.exit_code());
+    }
+    Ok(worst_exit)
+}
+
+/// Read a `source convert` input. Caps input at `max_bytes` for both
+/// stdin and file paths. Truncation is **loud** — over-cap inputs error
+/// out before any allocation or downstream parse attempt.
+fn read_input_bytes(path: &Path, max_bytes: u64) -> Result<Vec<u8>> {
+    use std::io::Read;
+    if path.as_os_str() == "-" {
+        // Read max_bytes + 1 so we can detect the over-cap case.
+        let mut buf = Vec::new();
+        let read_n = std::io::stdin()
+            .take(max_bytes.saturating_add(1))
+            .read_to_end(&mut buf)
+            .map_err(|e| Error::Config(format!("read stdin: {e}")))? as u64;
+        if read_n > max_bytes {
+            return Err(Error::Config(format!(
+                "stdin exceeded --max-bytes cap of {max_bytes} bytes. \
+                 Raise the cap (e.g. --max-bytes 64M) or convert from a file instead."
+            )));
+        }
+        Ok(buf)
+    } else {
+        let meta = std::fs::metadata(path)
+            .map_err(|e| Error::Config(format!("stat {}: {e}", path.display())))?;
+        let size = meta.len();
+        if size > max_bytes {
+            return Err(Error::Config(format!(
+                "{} is {size} bytes, exceeds --max-bytes cap of {max_bytes}. \
+                 Raise the cap or split the file.",
+                path.display()
+            )));
+        }
+        std::fs::read(path)
+            .map_err(|e| Error::Config(format!("read {}: {e}", path.display())))
+    }
+}
+
+/// Parse a humanized byte-size string (`"16M"`, `"1G"`, `"512"`) into a
+/// `u64`. Suffixes recognized (case-insensitive): `K`, `M`, `G`, `T`.
+/// Bare integers are interpreted as bytes.
+fn parse_byte_size(s: &str) -> std::result::Result<u64, String> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Err("empty value".into());
+    }
+    let (num_str, mult): (&str, u64) = if let Some(prefix) = s.strip_suffix(['K', 'k']) {
+        (prefix, 1024)
+    } else if let Some(prefix) = s.strip_suffix(['M', 'm']) {
+        (prefix, 1024 * 1024)
+    } else if let Some(prefix) = s.strip_suffix(['G', 'g']) {
+        (prefix, 1024 * 1024 * 1024)
+    } else if let Some(prefix) = s.strip_suffix(['T', 't']) {
+        (prefix, 1024u64 * 1024 * 1024 * 1024)
+    } else {
+        (s, 1)
+    };
+    let n: u64 = num_str
+        .trim()
+        .parse()
+        .map_err(|e| format!("'{s}': {e}"))?;
+    n.checked_mul(mult)
+        .ok_or_else(|| format!("'{s}': value overflows u64"))
+}
+
+/// Emit the conversion result. In text mode YAML goes to stdout (or a
+/// file via `-O`/`--output-dir`) and the structured report goes to
+/// stderr. In JSON mode the whole envelope serializes to stdout and
+/// stderr stays silent.
+///
+/// Returns `Some(path)` if a YAML was written to a file (used by the
+/// JSON envelope's `output` field), or `None` otherwise.
+fn emit_convert_result(
+    result: &mut crate::convert::ConversionResult,
+    output: Option<&Path>,
+    output_dir: Option<&Path>,
+    format: &str,
+    single_input: bool,
+    force: bool,
+    keep_duplicates: bool,
+) -> Result<Option<PathBuf>> {
+    use crate::convert::render_report_text_with;
+
+    // Determine the on-disk write target (if any) before anything else.
+    // For batch mode with --output-dir, derive a per-input path. For
+    // single-input with -O, use that. Otherwise None (stdout in text
+    // mode, or no file in JSON mode).
+    let target_path: Option<PathBuf> = match (output, output_dir, &result.input) {
+        (Some(p), _, _) => Some(p.to_path_buf()),
+        (None, Some(dir), Some(input_path)) => {
+            let base = input_path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("converted");
+            let stem = base
+                .strip_suffix(".events.xml")
+                .or_else(|| base.strip_suffix(".xml"))
+                .unwrap_or(base);
+            Some(dir.join(format!("{stem}.yaml")))
+        }
+        _ => None,
+    };
+
+    if format == "json" {
+        // JSON envelope per design D5 (amended 2026-05-18): include both
+        // `output` (the disk path written, or null) and `yaml` (the body
+        // string, or null). `input` is always emitted, even when null
+        // for stdin.
+        let envelope = serde_json::json!({
+            "version": 1,
+            "input": result.input,
+            "output": target_path,
+            "yaml": result.yaml,
+            "findings": result.findings,
+            "metrics": result.metrics,
+            "exit_code": result.exit_code(),
+        });
+        let json = serde_json::to_string_pretty(&envelope)
+            .map_err(|e| Error::Config(format!("json serialize: {e}")))?;
+        println!("{json}");
+        // In JSON mode we still write the YAML to disk if --output /
+        // --output-dir was specified, so the path in the envelope
+        // reflects reality.
+        if let (Some(yaml), Some(path)) = (&result.yaml, target_path.as_ref()) {
+            write_yaml_to_disk(path, yaml, force, output_dir)?;
+        }
+        return Ok(target_path);
+    }
+
+    // Text mode.
+    if let Some(yaml) = &result.yaml {
+        if let Some(path) = target_path.as_ref() {
+            write_yaml_to_disk(path, yaml, force, output_dir)?;
+            eprintln!("wrote {}", path.display());
+        } else if single_input {
+            // Single-input + no output flag → YAML to stdout.
+            print!("{yaml}");
+        }
+        // Batch + no --output-dir was rejected earlier at the CLI parse
+        // step — reaching here in batch mode without target_path is a
+        // logic bug.
+    }
+
+    // Always render the text report when there are findings, regardless
+    // of YAML emission outcome.
+    if !result.findings.is_empty() || result.yaml.is_none() {
+        eprint!("{}", render_report_text_with(result, keep_duplicates));
+    }
+    Ok(target_path)
+}
+
+/// Write the converted YAML to disk, handling `--force` overwrite gates
+/// and `--output-dir` directory creation.
+fn write_yaml_to_disk(
+    path: &Path,
+    yaml: &str,
+    force: bool,
+    output_dir: Option<&Path>,
+) -> Result<()> {
+    if !force && path.exists() {
+        return Err(Error::Config(format!(
+            "refusing to overwrite existing file {}; pass --force to override",
+            path.display()
+        )));
+    }
+    if let Some(dir) = output_dir {
+        std::fs::create_dir_all(dir).map_err(|e| {
+            Error::Config(format!(
+                "failed to create --output-dir {}: {e}",
+                dir.display()
+            ))
+        })?;
+    }
+    std::fs::write(path, yaml)
+        .map_err(|e| Error::Config(format!("write {}: {e}", path.display())))?;
+    Ok(())
 }
 
 /// Reject zero / negative ids early so we don't issue requests that the

@@ -21,6 +21,7 @@
 pub mod api;
 pub mod apply;
 pub mod cmd;
+pub mod convert;
 pub mod dto;
 mod render;
 pub mod xml;

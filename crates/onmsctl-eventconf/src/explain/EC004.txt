@@ -1,0 +1,56 @@
+EC004 — Event missing required field
+
+Rule
+----
+Each event in an EventSource YAML document MUST declare:
+
+  - `uei`        (corresponds to <uei> in eventconf XML)
+  - `label`      (corresponds to <event-label> — required by the local
+                  schema even though optional on the wire)
+  - `severity`   (corresponds to <severity>, must be one of Indeterminate,
+                  Cleared, Normal, Warning, Minor, Major, Critical)
+
+If `<alarm-data>` is present, it MUST declare:
+  - `reductionKey`   (corresponds to the `reduction-key` attribute)
+  - `alarmType`      (corresponds to the `alarm-type` attribute, accepted
+                      values: 1, 2, 3 — see EC007 for the semantic table)
+
+If `<logmsg>` is present, it MUST declare:
+  - `dest`           (the `dest` attribute)
+  - `text`           (the inner text — must be non-empty after trim)
+
+If `<mask>` declares varbinds, each varbind MUST declare exactly one of:
+  - `vbnumber`       (positional, 1-indexed)
+  - `vboid`          (OID-based)
+
+Why
+---
+The wire DTO permits these fields to be absent because the REST API has
+historically been lenient. The local YAML schema is stricter: it
+represents what a well-formed source SHOULD look like in declarative
+form. An event missing its UEI, label, severity, or other required
+field is structurally broken — apply would reject it, runtime matching
+would fail, and downstream tooling would misbehave.
+
+Most often, this finding indicates either:
+  - A truly malformed input XML (manually edited, corrupted)
+  - An XML that uses features the v0.1 schema doesn't model (such as
+    <parameter>-based parameterization that the converter doesn't know
+    how to lift into a `label`)
+
+How to fix
+----------
+1. Open the source XML at the cited line and event index.
+
+2. Inspect the field named in the finding. Add the missing field to the
+   XML, or to the converted YAML by hand.
+
+3. If the underlying eventconf XSD allows the field to be absent but
+   the v0.1 schema requires it, this is a real impedance mismatch.
+   Consider:
+   a. Filling in a sensible default (e.g. a synthesized label from
+      the UEI tail).
+   b. Filing a request to relax the local-schema requirement for the
+      specific field.
+
+4. After fixing, re-run the converter on the corrected XML.

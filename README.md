@@ -114,7 +114,7 @@ flags (--url, --user, --context)  >  env (ONMS_URL, ONMS_USER, ONMSCTL_CONTEXT) 
 
 ---
 
-## Four canonical workflows
+## Five canonical workflows
 
 ### 1. Apply (declarative)
 
@@ -221,11 +221,109 @@ For the declarative full-source workflow see `examples/full.yaml` and
 onmsctl source upload cisco.foo.events.xml acme.widget.events.xml
 onmsctl source download 42 -O cisco.foo.events.xml
 onmsctl source download 42 | tee /tmp/cisco.foo.events.xml    # stdout streaming
+onmsctl source download 42 --format yaml -O cisco.foo.yaml    # convert inline
 ```
 
 > **Round-trip caveat:** `download → edit → apply` may drop server-only
 > fields the local DTOs don't model. The XML is the authoritative form;
 > the YAML is a curated subset. See `source apply --help`.
+
+### 5. Migrate (XML → YAML with audit report)
+
+`onmsctl source convert` converts existing eventconf XML to EventSource
+YAML for git-managed apply workflows. It is a pure local file transform —
+no Horizon contact, no API context required.
+
+```sh
+onmsctl source convert /opt/opennms/etc/events/cisco.foo.events.xml
+onmsctl source convert -O cisco.foo.yaml cisco.foo.events.xml
+onmsctl source convert --output-dir yaml/ /opt/opennms/etc/events/*.events.xml
+cat foo.events.xml | onmsctl source convert - --name foo
+```
+
+When the source XML violates a local-schema rule, the converter emits a
+**structured finding** to stderr citing the offending event's file:line,
+explaining the rule, and suggesting a fix:
+
+```
+─────────────────────────────────────────────────────────────────────
+  Cisco.events.xml → no YAML written
+─────────────────────────────────────────────────────────────────────
+
+  EC001  error    duplicate UEI within source: '...' declared 2 times
+    UEI: uei.opennms.org/vendor/Cisco/traps/rpsFailed
+    Occurrences (2):
+      Cisco.events.xml:4768  (event[138])
+      Cisco.events.xml:11519 (event[344])
+    Fix: Rename the duplicated UEIs to encode their origin (e.g.
+         .../fasthub/rpsFailed and .../ethernet/rpsFailed)...
+    For the full rationale: onmsctl source convert --explain EC001
+```
+
+Each finding carries a stable code (currently `EC001`, `EC002`, `EC003`,
+`EC004`, `EC005`, `EC007`, `EC008`, `EC009`; `EC006` is reserved but
+unassigned). Run `onmsctl source convert --explain <code>` to read the
+full rule rationale and worked remediation, e.g.:
+
+```sh
+$ onmsctl source convert --explain EC001
+EC001 — Duplicate UEI within source
+
+Rule
+----
+A single EventSource YAML document MUST NOT declare the same UEI twice.
+The local-schema validator (EventSourceLocal::validate) enforces this at
+parse time before any HTTP request is issued.
+
+Why
+---
+In an EventSource, the UEI is the logical event identity ...
+```
+
+Exit codes:
+
+| Code | Meaning |
+|---|---|
+| 0 | Clean conversion, YAML written |
+| 1 | Warnings emitted, YAML written |
+| 2 | Blocking findings, no YAML written |
+| 3 | CLI usage error |
+
+The `--keep-duplicates` flag relaxes EC001 (duplicate UEI) from blocking
+to warning so the YAML is written despite the duplicates; the resulting
+file will not pass `source apply` without further edits, but is useful
+for hand-resolution.
+
+Input-size cap (default 16 MiB) applies to both stdin and file inputs.
+Override with `--max-bytes`:
+
+```sh
+onmsctl source convert --max-bytes 64M huge.events.xml
+```
+
+Output files are not overwritten by default; pass `--force` to clobber
+existing YAML when re-running against the same `-O <path>` or
+`--output-dir <dir>`.
+
+JSON output is available for CI integration:
+
+```sh
+onmsctl source convert --format json *.events.xml | \
+  jq '.findings[] | select(.severity=="error")'
+```
+
+The JSON envelope carries `"version": 1` for forward compatibility, and
+includes both `output` (the disk path written, or null) and `yaml` (the
+YAML body string, or null). Pipelines can choose either depending on
+whether they need the body or just a pointer.
+
+**Known limitation:** unmodeled elements (`<snmp>`, `<script>`,
+`<forward>`, `<parameter>`, `<filters>`) are silently dropped from the
+converted YAML in v0.1. The converter does NOT surface their presence
+as a finding — operators with eventconf XML that depends on these
+elements should keep the XML alongside the YAML and use
+`source upload` for full-fidelity round-tripping. A future change will
+add an unmodeled-element pre-scan as `EC006`.
 
 ---
 
