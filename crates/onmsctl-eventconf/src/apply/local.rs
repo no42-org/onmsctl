@@ -9,10 +9,12 @@
 //!
 //!   - Common fields modeled (uei, label, severity, description, logmsg,
 //!     mask, alarmData, operinstruct, mouseovertext, autoacknowledge,
-//!     tticket, correlation).
-//!   - Rare elements (varbindsdecode, parameter, forward, script, snmp)
-//!     are NOT modeled in v0.1. The spec amendment in `tasks.md`'s
-//!     deferred-work tracker carries this forward.
+//!     tticket, correlation, varbindsdecode).
+//!   - Mask varbinds support both `vbnumber` (positional, 1-indexed) and
+//!     `vboid` (OID-based) discriminators; exactly one is required per
+//!     entry.
+//!   - Rare elements (parameter, forward, script, snmp) are NOT modeled
+//!     yet. Tracked as deferred work.
 //!
 //! User-friendly field names are preserved (`label` not `eventLabel`,
 //! `text` not `content`, `name`/`values` not `mename`/`mevalues`).
@@ -82,6 +84,8 @@ pub struct EventDef {
     pub tticket: Option<TticketDef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub correlation: Option<CorrelationDef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub varbindsdecode: Option<Vec<VarbindsdecodeDef>>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, JsonSchema)]
@@ -98,7 +102,12 @@ pub struct LogmsgDef {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AlarmDataDef {
     pub reduction_key: String,
-    /// 1 = problem, 2 = resolution.
+    /// Alarm semantic. Must be one of:
+    ///   - `1` — Problem: raises an alarm, paired with a Resolution event
+    ///   - `2` — Resolution: clears a paired Problem alarm by `reductionKey`
+    ///   - `3` — Unresolvable: a Problem-class event with no auto-clear from
+    ///     the device. Common for hardware-failure traps. Requires manual
+    ///     close or an alarmd cleanup policy.
     pub alarm_type: i32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_clean: Option<bool>,
@@ -125,13 +134,40 @@ pub struct MaskElementDef {
     pub values: Vec<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, JsonSchema)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MaskVarbindDef {
-    pub vbnumber: i32,
+    /// Match the SNMP trap PDU's varbind by 1-indexed position. Mutually
+    /// exclusive with [`vboid`]; the validator enforces exactly one is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vbnumber: Option<i32>,
+    /// Match the SNMP trap PDU's varbind by OID (e.g. `.1.3.6.1.4.1.61509.1.2.0`).
+    /// Mutually exclusive with [`vbnumber`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vboid: Option<String>,
     /// Match values. Maps to `vbvalues` on the wire.
     #[serde(default)]
     pub values: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VarbindsdecodeDef {
+    /// Identifies which event parameter this decode group annotates.
+    /// String-typed per the eventconf XSD; typical values are numeric.
+    pub parmid: String,
+    /// Value→label mappings rendered in the Horizon event UI.
+    pub decode: Vec<DecodeDef>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DecodeDef {
+    /// The raw varbind value being annotated. Maps to `varbindvalue` on
+    /// the wire (an XSD attribute on `<decode>`).
+    pub value: String,
+    /// The human-readable label. Maps to `varbinddecodedstring` on the wire.
+    pub label: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, JsonSchema)]
@@ -427,6 +463,23 @@ impl EventDef {
         if let Some(c) = &self.correlation {
             validate_state(&c.state, &format!("spec.events[{idx}].correlation.state"))?;
         }
+        if let Some(groups) = &self.varbindsdecode {
+            for (k, g) in groups.iter().enumerate() {
+                g.validate(idx, k)?;
+            }
+            // D6: duplicate parmid values within an event's varbindsdecode
+            // produce ambiguous server-side behavior; reject at parse time.
+            let mut seen: std::collections::BTreeMap<&str, usize> =
+                std::collections::BTreeMap::new();
+            for (k, g) in groups.iter().enumerate() {
+                if let Some(prev_k) = seen.insert(g.parmid.as_str(), k) {
+                    return Err(Error::Config(format!(
+                        "spec.events[{idx}].varbindsdecode entries [{prev_k}] and [{k}] both declare parmid='{}'; parmid values must be unique within an event",
+                        g.parmid
+                    )));
+                }
+            }
+        }
         Ok(())
     }
 }
@@ -438,9 +491,9 @@ impl AlarmDataDef {
                 "spec.events[{idx}].alarmData.reductionKey is empty"
             )));
         }
-        if !matches!(self.alarm_type, 1 | 2) {
+        if !matches!(self.alarm_type, 1 | 2 | 3) {
             return Err(Error::Config(format!(
-                "spec.events[{idx}].alarmData.alarmType must be 1 (problem) or 2 (resolution); got {}",
+                "spec.events[{idx}].alarmData.alarmType must be 1 (Problem), 2 (Resolution), or 3 (Unresolvable); got {}",
                 self.alarm_type
             )));
         }
@@ -458,10 +511,58 @@ impl MaskDef {
             }
         }
         for (j, vb) in self.varbinds.iter().enumerate() {
-            if vb.vbnumber <= 0 {
+            match (&vb.vbnumber, &vb.vboid) {
+                (None, None) => {
+                    return Err(Error::Config(format!(
+                        "spec.events[{idx}].mask.varbinds[{j}] declares neither 'vbnumber' nor 'vboid'; exactly one is required"
+                    )));
+                }
+                (Some(_), Some(_)) => {
+                    return Err(Error::Config(format!(
+                        "spec.events[{idx}].mask.varbinds[{j}] declares both 'vbnumber' and 'vboid'; they are mutually exclusive"
+                    )));
+                }
+                (Some(n), None) => {
+                    if *n <= 0 {
+                        return Err(Error::Config(format!(
+                            "spec.events[{idx}].mask.varbinds[{j}].vbnumber must be positive; got {n}"
+                        )));
+                    }
+                }
+                (None, Some(oid)) => {
+                    if oid.trim().is_empty() {
+                        return Err(Error::Config(format!(
+                            "spec.events[{idx}].mask.varbinds[{j}].vboid is empty or whitespace-only"
+                        )));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl VarbindsdecodeDef {
+    fn validate(&self, event_idx: usize, group_idx: usize) -> Result<()> {
+        if self.parmid.trim().is_empty() {
+            return Err(Error::Config(format!(
+                "spec.events[{event_idx}].varbindsdecode[{group_idx}].parmid is empty or whitespace-only"
+            )));
+        }
+        if self.decode.is_empty() {
+            return Err(Error::Config(format!(
+                "spec.events[{event_idx}].varbindsdecode[{group_idx}].decode is empty; declare at least one decode entry or remove the group"
+            )));
+        }
+        for (k, d) in self.decode.iter().enumerate() {
+            if d.value.is_empty() {
                 return Err(Error::Config(format!(
-                    "spec.events[{idx}].mask.varbinds[{j}].vbnumber must be positive; got {}",
-                    vb.vbnumber
+                    "spec.events[{event_idx}].varbindsdecode[{group_idx}].decode[{k}].value is empty"
+                )));
+            }
+            if d.label.is_empty() {
+                return Err(Error::Config(format!(
+                    "spec.events[{event_idx}].varbindsdecode[{group_idx}].decode[{k}].label is empty"
                 )));
             }
         }
@@ -624,7 +725,69 @@ spec:
 "#;
         let err = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap_err();
         match err {
-            Error::Config(m) => assert!(m.contains("alarmType must be 1") || m.contains("got 7")),
+            Error::Config(m) => {
+                assert!(m.contains("got 7"));
+                // Error message must enumerate all three valid semantics so
+                // the operator knows the full accepted set.
+                assert!(m.contains("Problem"));
+                assert!(m.contains("Resolution"));
+                assert!(m.contains("Unresolvable"));
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn accepts_alarm_type_3_unresolvable() {
+        // alarm-type=3 is "Unresolvable" — a Problem-class event the device
+        // never sends a matching Resolution for. Common in vendor MIBs
+        // (hardware-failure traps). 75 of 454 events in Cisco.events.xml
+        // use this value.
+        let yaml = r#"
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: cisco.foo
+spec:
+  events:
+    - uei: uei.opennms.org/test
+      label: "Test"
+      severity: Minor
+      alarmData:
+        reductionKey: "%uei%:%nodeid%"
+        alarmType: 3
+"#;
+        let local = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap();
+        let alarm = local.spec.events[0].alarm_data.as_ref().unwrap();
+        assert_eq!(alarm.alarm_type, 3);
+    }
+
+    #[test]
+    fn rejects_alarm_type_4_with_message_listing_all_valid_values() {
+        // Hard-reject anything outside {1, 2, 3} in v0.1. If OpenNMS adds
+        // alarm type 4 in the future, a follow-up change can widen the set.
+        let yaml = r#"
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: cisco.foo
+spec:
+  events:
+    - uei: uei.opennms.org/test
+      label: "Test"
+      severity: Warning
+      alarmData:
+        reductionKey: "key"
+        alarmType: 4
+"#;
+        let err = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap_err();
+        match err {
+            Error::Config(m) => {
+                assert!(m.contains("got 4"));
+                assert!(m.contains("Problem"));
+                assert!(m.contains("Resolution"));
+                assert!(m.contains("Unresolvable"));
+            }
             other => panic!("unexpected {other:?}"),
         }
     }
@@ -805,6 +968,24 @@ spec:
                 let m = e.mask.as_ref().unwrap();
                 assert!(!m.elements.is_empty(), "full.yaml: mask.elements non-empty");
                 assert!(!m.varbinds.is_empty(), "full.yaml: mask.varbinds non-empty");
+                // Both vbnumber-style and vboid-style varbinds must
+                // appear so the fixture exercises both mask discriminators.
+                assert!(
+                    m.varbinds.iter().any(|v| v.vbnumber.is_some()),
+                    "full.yaml: at least one vbnumber-style varbind"
+                );
+                assert!(
+                    m.varbinds.iter().any(|v| v.vboid.is_some()),
+                    "full.yaml: at least one vboid-style varbind"
+                );
+                assert!(
+                    e.varbindsdecode.is_some(),
+                    "full.yaml: varbindsdecode must populate"
+                );
+                assert!(
+                    !e.varbindsdecode.as_ref().unwrap().is_empty(),
+                    "full.yaml: varbindsdecode non-empty"
+                );
             }),
             ("severities.yaml", |l| {
                 assert_eq!(l.spec.events.len(), 7, "severities.yaml: 7 levels");
@@ -836,6 +1017,325 @@ spec:
             let local = EventSourceLocal::from_yaml(&bytes)
                 .unwrap_or_else(|e| panic!("parse {}: {e}", path.display()));
             asserter(&local);
+        }
+    }
+
+    // -- vboid / varbindsdecode (new in this change) ----------------------
+
+    #[test]
+    fn mask_varbind_with_vboid_only_is_accepted() {
+        let yaml = r#"
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: cisco.foo
+spec:
+  events:
+    - uei: uei.opennms.org/test
+      label: "Test"
+      severity: Warning
+      mask:
+        varbinds:
+          - vboid: ".1.3.6.1.4.1.61509.1.2.0"
+            values: ["0"]
+"#;
+        let local = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap();
+        let vb = &local.spec.events[0].mask.as_ref().unwrap().varbinds[0];
+        assert_eq!(vb.vboid.as_deref(), Some(".1.3.6.1.4.1.61509.1.2.0"));
+        assert!(vb.vbnumber.is_none());
+    }
+
+    #[test]
+    fn mask_varbind_with_vbnumber_only_still_works() {
+        let yaml = r#"
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: cisco.foo
+spec:
+  events:
+    - uei: uei.opennms.org/test
+      label: "Test"
+      severity: Warning
+      mask:
+        varbinds:
+          - vbnumber: 1
+            values: ["0"]
+"#;
+        let local = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap();
+        let vb = &local.spec.events[0].mask.as_ref().unwrap().varbinds[0];
+        assert_eq!(vb.vbnumber, Some(1));
+        assert!(vb.vboid.is_none());
+    }
+
+    #[test]
+    fn mask_varbind_with_neither_vbnumber_nor_vboid_is_rejected() {
+        let yaml = r#"
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: cisco.foo
+spec:
+  events:
+    - uei: uei.opennms.org/test
+      label: "Test"
+      severity: Warning
+      mask:
+        varbinds:
+          - values: ["0"]
+"#;
+        let err = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap_err();
+        match err {
+            Error::Config(m) => {
+                assert!(m.contains("mask.varbinds[0]"));
+                assert!(m.contains("vbnumber") && m.contains("vboid"));
+                assert!(m.contains("neither") || m.contains("exactly one"));
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn mask_varbind_with_both_vbnumber_and_vboid_is_rejected() {
+        let yaml = r#"
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: cisco.foo
+spec:
+  events:
+    - uei: uei.opennms.org/test
+      label: "Test"
+      severity: Warning
+      mask:
+        varbinds:
+          - vbnumber: 1
+            vboid: ".1.3.6.1.4.1.61509.1.2.0"
+            values: ["0"]
+"#;
+        let err = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap_err();
+        match err {
+            Error::Config(m) => {
+                assert!(m.contains("mask.varbinds[0]"));
+                assert!(m.contains("mutually exclusive") || m.contains("both"));
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn mask_can_mix_vbnumber_and_vboid_across_entries() {
+        // The mutex applies WITHIN each entry, not across the list. A mask
+        // may declare some varbinds by position and others by OID.
+        let yaml = r#"
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: cisco.foo
+spec:
+  events:
+    - uei: uei.opennms.org/test
+      label: "Test"
+      severity: Warning
+      mask:
+        varbinds:
+          - vbnumber: 1
+            values: ["0"]
+          - vboid: ".1.3.6.1.4.1.61509.1.3.0"
+            values: ["xyz"]
+"#;
+        let local = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap();
+        let varbinds = &local.spec.events[0].mask.as_ref().unwrap().varbinds;
+        assert_eq!(varbinds.len(), 2);
+        assert_eq!(varbinds[0].vbnumber, Some(1));
+        assert!(varbinds[0].vboid.is_none());
+        assert!(varbinds[1].vbnumber.is_none());
+        assert_eq!(
+            varbinds[1].vboid.as_deref(),
+            Some(".1.3.6.1.4.1.61509.1.3.0")
+        );
+    }
+
+    #[test]
+    fn varbindsdecode_single_group_is_accepted() {
+        let yaml = r#"
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: cisco.foo
+spec:
+  events:
+    - uei: uei.opennms.org/test
+      label: "Test"
+      severity: Normal
+      varbindsdecode:
+        - parmid: "1"
+          decode:
+            - value: "0"
+              label: "success(0)"
+            - value: "1"
+              label: "failed(1)"
+"#;
+        let local = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap();
+        let vd = local.spec.events[0]
+            .varbindsdecode
+            .as_ref()
+            .expect("varbindsdecode populates");
+        assert_eq!(vd.len(), 1);
+        assert_eq!(vd[0].parmid, "1");
+        assert_eq!(vd[0].decode.len(), 2);
+        assert_eq!(vd[0].decode[0].value, "0");
+        assert_eq!(vd[0].decode[0].label, "success(0)");
+    }
+
+    #[test]
+    fn varbindsdecode_multiple_groups_preserved_in_order() {
+        let yaml = r#"
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: cisco.foo
+spec:
+  events:
+    - uei: uei.opennms.org/test
+      label: "Test"
+      severity: Normal
+      varbindsdecode:
+        - parmid: "1"
+          decode: [{value: "a", label: "A"}]
+        - parmid: "2"
+          decode: [{value: "b", label: "B"}]
+"#;
+        let local = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap();
+        let vd = local.spec.events[0].varbindsdecode.as_ref().unwrap();
+        assert_eq!(vd.len(), 2);
+        assert_eq!(vd[0].parmid, "1");
+        assert_eq!(vd[1].parmid, "2");
+    }
+
+    #[test]
+    fn varbindsdecode_empty_decode_list_is_rejected() {
+        let yaml = r#"
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: cisco.foo
+spec:
+  events:
+    - uei: uei.opennms.org/test
+      label: "Test"
+      severity: Normal
+      varbindsdecode:
+        - parmid: "1"
+          decode: []
+"#;
+        let err = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap_err();
+        match err {
+            Error::Config(m) => {
+                assert!(m.contains("varbindsdecode[0].decode is empty"));
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn varbindsdecode_empty_value_or_label_is_rejected() {
+        for (yaml_snippet, expected_path) in [
+            (
+                r#"varbindsdecode:
+        - parmid: "1"
+          decode:
+            - value: ""
+              label: "x""#,
+                "varbindsdecode[0].decode[0].value",
+            ),
+            (
+                r#"varbindsdecode:
+        - parmid: "1"
+          decode:
+            - value: "x"
+              label: """#,
+                "varbindsdecode[0].decode[0].label",
+            ),
+        ] {
+            let yaml = format!(
+                r#"
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: cisco.foo
+spec:
+  events:
+    - uei: uei.opennms.org/test
+      label: "Test"
+      severity: Normal
+      {yaml_snippet}
+"#
+            );
+            let err = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap_err();
+            match err {
+                Error::Config(m) => assert!(
+                    m.contains(expected_path),
+                    "expected path '{expected_path}' in msg: {m}"
+                ),
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn varbindsdecode_empty_parmid_is_rejected() {
+        let yaml = r#"
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: cisco.foo
+spec:
+  events:
+    - uei: uei.opennms.org/test
+      label: "Test"
+      severity: Normal
+      varbindsdecode:
+        - parmid: "   "
+          decode: [{value: "x", label: "X"}]
+"#;
+        let err = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap_err();
+        match err {
+            Error::Config(m) => {
+                assert!(m.contains("varbindsdecode[0].parmid"));
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn varbindsdecode_duplicate_parmid_is_rejected() {
+        // D6: duplicate parmids within a single event produce ambiguous
+        // server-side behavior; rejected at parse time.
+        let yaml = r#"
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: cisco.foo
+spec:
+  events:
+    - uei: uei.opennms.org/test
+      label: "Test"
+      severity: Normal
+      varbindsdecode:
+        - parmid: "1"
+          decode: [{value: "a", label: "A"}]
+        - parmid: "1"
+          decode: [{value: "b", label: "B"}]
+"#;
+        let err = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap_err();
+        match err {
+            Error::Config(m) => {
+                assert!(m.contains("varbindsdecode"));
+                assert!(m.contains("parmid='1'"));
+                assert!(m.contains("unique"));
+            }
+            other => panic!("unexpected {other:?}"),
         }
     }
 }

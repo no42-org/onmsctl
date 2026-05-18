@@ -22,6 +22,7 @@ pub mod target;
 pub use target::{EventSourceRemote, EventSourceTarget};
 
 pub use local::{
-    AlarmDataDef, AutoackDef, CorrelationDef, EventDef, EventSourceLocal, EventSourceSpec,
-    LogmsgDef, MaskDef, MaskElementDef, MaskVarbindDef, Metadata, TticketDef,
+    AlarmDataDef, AutoackDef, CorrelationDef, DecodeDef, EventDef, EventSourceLocal,
+    EventSourceSpec, LogmsgDef, MaskDef, MaskElementDef, MaskVarbindDef, Metadata, TticketDef,
+    VarbindsdecodeDef,
 };
