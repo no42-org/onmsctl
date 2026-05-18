@@ -1,0 +1,44 @@
+EC008 — Invalid metadata.name
+
+Rule
+----
+The `metadata.name` field on an EventSource YAML document MUST contain
+only ASCII letters, digits, `.`, `-`, and `_`. The validator rejects
+spaces, slashes, leading dots, and other characters that could break
+the upload pipeline's basename derivation.
+
+The converter derives `metadata.name` from the input filename's
+basename (stripping `.events.xml` or `.xml` suffix). When the derived
+name contains invalid characters, the conversion blocks with EC008.
+
+Why
+---
+The metadata.name doubles as the upload filename's basename. The
+Horizon upload pipeline reads the basename via
+`Content-Disposition: filename=...` and uses it to key the source
+identity. Spaces, slashes, and other special characters in the
+basename produce inconsistent server-side behavior.
+
+How to fix
+----------
+1. RENAME THE FILE — most often the input filename contains spaces or
+   other characters that flow through to the derived name:
+
+       "Cisco Foo Traps.xml"   →   cisco.foo.traps.xml
+       "vendor-MIB outputs.xml" → vendor.mib.outputs.xml
+
+2. OVERRIDE — pass `--name <override>` to set the metadata.name
+   explicitly without renaming the input file:
+
+       onmsctl source convert "Cisco Foo.xml" --name cisco.foo
+
+3. STDIN — when reading from stdin, `--name` is REQUIRED because there
+   is no filename to derive from.
+
+Note on the vendor-prefix requirement: the local-schema's full validator
+requires at least one `.` in `metadata.name` (so the prefix before the
+first dot becomes the server-derived vendor). The converter's own
+EC008 check is structural-only and does NOT enforce this — a name like
+`cisco` passes EC008 but will be rejected by the post-conversion
+validator as EC009 with a clear "must contain at least one '.'"
+message. Both pathways guide the operator to the same fix.

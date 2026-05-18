@@ -1,0 +1,57 @@
+EC009 — Post-conversion validation failed
+
+Rule
+----
+After the converter's own findings run, the assembled local document is
+passed through `EventSourceLocal::validate` as a final safety net. Any
+rule the validator enforces that the converter did NOT already surface
+as EC001-EC008 produces an EC009 finding here.
+
+Why
+---
+The local-schema validator is the authoritative source of truth for
+EventSource YAML rules — it's what `onmsctl source apply` runs before
+contacting the server. The converter's own findings (EC001-EC008)
+cover the rules a migration tool can usefully cite at the source-XML
+level with line numbers. But schema rules can be added to the validator
+without the converter knowing — and a converted YAML must pass `apply`
+to be useful.
+
+EC009 catches drift between converter findings and validator rules.
+When it fires, one of two things is true:
+
+  1. The converter has a gap — a rule was added to the validator that
+     the converter should have surfaced earlier (with location info)
+     but didn't. File a converter bug.
+
+  2. The input XML contains a rule violation that the converter
+     can't reasonably cite at the source-XML level (e.g. a global
+     property of the assembled document). The validator's error
+     message names the offending field path.
+
+How to fix
+----------
+1. READ THE VALIDATOR MESSAGE — it appears as `Validator: <text>` in the
+   text report and as `validator_error` in the JSON envelope. The text
+   names the offending field by its YAML path (e.g.
+   `spec.events[3].mask.varbinds[0]`).
+
+2. If the message points to an event-level issue, locate that event in
+   the source XML and correct it.
+
+3. If the message points to a source-level issue (metadata.name,
+   apiVersion, etc.), edit the source filename or pass `--name` to
+   override the derived name.
+
+4. If the rule cited surprises you (you're reading the validator
+   source code and disagree), file an issue — either the validator
+   over-constrains, or the converter should have surfaced this earlier
+   with a dedicated EC code.
+
+Background
+----------
+This safety net was added in the 2026-05-18 review (design D1
+amendment) to prevent silent drift between the converter and the
+authoritative validator as the schema evolves. See
+openspec/changes/source-convert-with-migration-report/design.md
+for the full rationale.

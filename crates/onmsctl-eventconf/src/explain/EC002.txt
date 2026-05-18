@@ -1,0 +1,37 @@
+EC002 — Source has zero events
+
+Rule
+----
+A converted EventSource YAML document MUST contain at least one event.
+The local-schema validator rejects empty `spec.events:` lists.
+
+Why
+---
+An EventSource with no events is operationally meaningless — it
+represents a source that defines no traps, has no detection logic,
+and produces no UEIs. Such a document cannot be applied via
+`onmsctl source apply` (which validates non-empty events) and serves
+no purpose in version control.
+
+When this finding fires, the most likely causes are:
+  - The input XML is malformed (well-formed XML but no <event> children
+    under <events>)
+  - The input XML uses an unexpected root element or namespace
+  - The input file is a master `eventconf.xml` listing <event-file>
+    references rather than actual events (see EC003)
+
+How to fix
+----------
+1. Inspect the XML structure. Confirm that <event> children appear
+   directly under the <events> root.
+
+2. Verify the namespace declaration on <events>:
+       xmlns="http://xmlns.opennms.org/xsd/eventconf"
+
+3. If the file is intentionally empty (e.g. a placeholder), delete it
+   rather than committing an empty EventSource.
+
+4. If the file is a master `eventconf.xml`, it should not be converted
+   as a source — its <event-file> entries reference other files. The
+   converter does not currently support master-file conversion (tracked
+   as deferred work under `kind: EventConfMaster`).

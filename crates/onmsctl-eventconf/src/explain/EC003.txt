@@ -1,0 +1,37 @@
+EC003 — Reserved metadata name
+
+Rule
+----
+The derived `metadata.name` MUST NOT be one of the values reserved by
+OpenNMS:
+
+  - `eventconf` — name of the master file listing event-file entries
+  - `opennms.catch-all.events` — pinned at fileOrder=1 by the server
+
+The local-schema validator rejects EventSource documents with these
+names; the upload pipeline would also produce unpredictable behavior.
+
+Why
+---
+The Horizon `/eventconf/upload` endpoint treats an upload with basename
+`eventconf` as the master file. Sources persisted with that name would
+overwrite the master and break the runtime's event-file ordering.
+
+`opennms.catch-all.events` is the built-in catch-all source pinned at
+fileOrder=1 (always searched last). Replacing it would silently disable
+the catch-all behavior for unmatched events.
+
+The converter rejects these names at input time so operators learn the
+constraint before applying.
+
+How to fix
+----------
+1. Choose a non-reserved filename for the input. Rename the file before
+   converting, or pass `--name <override>` to set the metadata.name
+   explicitly:
+
+       onmsctl source convert eventconf.xml --name vendor.x.events
+
+2. If the input is genuinely a master eventconf.xml file, do not convert
+   it as a source. See EC002 for the relevant note about master-file
+   handling.

@@ -1,0 +1,43 @@
+EC007 — alarm-type out of accepted range
+
+Rule
+----
+The v0.1 local schema accepts `alarmType` values 1, 2, and 3:
+
+  - 1  Problem      — raises an alarm, paired with a Resolution event
+  - 2  Resolution   — clears a paired Problem alarm by reductionKey
+  - 3  Unresolvable — fire-and-forget Problem with no auto-clear from
+                      the device; requires manual close or an alarmd
+                      cleanup policy
+
+Values ≥ 4 trigger EC007 as a forward-compatibility warning. The
+converter writes the YAML with the value preserved, but
+`onmsctl source apply` will then reject the document at validation
+time.
+
+This is a WARNING — the YAML is written, but applying it will fail
+until either the source value is corrected or the local schema
+widens to accept the new value.
+
+Why
+---
+OpenNMS may add new alarm types in future releases. The converter
+treats unknown values as forward-compat warnings rather than blocking
+errors so operators see them without losing the source data.
+
+The hard rejection happens at the `apply` step, not at conversion,
+because the converter's job is to faithfully translate XML to YAML —
+not to gate-keep against new server-side behavior.
+
+How to fix
+----------
+1. CONFIRM THE VALUE — check the source XML for the cited event. Is
+   the value (e.g. `alarm-type="4"`) intentional, or a typo?
+
+2. INTENTIONAL — file a schema-widening change. New alarm types require
+   a small OpenSpec change to widen `AlarmDataDef::validate` and update
+   the JSON Schema documentation. See `accept-alarm-type-3-unresolvable`
+   for the pattern.
+
+3. TYPO — fix the source XML. Values 1, 2, 3 cover the documented
+   semantic space (Problem / Resolution / Unresolvable).
