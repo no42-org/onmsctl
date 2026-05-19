@@ -545,8 +545,7 @@ fn run_convert(args: ConvertCli) -> Result<i32> {
                 return Ok(0);
             }
             None => {
-                let codes: Vec<&str> =
-                    FindingCode::all().iter().map(|c| c.as_str()).collect();
+                let codes: Vec<&str> = FindingCode::all().iter().map(|c| c.as_str()).collect();
                 eprintln!("error: unknown explain code '{code_str}'");
                 eprintln!("available codes: {}", codes.join(", "));
                 return Ok(3);
@@ -608,7 +607,11 @@ fn run_convert(args: ConvertCli) -> Result<i32> {
             }
         };
         let opts = ConvertOpts {
-            name_override: if single_input { args.name.clone() } else { None },
+            name_override: if single_input {
+                args.name.clone()
+            } else {
+                None
+            },
         };
         let mut result = convert::convert(&xml_bytes, input, &opts);
         let written_path = emit_convert_result(
@@ -659,8 +662,7 @@ fn read_input_bytes(path: &Path, max_bytes: u64) -> Result<Vec<u8>> {
                 path.display()
             )));
         }
-        std::fs::read(path)
-            .map_err(|e| Error::Config(format!("read {}: {e}", path.display())))
+        std::fs::read(path).map_err(|e| Error::Config(format!("read {}: {e}", path.display())))
     }
 }
 
@@ -683,10 +685,7 @@ fn parse_byte_size(s: &str) -> std::result::Result<u64, String> {
     } else {
         (s, 1)
     };
-    let n: u64 = num_str
-        .trim()
-        .parse()
-        .map_err(|e| format!("'{s}': {e}"))?;
+    let n: u64 = num_str.trim().parse().map_err(|e| format!("'{s}': {e}"))?;
     n.checked_mul(mult)
         .ok_or_else(|| format!("'{s}': value overflows u64"))
 }

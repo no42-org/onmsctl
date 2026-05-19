@@ -486,7 +486,7 @@ impl AlarmDataDef {
                 "spec.events[{idx}].alarmData.reductionKey is empty"
             )));
         }
-        if !matches!(self.alarm_type, 1 | 2 | 3) {
+        if !matches!(self.alarm_type, 1..=3) {
             return Err(Error::Config(format!(
                 "spec.events[{idx}].alarmData.alarmType must be 1 (Problem), 2 (Resolution), or 3 (Unresolvable); got {}",
                 self.alarm_type

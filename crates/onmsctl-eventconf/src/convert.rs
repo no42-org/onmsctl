@@ -23,9 +23,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::apply::from_wire::WireToLocalError;
-use crate::apply::local::{
-    EventDef, EventSourceLocal, EventSourceSpec, Metadata,
-};
+use crate::apply::local::{EventDef, EventSourceLocal, EventSourceSpec, Metadata};
 use crate::xml::{SourceLocation, parse_events_with_locations};
 
 /// Canonical OpenNMS severity set. Used for the EC005 case-normalization
@@ -408,9 +406,7 @@ pub fn convert(xml: &[u8], source_path: &Path, opts: &ConvertOpts) -> Conversion
             findings.push(Finding {
                 code: FindingCode::Ec005,
                 severity: Severity::Warning,
-                message: format!(
-                    "severity '{sev}' normalized to canonical case '{canonical}'"
-                ),
+                message: format!("severity '{sev}' normalized to canonical case '{canonical}'"),
                 details: FindingDetails::SeverityNormalized {
                     before: sev.clone(),
                     after: canonical.to_string(),
@@ -430,14 +426,12 @@ pub fn convert(xml: &[u8], source_path: &Path, opts: &ConvertOpts) -> Conversion
         // EC007: alarm-type outside accepted set {1, 2, 3}
         if let Some(alarm) = &local_wire.alarm_data
             && let Some(t) = alarm.alarm_type
-            && !matches!(t, 1 | 2 | 3)
+            && !matches!(t, 1..=3)
         {
             findings.push(Finding {
                 code: FindingCode::Ec007,
                 severity: Severity::Warning,
-                message: format!(
-                    "alarm-type {t} is outside the accepted set {{1, 2, 3}}"
-                ),
+                message: format!("alarm-type {t} is outside the accepted set {{1, 2, 3}}"),
                 details: FindingDetails::AlarmTypeOutOfRange {
                     value: t,
                     location: location.clone(),
@@ -621,7 +615,9 @@ fn validate_name(name: &str) -> Result<String, NameResolutionFailure> {
         return Err(NameResolutionFailure::Invalid {
             derived_name: name.to_string(),
             offending_chars: vec!['.'],
-            reason: Some(format!("name is {trimmed:?}, which is reserved by the filesystem")),
+            reason: Some(format!(
+                "name is {trimmed:?}, which is reserved by the filesystem"
+            )),
         });
     }
     if trimmed.starts_with('.') {
@@ -795,8 +791,7 @@ fn render_finding_details(out: &mut String, d: &FindingDetails) {
         } => {
             out.push_str(&format!("    Derived: {derived_name}\n"));
             if !offending_chars.is_empty() {
-                let chars: Vec<String> =
-                    offending_chars.iter().map(|c| format!("'{c}'")).collect();
+                let chars: Vec<String> = offending_chars.iter().map(|c| format!("'{c}'")).collect();
                 out.push_str(&format!("    Invalid chars: {}\n", chars.join(", ")));
             }
             if let Some(r) = reason {
@@ -838,7 +833,10 @@ mod tests {
     fn clean_input_produces_yaml_and_exit_0() {
         let opts = ConvertOpts::default();
         let result = convert(MINIMAL_XML, Path::new("/tmp/foo.test.events.xml"), &opts);
-        assert!(result.yaml.is_some(), "YAML must be emitted for clean input");
+        assert!(
+            result.yaml.is_some(),
+            "YAML must be emitted for clean input"
+        );
         assert!(result.findings.is_empty(), "no findings expected");
         assert_eq!(result.exit_code(), 0);
         assert_eq!(result.metrics.events_scanned, 1);
@@ -859,7 +857,11 @@ mod tests {
         // the vendor derivation tolerates undotted names (matching
         // Horizon's server-side `StringUtils.substringBefore`, which
         // returns the whole name when no '.' is present).
-        let result = convert(MINIMAL_XML, Path::new("/tmp/test.xml"), &ConvertOpts::default());
+        let result = convert(
+            MINIMAL_XML,
+            Path::new("/tmp/test.xml"),
+            &ConvertOpts::default(),
+        );
         assert!(result.yaml.is_some(), "undotted name must convert cleanly");
         assert!(result.findings.is_empty(), "no findings for undotted name");
         assert_eq!(result.exit_code(), 0);
@@ -872,7 +874,10 @@ mod tests {
         // finding. See archived `permit-duplicate-ueis-as-normalization-pattern`.
         let opts = ConvertOpts::default();
         let result = convert(DUPLICATE_UEI_XML, Path::new("/tmp/foo.test.xml"), &opts);
-        assert!(result.yaml.is_some(), "YAML must be emitted; duplicates are first-class");
+        assert!(
+            result.yaml.is_some(),
+            "YAML must be emitted; duplicates are first-class"
+        );
         assert!(result.findings.is_empty(), "no finding for shared UEIs");
         assert_eq!(result.exit_code(), 0);
         let yaml = result.yaml.unwrap();
@@ -905,12 +910,7 @@ mod tests {
 </events>"#;
         let result = convert(xml, Path::new("/tmp/foo.test.xml"), &ConvertOpts::default());
         assert!(result.yaml.is_none());
-        assert!(
-            result
-                .findings
-                .iter()
-                .any(|f| f.code == FindingCode::Ec004)
-        );
+        assert!(result.findings.iter().any(|f| f.code == FindingCode::Ec004));
     }
 
     #[test]
@@ -951,17 +951,11 @@ mod tests {
 </events>"#;
         let result = convert(xml, Path::new("/tmp/foo.test.xml"), &ConvertOpts::default());
         assert!(
-            result
-                .findings
-                .iter()
-                .any(|f| f.code == FindingCode::Ec007),
+            result.findings.iter().any(|f| f.code == FindingCode::Ec007),
             "EC007 emitted"
         );
         assert!(
-            result
-                .findings
-                .iter()
-                .any(|f| f.code == FindingCode::Ec009),
+            result.findings.iter().any(|f| f.code == FindingCode::Ec009),
             "EC009 emitted by post-validate"
         );
         assert!(result.yaml.is_none(), "EC009 blocks YAML emission");
@@ -987,7 +981,6 @@ mod tests {
             Path::new("/tmp/has spaces.xml"),
             &ConvertOpts {
                 name_override: Some("clean.name".into()),
-                ..ConvertOpts::default()
             },
         );
         let yaml = result.yaml.expect("YAML emitted");
@@ -1008,7 +1001,6 @@ mod tests {
             Path::new("-"),
             &ConvertOpts {
                 name_override: Some("from.stdin".into()),
-                ..ConvertOpts::default()
             },
         );
         let yaml = result.yaml.expect("YAML emitted from stdin");
@@ -1041,7 +1033,11 @@ mod tests {
 
     #[test]
     fn render_report_text_clean_run_lists_no_findings() {
-        let result = convert(MINIMAL_XML, Path::new("/tmp/foo.bar.xml"), &ConvertOpts::default());
+        let result = convert(
+            MINIMAL_XML,
+            Path::new("/tmp/foo.bar.xml"),
+            &ConvertOpts::default(),
+        );
         let report = render_report_text(&result);
         assert!(report.contains("no findings"));
         assert!(report.contains("Exit: 0"));
@@ -1098,13 +1094,21 @@ mod tests {
   </event>
 </events>"#;
 
-        let r_clean = convert(CLEAN, Path::new("/tmp/a.foo.events.xml"), &ConvertOpts::default());
+        let r_clean = convert(
+            CLEAN,
+            Path::new("/tmp/a.foo.events.xml"),
+            &ConvertOpts::default(),
+        );
         assert_eq!(r_clean.exit_code(), 0);
         assert!(r_clean.yaml.is_some());
 
         // Duplicate UEIs are first-class (normalization pattern) — the
         // converter passes them through cleanly.
-        let r_dup = convert(DUP_UEI, Path::new("/tmp/b.foo.events.xml"), &ConvertOpts::default());
+        let r_dup = convert(
+            DUP_UEI,
+            Path::new("/tmp/b.foo.events.xml"),
+            &ConvertOpts::default(),
+        );
         assert_eq!(r_dup.exit_code(), 0);
         assert!(r_dup.yaml.is_some());
         assert!(r_dup.findings.is_empty());
@@ -1125,11 +1129,15 @@ mod tests {
 
         // Batch dispatcher behavior: max(0, 0, 2) = 2  (clean + dup-UEI now
         // both exit 0; the missing-UEI blocker drives the worst-case to 2).
-        let worst = [r_clean.exit_code(), r_dup.exit_code(), r_missing.exit_code()]
-            .iter()
-            .max()
-            .copied()
-            .unwrap_or(0);
+        let worst = [
+            r_clean.exit_code(),
+            r_dup.exit_code(),
+            r_missing.exit_code(),
+        ]
+        .iter()
+        .max()
+        .copied()
+        .unwrap_or(0);
         assert_eq!(worst, 2);
     }
 
@@ -1150,7 +1158,11 @@ mod tests {
     <severity>Warning</severity>
   </event>
 </events>"#;
-        let result = convert(xml, Path::new("/tmp/foo.bar.events.xml"), &ConvertOpts::default());
+        let result = convert(
+            xml,
+            Path::new("/tmp/foo.bar.events.xml"),
+            &ConvertOpts::default(),
+        );
         // The conversion still produces YAML (the real <event> parsed
         // fine); only the location metadata is degraded.
         assert!(result.yaml.is_some());
