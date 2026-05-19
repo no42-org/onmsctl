@@ -154,9 +154,21 @@ async fn upload_then_optionally_disable(
     let api = EventConfApi::new(&client);
 
     // Render and upload.
+    //
+    // Horizon's server-side filename → source-name derivation uses
+    // `String.lastIndexOf('.')` to strip the extension — it ONLY removes
+    // the final dot-suffix. Uploading `Cisco.events.xml` results in a
+    // stored source name of `Cisco.events`, not `Cisco`. Upload with a
+    // plain `.xml` suffix so the stored name equals `metadata.name`
+    // exactly. Works for every shape:
+    //
+    //   metadata.name = "Cisco"     → upload "Cisco.xml"     → stored "Cisco"
+    //   metadata.name = "cisco.foo" → upload "cisco.foo.xml" → stored "cisco.foo"
+    //
+    // (Horizon's `stripPathAndExtension` in EventConfRestService.java.)
     let wire_events: Vec<Event> = local.spec.events.iter().map(Event::from).collect();
     let xml = render_eventconf_xml(&wire_events)?;
-    let filename = format!("{}.events.xml", local.metadata.name);
+    let filename = format!("{}.xml", local.metadata.name);
     let parts = vec![MultipartPart::xml(filename, xml.into_bytes())];
     let _ = api.upload(&parts).await?;
 
