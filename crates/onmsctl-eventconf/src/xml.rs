@@ -22,12 +22,15 @@
 
 use onmsctl_core::{Error, Result};
 use quick_xml::de::from_str;
+use quick_xml::events::Event as XmlEvt;
+use quick_xml::reader::Reader;
 use quick_xml::se::to_string as xml_to_string;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 use crate::dto::{
-    AlarmData, Autoacknowledge, Correlation, Decode, Event, Logmsg, Mask, MaskElement, MaskVarbind,
-    Snmp, Tticket, Varbindsdecode,
+    AlarmData, Autoacknowledge, Correlation, Decode, Event, Filter, Forward, Logmsg, Mask,
+    MaskElement, MaskVarbind, Parameter, Script, Snmp, Tticket, Varbindsdecode,
 };
 
 /// Render a slice of [`Event`]s as an eventconf XML `<events>` document.
@@ -159,6 +162,172 @@ pub(crate) fn byte_offset_to_line_col(input: &[u8], offset: usize) -> (usize, us
     (line, column)
 }
 
+/// Direct-child element names under `<event>` whose content is preserved
+/// all the way through the `source convert` pipeline into the emitted
+/// YAML. Anything under `<event>` that is NOT in this list is
+/// "unmodeled" — `convert.rs` emits an `EC001` warning for each event
+/// that contains such elements.
+///
+/// MUST be a SUBSET of `XmlEvent`'s serde field names. The XML schema
+/// (`XmlEvent`) may model elements that the local YAML schema
+/// (`EventDef`) does not — `<snmp>` is the canonical example pre-
+/// `event-source-snmp`: the XML round-trip carries it through
+/// `source upload`, but `source convert` drops the content at the
+/// `EventDef::try_from(&Event)` boundary. Such elements stay OUT of
+/// this allowlist until the corresponding `event-source-*` change
+/// also models them in `EventDef`.
+///
+/// The unit test `modeled_event_children_subset_of_xml_event_fields`
+/// enforces the subset invariant via runtime introspection of
+/// `XmlEvent`'s derived `Deserialize`.
+pub(crate) const MODELED_EVENT_CHILDREN: &[&str] = &[
+    "mask",
+    "uei",
+    "event-label",
+    "descr",
+    "logmsg",
+    "severity",
+    "correlation",
+    "operinstruct",
+    "autoacknowledge",
+    "tticket",
+    "varbindsdecode",
+    "mouseovertext",
+    "alarm-data",
+    "snmp",
+    "parameter",
+    "forward",
+    "script",
+    "filters",
+];
+
+/// One scan result per `<event>` in a parsed eventconf XML, recording the
+/// distinct direct-child element names in document order.
+#[derive(Debug, Clone)]
+pub(crate) struct EventDirectChildScan {
+    /// Byte offset of the `<event>` opening tag start (the `<` byte).
+    pub offset: usize,
+    /// 0-based event index in document order.
+    pub event_index: usize,
+    /// Distinct direct-child element names in document order. First-seen
+    /// order preserved; duplicates dropped (so three `<parameter>`
+    /// siblings count as one entry).
+    pub direct_children: Vec<String>,
+}
+
+/// Walk the eventconf XML byte stream and, for each `<event>`, collect
+/// the distinct direct-child element names. Used by `EC001` to identify
+/// unmodeled elements that the typed deserializer silently drops.
+///
+/// Two-pass implementation: byte scan via `find_event_start_offsets` for
+/// precise `<event>` opening-tag offsets (used for file:line:column
+/// reporting), plus a quick-xml stream walk for the child names. The two
+/// walks iterate in the same order, so pairing by index is safe.
+pub(crate) fn scan_event_direct_children(xml: &[u8]) -> Result<Vec<EventDirectChildScan>> {
+    let offsets = find_event_start_offsets(xml);
+    let children_per_event = walk_event_direct_children(xml)?;
+    if offsets.len() == children_per_event.len() {
+        // Hot path: byte scanner and walker agree on the number of events.
+        // Pair them up and return offset-rich scans.
+        return Ok(offsets
+            .into_iter()
+            .zip(children_per_event)
+            .enumerate()
+            .map(|(idx, (offset, direct_children))| EventDirectChildScan {
+                offset,
+                event_index: idx,
+                direct_children,
+            })
+            .collect());
+    }
+    // Degraded path: the two scans disagree on count. Typical cause is a
+    // literal `<event>` token inside an XML comment — the byte scanner
+    // counts it; quick-xml correctly skips it. The walker's children list
+    // is authoritative for finding emission; we just lose precise offsets.
+    // Mirror the `parse_events_with_locations` fallback by reporting each
+    // event at offset 0 (which renders as line 1, column 1) — degraded
+    // but never silently misaligned.
+    Ok(children_per_event
+        .into_iter()
+        .enumerate()
+        .map(|(idx, direct_children)| EventDirectChildScan {
+            offset: 0,
+            event_index: idx,
+            direct_children,
+        })
+        .collect())
+}
+
+fn walk_event_direct_children(xml: &[u8]) -> Result<Vec<Vec<String>>> {
+    let mut reader = Reader::from_reader(xml);
+    reader.config_mut().trim_text(true);
+    let mut buf: Vec<u8> = Vec::new();
+    let mut stack: Vec<String> = Vec::new();
+    let mut current: Option<(Vec<String>, HashSet<String>)> = None;
+    let mut all: Vec<Vec<String>> = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(XmlEvt::Start(e)) => {
+                let name = std::str::from_utf8(e.name().as_ref())
+                    .map_err(|err| Error::Config(format!("non-UTF-8 element name: {err}")))?
+                    .to_string();
+                // If <event> was already open and we're seeing its direct
+                // child, record the name before pushing to the stack.
+                if stack.last().map(String::as_str) == Some("event")
+                    && let Some((children, seen)) = current.as_mut()
+                    && seen.insert(name.clone())
+                {
+                    children.push(name.clone());
+                }
+                if name == "event" && current.is_none() {
+                    current = Some((Vec::new(), HashSet::new()));
+                }
+                stack.push(name);
+            }
+            Ok(XmlEvt::Empty(e)) => {
+                let name = std::str::from_utf8(e.name().as_ref())
+                    .map_err(|err| Error::Config(format!("non-UTF-8 element name: {err}")))?
+                    .to_string();
+                // Empty (self-closing) elements have no End event. If the
+                // current stack top is <event>, this is a direct child.
+                if stack.last().map(String::as_str) == Some("event")
+                    && let Some((children, seen)) = current.as_mut()
+                    && seen.insert(name.clone())
+                {
+                    children.push(name);
+                }
+            }
+            Ok(XmlEvt::End(_)) => {
+                let popped = stack.pop();
+                if popped.as_deref() == Some("event")
+                    && let Some((children, _)) = current.take()
+                {
+                    all.push(children);
+                }
+            }
+            Ok(XmlEvt::Eof) => break,
+            Err(e) => {
+                return Err(Error::Config(format!(
+                    "eventconf XML walk error at byte {}: {e}",
+                    reader.buffer_position()
+                )));
+            }
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    // If we hit EOF while still inside an <event>, treat it as if the
+    // event closed (typed parser will surface the malformed-XML error
+    // via its own path; we just don't lose data here).
+    if let Some((children, _)) = current.take() {
+        all.push(children);
+    }
+
+    Ok(all)
+}
+
 /// Synthesize an `eventconf.xml` master file listing source basenames in
 /// the order they should appear. Per design.md §3.1, the upload pipeline
 /// reads `<event-file>` entries in **reversed** iteration order to assign
@@ -251,6 +420,68 @@ struct XmlEvent {
     alarm_data: Option<XmlAlarmData>,
     #[serde(skip_serializing_if = "Option::is_none")]
     snmp: Option<XmlSnmp>,
+    /// Static `<parameter name=".." value=".." expand=".."/>` children.
+    /// Distinct from the runtime `parm_collection` on the wire DTO —
+    /// see [`crate::dto::Event::parameter`].
+    #[serde(default, rename = "parameter", skip_serializing_if = "Vec::is_empty")]
+    parameter: Vec<XmlParameter>,
+    /// `<forward state=".." mechanism="..">target</forward>` children.
+    #[serde(default, rename = "forward", skip_serializing_if = "Vec::is_empty")]
+    forward: Vec<XmlForward>,
+    /// `<script language="..">body</script>` children.
+    #[serde(default, rename = "script", skip_serializing_if = "Vec::is_empty")]
+    script: Vec<XmlScript>,
+    /// `<filters><filter .../></filters>` wrapper. The wrapper exists
+    /// per the upstream JAXB `@XmlElementWrapper`; the YAML flattens
+    /// to a bare `filters: [...]`.
+    #[serde(rename = "filters", skip_serializing_if = "Option::is_none")]
+    filters: Option<XmlFilters>,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct XmlFilters {
+    #[serde(default, rename = "filter", skip_serializing_if = "Vec::is_empty")]
+    filter: Vec<XmlFilter>,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct XmlFilter {
+    #[serde(rename = "@eventparm", skip_serializing_if = "Option::is_none")]
+    eventparm: Option<String>,
+    #[serde(rename = "@pattern", skip_serializing_if = "Option::is_none")]
+    pattern: Option<String>,
+    #[serde(rename = "@replacement", skip_serializing_if = "Option::is_none")]
+    replacement: Option<String>,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct XmlParameter {
+    #[serde(rename = "@name", skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    #[serde(rename = "@value", skip_serializing_if = "Option::is_none")]
+    value: Option<String>,
+    #[serde(rename = "@expand", skip_serializing_if = "Option::is_none")]
+    expand: Option<bool>,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct XmlForward {
+    #[serde(rename = "@state", skip_serializing_if = "Option::is_none")]
+    state: Option<String>,
+    #[serde(rename = "@mechanism", skip_serializing_if = "Option::is_none")]
+    mechanism: Option<String>,
+    /// Body text — the destination identifier (e.g. `alarmcentral:162`).
+    #[serde(rename = "$text", skip_serializing_if = "Option::is_none")]
+    target: Option<String>,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct XmlScript {
+    #[serde(rename = "@language", skip_serializing_if = "Option::is_none")]
+    language: Option<String>,
+    /// Body text — the script source. Preserved byte-for-byte.
+    #[serde(rename = "$text", skip_serializing_if = "Option::is_none")]
+    body: Option<String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -386,6 +617,34 @@ impl From<&Event> for XmlEvent {
             mouseovertext: e.mouseovertext.clone(),
             alarm_data: e.alarm_data.as_ref().map(XmlAlarmData::from),
             snmp: e.snmp.as_ref().map(XmlSnmp::from),
+            parameter: e
+                .parameter
+                .as_ref()
+                .map(|v| v.iter().map(XmlParameter::from).collect())
+                .unwrap_or_default(),
+            forward: e
+                .forward
+                .as_ref()
+                .map(|v| v.iter().map(XmlForward::from).collect())
+                .unwrap_or_default(),
+            script: e
+                .script
+                .as_ref()
+                .map(|v| v.iter().map(XmlScript::from).collect())
+                .unwrap_or_default(),
+            // Empty `filters: []` collapses to None on render — JAXB
+            // rejects an empty `<filters>` wrapper (`@XmlElement
+            // required=true` on the inner list). If the source has no
+            // filters, omit the wrapper entirely.
+            filters: e.filters.as_ref().and_then(|v| {
+                if v.is_empty() {
+                    None
+                } else {
+                    Some(XmlFilters {
+                        filter: v.iter().map(XmlFilter::from).collect(),
+                    })
+                }
+            }),
         }
     }
 }
@@ -416,7 +675,103 @@ impl From<XmlEvent> for Event {
                 )
             },
             snmp: x.snmp.map(Snmp::from),
+            parameter: if x.parameter.is_empty() {
+                None
+            } else {
+                Some(x.parameter.into_iter().map(Parameter::from).collect())
+            },
+            forward: if x.forward.is_empty() {
+                None
+            } else {
+                Some(x.forward.into_iter().map(Forward::from).collect())
+            },
+            script: if x.script.is_empty() {
+                None
+            } else {
+                Some(x.script.into_iter().map(Script::from).collect())
+            },
+            filters: x
+                .filters
+                .map(|wrapper| wrapper.filter.into_iter().map(Filter::from).collect()),
             parm_collection: None,
+        }
+    }
+}
+
+impl From<&Filter> for XmlFilter {
+    fn from(f: &Filter) -> Self {
+        Self {
+            eventparm: f.eventparm.clone(),
+            pattern: f.pattern.clone(),
+            replacement: f.replacement.clone(),
+        }
+    }
+}
+
+impl From<XmlFilter> for Filter {
+    fn from(x: XmlFilter) -> Self {
+        Self {
+            eventparm: x.eventparm,
+            pattern: x.pattern,
+            replacement: x.replacement,
+        }
+    }
+}
+
+impl From<&Forward> for XmlForward {
+    fn from(f: &Forward) -> Self {
+        Self {
+            state: f.state.clone(),
+            mechanism: f.mechanism.clone(),
+            target: f.target.clone(),
+        }
+    }
+}
+
+impl From<XmlForward> for Forward {
+    fn from(x: XmlForward) -> Self {
+        Self {
+            state: x.state,
+            mechanism: x.mechanism,
+            target: x.target,
+        }
+    }
+}
+
+impl From<&Script> for XmlScript {
+    fn from(s: &Script) -> Self {
+        Self {
+            language: s.language.clone(),
+            body: s.body.clone(),
+        }
+    }
+}
+
+impl From<XmlScript> for Script {
+    fn from(x: XmlScript) -> Self {
+        Self {
+            language: x.language,
+            body: x.body,
+        }
+    }
+}
+
+impl From<&Parameter> for XmlParameter {
+    fn from(p: &Parameter) -> Self {
+        Self {
+            name: p.name.clone(),
+            value: p.value.clone(),
+            expand: p.expand,
+        }
+    }
+}
+
+impl From<XmlParameter> for Parameter {
+    fn from(x: XmlParameter) -> Self {
+        Self {
+            name: x.name,
+            value: x.value,
+            expand: x.expand,
         }
     }
 }
@@ -740,22 +1095,142 @@ mod tests {
 
     #[test]
     fn parse_tolerates_unmodeled_elements_by_skipping_them() {
-        // `<forward>`, `<script>`, `<parameter>` are real eventconf elements
+        // `<autoaction>` and `<priority>` are real eventconf elements
         // we don't model yet. Parsing should succeed and produce the
         // modeled subset, silently skipping the unknown ones.
+        // (`<snmp>`, `<parameter>`, `<forward>`, `<script>`, `<filters>`
+        // were all unmodeled in v0.1 but are now modeled via the
+        // event-source-* changes.)
         let xml = r#"<events>
             <event>
                 <uei>uei.opennms.org/test</uei>
                 <severity>Warning</severity>
-                <forward state="off"/>
-                <script language="beanshell">do_thing();</script>
-                <parameter name="foo" value="bar"/>
+                <autoaction state="off">cleanup()</autoaction>
+                <priority>17</priority>
             </event>
         </events>"#;
         let parsed = parse_events_from_xml(xml.as_bytes()).unwrap();
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].uei.as_deref(), Some("uei.opennms.org/test"));
         assert_eq!(parsed[0].severity.as_deref(), Some("Warning"));
+    }
+
+    #[test]
+    fn forward_and_script_round_trip_through_xml_layer() {
+        // event-source-forward-and-script: both elements must survive
+        // wire → XML → parsed-wire byte-equivalent.
+        let event = Event {
+            uei: Some("uei.test/fwd-script".into()),
+            severity: Some("Warning".into()),
+            forward: Some(vec![Forward {
+                state: Some("on".into()),
+                mechanism: Some("snmpudp".into()),
+                target: Some("alarmcentral:162".into()),
+            }]),
+            script: Some(vec![Script {
+                language: Some("beanshell".into()),
+                body: Some("do_thing();\nanother_thing();".into()),
+            }]),
+            ..Event::default()
+        };
+        let xml1 = render_eventconf_xml(std::slice::from_ref(&event)).unwrap();
+        assert!(xml1.contains("state=\"on\""));
+        assert!(xml1.contains("mechanism=\"snmpudp\""));
+        assert!(xml1.contains("alarmcentral:162"));
+        assert!(xml1.contains("language=\"beanshell\""));
+        assert!(xml1.contains("do_thing();"));
+        let parsed = parse_events_from_xml(xml1.as_bytes()).unwrap();
+        assert_eq!(parsed[0], event, "forward and script preserved");
+        let xml2 = render_eventconf_xml(std::slice::from_ref(&parsed[0])).unwrap();
+        assert_eq!(
+            xml_canonical(xml1.as_bytes()).unwrap(),
+            xml_canonical(xml2.as_bytes()).unwrap()
+        );
+    }
+
+    #[test]
+    fn static_parameter_survives_xml_roundtrip_while_runtime_parm_collection_drops() {
+        // event-source-parameter task 6.4. The two domains are distinct
+        // and the XML round-trip MUST preserve the static `parameter`
+        // while dropping the runtime `parm_collection` (eventconf XML
+        // doesn't model runtime parameters).
+        use crate::dto::{Parm, ParmValue};
+        let event = Event {
+            uei: Some("uei.test/dual".into()),
+            severity: Some("Warning".into()),
+            parameter: Some(vec![Parameter {
+                name: Some("static-key".into()),
+                value: Some("static-val".into()),
+                expand: None,
+            }]),
+            parm_collection: Some(vec![Parm {
+                parm_name: Some("runtime-key".into()),
+                value: Some(ParmValue {
+                    content: Some("runtime-val".into()),
+                    kind: Some("string".into()),
+                    encoding: None,
+                }),
+            }]),
+            ..Event::default()
+        };
+        let xml = render_eventconf_xml(std::slice::from_ref(&event)).unwrap();
+        assert!(
+            xml.contains("name=\"static-key\""),
+            "static parameter rendered"
+        );
+        assert!(
+            !xml.contains("runtime-key"),
+            "runtime parm_collection dropped on XML render:\n{xml}"
+        );
+        let parsed = parse_events_from_xml(xml.as_bytes()).unwrap();
+        assert_eq!(
+            parsed[0].parameter.as_ref().unwrap()[0].name.as_deref(),
+            Some("static-key")
+        );
+        assert!(
+            parsed[0].parm_collection.is_none(),
+            "no runtime parms on XML round-trip"
+        );
+    }
+
+    #[test]
+    fn parameter_round_trips_through_xml_layer() {
+        // event-source-parameter task 4.3: with `<parameter>` now modeled,
+        // parsing must capture all three attributes and re-render the
+        // element faithfully. Includes one entry without `expand` to pin
+        // the absent-stays-absent contract.
+        let event = Event {
+            uei: Some("uei.test/with-params".into()),
+            severity: Some("Warning".into()),
+            parameter: Some(vec![
+                Parameter {
+                    name: Some("endpoint".into()),
+                    value: Some("/var/log/foo".into()),
+                    expand: None,
+                },
+                Parameter {
+                    name: Some("context".into()),
+                    value: Some("%parm[#1]%".into()),
+                    expand: Some(true),
+                },
+            ]),
+            ..Event::default()
+        };
+        let xml1 = render_eventconf_xml(std::slice::from_ref(&event)).unwrap();
+        assert!(xml1.contains("name=\"endpoint\""));
+        assert!(xml1.contains("value=\"/var/log/foo\""));
+        assert!(xml1.contains("name=\"context\""));
+        assert!(xml1.contains("expand=\"true\""));
+        // Absent `expand` on the first entry must not materialize.
+        let first_param_start = xml1.find("endpoint").unwrap();
+        let first_param_end = xml1[first_param_start..].find("/>").unwrap();
+        let first_param = &xml1[first_param_start..first_param_start + first_param_end];
+        assert!(
+            !first_param.contains("expand"),
+            "absent expand must not appear in first entry: {first_param}"
+        );
+        let parsed = parse_events_from_xml(xml1.as_bytes()).unwrap();
+        assert_eq!(parsed[0], event, "every parameter field preserved");
     }
 
     #[test]
@@ -957,6 +1432,38 @@ mod tests {
     }
 
     #[test]
+    fn event_with_snmp_block_round_trips() {
+        // event-source-snmp task 4.2: every <snmp> field survives
+        // wire → XML → parsed wire round-trip.
+        use crate::dto::Snmp;
+        let event = Event {
+            uei: Some("uei.test/cisco/cold-start".into()),
+            event_label: Some("Cisco cold start".into()),
+            severity: Some("Warning".into()),
+            snmp: Some(Snmp {
+                id: Some(".1.3.6.1.4.1.9.1.13".into()),
+                idtext: Some("Cisco".into()),
+                version: Some("v2c".into()),
+                specific: Some(1),
+                generic: Some(6),
+                community: Some("public".into()),
+            }),
+            ..Event::default()
+        };
+        let xml1 = render_eventconf_xml(std::slice::from_ref(&event)).unwrap();
+        assert!(xml1.contains("<snmp>"));
+        assert!(xml1.contains("<id>.1.3.6.1.4.1.9.1.13</id>"));
+        let parsed = parse_events_from_xml(xml1.as_bytes()).unwrap();
+        assert_eq!(parsed[0], event, "every snmp field preserved");
+        let xml2 = render_eventconf_xml(std::slice::from_ref(&parsed[0])).unwrap();
+        assert_eq!(
+            xml_canonical(xml1.as_bytes()).unwrap(),
+            xml_canonical(xml2.as_bytes()).unwrap(),
+            "second-pass render is byte-equivalent"
+        );
+    }
+
+    #[test]
     fn varbindsdecode_multiple_groups_preserved_through_xml_round_trip() {
         use crate::dto::{Decode, Varbindsdecode};
         let event = Event {
@@ -1085,5 +1592,176 @@ mod tests {
         assert!(xml.contains("notify=\"true\""));
         let parsed = parse_events_from_xml(xml.as_bytes()).unwrap();
         assert_eq!(parsed[0], event);
+    }
+
+    // -- EC001 element-census tests ----------------------------------------
+
+    /// Invariant: `MODELED_EVENT_CHILDREN` is a SUBSET of `XmlEvent`'s
+    /// serde field names. The XML schema (`XmlEvent`) may model elements
+    /// that the local YAML schema (`EventDef`) does not — `<snmp>` is the
+    /// canonical example pre-`event-source-snmp`. Such elements stay out
+    /// of the allowlist until the corresponding `event-source-*` change
+    /// also models them in `EventDef`.
+    ///
+    /// Implemented via a no-op `Deserializer` that captures the `FIELDS`
+    /// slice serde passes to `deserialize_struct` (with renames applied).
+    /// Adding an allowlist entry that has no corresponding `XmlEvent`
+    /// field would cause `EC001` to never fire for that name — the test
+    /// catches that drift.
+    #[test]
+    fn modeled_event_children_subset_of_xml_event_fields() {
+        use serde::Deserialize;
+        use serde::de::{Deserializer, Visitor};
+
+        struct FieldCollector;
+
+        #[derive(Debug)]
+        struct Captured(Vec<String>);
+
+        impl std::fmt::Display for Captured {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "captured {} fields", self.0.len())
+            }
+        }
+
+        impl std::error::Error for Captured {}
+
+        impl serde::de::Error for Captured {
+            fn custom<T: std::fmt::Display>(_: T) -> Self {
+                Self(Vec::new())
+            }
+        }
+
+        impl<'de> Deserializer<'de> for FieldCollector {
+            type Error = Captured;
+
+            fn deserialize_struct<V: Visitor<'de>>(
+                self,
+                _name: &'static str,
+                fields: &'static [&'static str],
+                _visitor: V,
+            ) -> Result<V::Value, Self::Error> {
+                Err(Captured(fields.iter().map(|s| s.to_string()).collect()))
+            }
+
+            fn deserialize_any<V: Visitor<'de>>(self, _v: V) -> Result<V::Value, Self::Error> {
+                Err(Captured(Vec::new()))
+            }
+
+            serde::forward_to_deserialize_any! {
+                bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64
+                char str string bytes byte_buf option unit unit_struct
+                newtype_struct seq tuple tuple_struct map enum identifier ignored_any
+            }
+        }
+
+        let err = XmlEvent::deserialize(FieldCollector).unwrap_err();
+        let xml_event_fields: HashSet<&str> = err.0.iter().map(String::as_str).collect();
+        let allowlist: HashSet<&str> = MODELED_EVENT_CHILDREN.iter().copied().collect();
+        let stray: Vec<&str> = allowlist.difference(&xml_event_fields).copied().collect();
+        assert!(
+            stray.is_empty(),
+            "MODELED_EVENT_CHILDREN contains entries with no matching XmlEvent field: {stray:?}. \
+             Allowlist entries must correspond to a serde-visible XmlEvent field (so XML parsing \
+             actually reaches them). XmlEvent fields not in the allowlist are fine — they signal \
+             elements modeled at the XML layer but not yet at the YAML layer (e.g. <snmp> \
+             pre-event-source-snmp)."
+        );
+    }
+
+    #[test]
+    fn scan_finds_unmodeled_direct_children() {
+        let xml = br#"<events>
+  <event>
+    <uei>uei.test/foo</uei>
+    <severity>Warning</severity>
+    <parameter name="x" value="y"/>
+    <script language="beanshell">do_thing();</script>
+  </event>
+</events>"#;
+        let scans = scan_event_direct_children(xml).unwrap();
+        assert_eq!(scans.len(), 1);
+        // All four direct children appear; `parameter` and `script` are
+        // the ones the caller will filter against the allowlist.
+        assert_eq!(
+            scans[0].direct_children,
+            vec!["uei", "severity", "parameter", "script"]
+        );
+        assert_eq!(scans[0].event_index, 0);
+    }
+
+    #[test]
+    fn scan_dedupes_sibling_repeats_within_event() {
+        let xml = br#"<events>
+  <event>
+    <uei>uei.test/foo</uei>
+    <parameter name="a" value="1"/>
+    <parameter name="b" value="2"/>
+    <parameter name="c" value="3"/>
+  </event>
+</events>"#;
+        let scans = scan_event_direct_children(xml).unwrap();
+        assert_eq!(scans.len(), 1);
+        // `parameter` appears once despite three siblings.
+        assert_eq!(scans[0].direct_children, vec!["uei", "parameter"]);
+    }
+
+    #[test]
+    fn scan_handles_multiple_events_independently() {
+        let xml = br#"<events>
+  <event>
+    <uei>uei.test/one</uei>
+    <parameter name="a" value="1"/>
+  </event>
+  <event>
+    <uei>uei.test/two</uei>
+    <script language="beanshell">do_other();</script>
+  </event>
+</events>"#;
+        let scans = scan_event_direct_children(xml).unwrap();
+        assert_eq!(scans.len(), 2);
+        assert_eq!(scans[0].direct_children, vec!["uei", "parameter"]);
+        assert_eq!(scans[1].direct_children, vec!["uei", "script"]);
+        assert_eq!(scans[0].event_index, 0);
+        assert_eq!(scans[1].event_index, 1);
+    }
+
+    #[test]
+    fn scan_does_not_descend_into_nested_modeled_elements() {
+        // `<maskelement>` is a grandchild (under `<mask>`), not a direct
+        // child of `<event>`. It MUST NOT appear in direct_children.
+        let xml = br#"<events>
+  <event>
+    <uei>uei.test/foo</uei>
+    <mask>
+      <maskelement>
+        <mename>id</mename>
+        <mevalue>.1.3.6</mevalue>
+      </maskelement>
+    </mask>
+  </event>
+</events>"#;
+        let scans = scan_event_direct_children(xml).unwrap();
+        assert_eq!(scans.len(), 1);
+        assert_eq!(scans[0].direct_children, vec!["uei", "mask"]);
+    }
+
+    #[test]
+    fn scan_offsets_align_with_byte_scan() {
+        let xml = br#"<events>
+  <event>
+    <uei>uei.test/foo</uei>
+  </event>
+  <event>
+    <uei>uei.test/bar</uei>
+  </event>
+</events>"#;
+        let scans = scan_event_direct_children(xml).unwrap();
+        let byte_offsets = find_event_start_offsets(xml);
+        assert_eq!(scans.len(), 2);
+        assert_eq!(scans[0].offset, byte_offsets[0]);
+        assert_eq!(scans[1].offset, byte_offsets[1]);
+        // Sanity: the offset points at the `<event>` `<` byte.
+        assert_eq!(&xml[scans[0].offset..scans[0].offset + 6], b"<event");
     }
 }

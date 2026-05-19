@@ -1,23 +1,24 @@
-EC009 — Post-conversion validation failed
+EC006 — Post-conversion validation failed
 
 Rule
 ----
 After the converter's own findings run, the assembled local document is
 passed through `EventSourceLocal::validate` as a final safety net. Any
 rule the validator enforces that the converter did NOT already surface
-as EC001-EC008 produces an EC009 finding here.
+as one of the more specific codes (EC001-EC005, EC007, EC008) produces
+an EC006 finding here.
 
 Why
 ---
 The local-schema validator is the authoritative source of truth for
 EventSource YAML rules — it's what `onmsctl source apply` runs before
-contacting the server. The converter's own findings (EC001-EC008)
-cover the rules a migration tool can usefully cite at the source-XML
-level with line numbers. But schema rules can be added to the validator
-without the converter knowing — and a converted YAML must pass `apply`
-to be useful.
+contacting the server. The converter's own per-rule findings cover the
+issues a migration tool can usefully cite at the source-XML level with
+line numbers. But schema rules can be added to the validator without
+the converter knowing — and a converted YAML must pass `apply` to be
+useful.
 
-EC009 catches drift between converter findings and validator rules.
+EC006 catches drift between converter findings and validator rules.
 When it fires, one of two things is true:
 
   1. The converter has a gap — a rule was added to the validator that

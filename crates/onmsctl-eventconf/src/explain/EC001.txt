@@ -1,0 +1,76 @@
+EC001 — Unmodeled element dropped on conversion
+
+Rule
+----
+`onmsctl source convert` maintains an explicit allowlist of `<event>`
+direct-child element names that the local YAML schema models and
+round-trips through `apply` cleanly. After typed deserialization,
+the converter performs a structural pass over the XML and, for every
+`<event>` whose direct children include a name absent from the
+allowlist, emits one EC001 warning listing the distinct unmodeled
+names in document order.
+
+EC001 is a WARNING. YAML is still written; the conversion exit code
+is 1 (warnings).
+
+EC001 is STRUCTURAL-ONLY. It does NOT detect:
+
+  - Attribute extensions on modeled elements (e.g. a future
+    `<event id="..." newattr="x"/>`).
+  - Enum-value drift (e.g. a new severity level on a modeled field).
+  - Descendant elements nested inside modeled children (e.g. a new
+    `<sub>` element under `<mask>`).
+
+These limits are deliberate — the structural pass is the simplest
+mechanism that catches the most common forward-compatibility class
+(new direct children added to `<event>` in a future Horizon release).
+
+Why
+---
+This is a forward-compatibility net. Horizon's eventconf schema is
+still growing — `<varbindsdecode>`, `vboid`, `alarm-type=3` all
+landed at different points in Horizon's history, and more will land.
+An operator running a newer Horizon against an older `onmsctl` build
+should see a clear warning when their XML contains elements this
+build doesn't model — not silent data loss.
+
+The set of "modeled" elements is `onmsctl`'s allowlist, paired to
+the typed XML schema (`XmlEvent` in `crates/onmsctl-eventconf/src/xml.rs`).
+A unit test enforces that adding a field to `XmlEvent` requires
+updating the allowlist, so EC001 cannot false-positive on a legitimate
+typed field.
+
+How to fix
+----------
+1. UPGRADE `onmsctl` — if the element name in the EC001 message is one
+   you recognize from a recent Horizon release, the newer `onmsctl`
+   probably models it. Check the project's release notes.
+
+2. KEEP THE XML — if upgrading isn't an option and you depend on the
+   dropped element's behavior, keep the eventconf XML alongside the
+   YAML in git and use `onmsctl source upload <file.xml>` instead of
+   `source apply -f <file.yaml>`. The XML upload path is full-fidelity
+   and preserves elements `onmsctl`'s YAML schema doesn't model.
+
+3. FILE AN ISSUE — if the element name doesn't ring a bell or you
+   think `onmsctl` should model it, open an issue at
+   https://github.com/no42-org/onmsctl/issues with the element name
+   and a minimal XML fragment. Modeling proposals are tracked under
+   `openspec/changes/event-source-*`.
+
+Limits
+------
+EC001 fires per `<event>` (one finding per event with at least one
+unmodeled direct child, message listing all such names deduplicated
+in document order). The default per-file cap is 1000 EC001 findings;
+beyond the cap, one summary finding is emitted noting how many
+additional events were truncated. Override the cap with
+`--max-findings <n>` (use `0` for unlimited).
+
+Background
+----------
+EC001 originally numbered EC006 in the v0.1 README's "future EC006
+will surface their presence" note; the EC catalog was renumbered
+to contiguous EC001-EC008 in the same change that activated this
+warning. See `openspec/changes/eventconf-warn-unmodeled-elements/`
+for the design rationale and the explicit non-goals.

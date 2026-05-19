@@ -36,18 +36,27 @@ EC004  error    event missing required field: uei
   For the full rationale: onmsctl source convert --explain EC004
 ```
 
-Codes `EC002`–`EC009` are stable across releases (`EC001` / `EC006`
-reserved); read any rule's rationale with `--explain <code>`. Exit code
-is `0` clean, `1` warnings (YAML written), `2` blocking (no YAML).
+Codes `EC001`–`EC008` are stable across releases; read any rule's
+rationale with `--explain <code>`. Exit code is `0` clean, `1` warnings
+(YAML written), `2` blocking (no YAML).
 
 Useful flags: `--format json` (CI envelope with `output` path and
 `yaml` body), `--max-bytes 64M` (override the 16 MiB input cap),
-`--force` (overwrite existing output).
+`--max-findings 0` (disable the 1000-finding `EC001` cap), `--force`
+(overwrite existing output).
 
-**v0.1 limitation:** unmodeled elements (`<snmp>`, `<script>`,
-`<forward>`, `<parameter>`, `<filters>`) are silently dropped. Keep the
-XML alongside the YAML and use `source upload` when full fidelity
-matters. A future release will surface their presence as `EC006`.
+**Unmodeled elements.** `EC001` is the permanent forward-compatibility
+surface: any direct-child element under `<event>` that `onmsctl`'s
+YAML schema doesn't model fires `EC001` on `source convert` rather
+than silently losing data. The original v0.1 modeling gaps
+(`<snmp>`, `<parameter>`, `<forward>`, `<script>`, `<filters>`) are
+all now first-class; remaining unmodeled XSD elements (`<priority>`,
+`<autoaction>`, `<operaction>`, `<loggroup>`, vendor extensions) keep
+firing `EC001` until they're modeled too. For full fidelity today,
+keep the XML alongside the YAML and use `source upload`.
+
+`EC001` is *structural-only* — it does not detect attribute extensions
+on modeled elements or enum-value drift on modeled fields.
 
 ### 2. Apply YAML to Horizon
 
@@ -62,6 +71,109 @@ The `examples/` directory ships fixtures: `minimal.yaml`, `full.yaml`
 (every nested type — `mask`, `alarmData`, `logmsg`, `correlation`,
 `autoacknowledge`, `tticket`, `mouseovertext`), `severities.yaml`,
 `disabled.yaml`.
+
+**`alarmType` vocabulary.** `spec.events[].alarmData.alarmType` strictly
+accepts the three known states, in either symbolic (Web UI) form or
+the integer it maps to:
+
+| Symbolic        | Integer |
+|-----------------|---------|
+| `raise`         | `1`     |
+| `resolution`    | `2`     |
+| `unresolvable`  | `3`     |
+
+Symbolic input is case-insensitive on parse; the canonical YAML output
+is always lowercase. Anything else — unknown symbolic strings
+(`"problem"`, the alarmd Java alias) OR integers outside `{1, 2, 3}` —
+fails immediately. YAML inputs reject at deserialize time;
+eventconf XML inputs to `source convert` produce an `EC007` finding
+at Error severity (no YAML written, exit 2). To widen the accepted
+set when Horizon adds a new alarm state, see the
+`event-source-alarm-type-symbolic-names` change in
+`openspec/changes/archive/` for the reference pattern.
+
+**`snmp` block.** `spec.events[].snmp` mirrors the eventconf XSD's
+`<snmp>` element. Every sub-field is optional. Practical *numeric*
+ranges are documented but NOT enforced — out-of-range integers
+round-trip verbatim because future SNMP semantics or vendor
+extensions may legitimately use them. *String* fields, however, are
+rejected when set to an empty or whitespace-only value (an explicit
+typo, not a forward-compat concern).
+
+- `id` — enterprise OID; free string, no OID-format validation.
+- `idtext` — vendor-supplied textual label.
+- `version` — common values `v1` / `v2c` / `v3` (free string;
+  `v3-auth-priv` and other variants accepted verbatim).
+- `generic` — `0..=6` per RFC 1157.
+- `specific` — `>= 0`.
+- `community` — typically `public`.
+
+See `examples/full.yaml` for a representative block.
+
+**`parameters` list.** `spec.events[].parameters` mirrors the eventconf
+XSD's `<parameter name="..." value="..." expand="..."/>` — *static*
+per-event configuration eventd attaches to fired events. Each entry
+requires `name` and `value`; `expand` is optional and controls whether
+eventd substitutes `%parm[#N]%`-style placeholders at fire time.
+Document order is preserved through round-trip; eventd evaluates in
+document order.
+
+This is **distinct** from `parmCollection` on a *fired* event instance
+(a runtime field on the JSON wire, not modeled here). The two share
+similar names but live in different domains and MUST NOT be conflated.
+
+**`forwards` and `scripts`.** `spec.events[].forwards` mirrors the
+eventconf XSD's `<forward state="..." mechanism="...">target</forward>`
+— eventd's forwarding directives. The local schema validates against
+the XSD-closed sets:
+
+- `state` ∈ `{on, off}`
+- `mechanism` ∈ `{snmpudp, snmptcp, xmltcp, xmludp}`
+
+Values outside these sets are rejected locally with a clear error
+(otherwise Horizon would reject the upload with a server-side 400 and
+the operator would learn about the typo the hard way). An empty
+`forwards: [{}]` entry is rejected too — at least one of `state`,
+`mechanism`, `target` must be set.
+
+`spec.events[].scripts` mirrors `<script language="...">body</script>` —
+embedded executable logic (typically BeanShell) that eventd runs on
+event arrival. `language` is REQUIRED per the XSD (no Option on
+that field); `body` is optional and preserved byte-for-byte. Use
+YAML's `|` literal block for multi-line bodies — clip mode (`|`)
+keeps one trailing newline, strip mode (`|-`) keeps none.
+
+> **Security note for `scripts:`.** Shipping executable code via
+> `source apply` lowers the friction for deploying server-side code
+> execution on Horizon. The underlying threat surface already exists
+> at the raw eventconf-XML upload path — modeling `<script>` in YAML
+> does not introduce new authority. Operators should ensure RBAC on
+> eventconf write access in Horizon reflects this: anyone who can
+> upload an event source can run code on the Horizon JVM.
+
+**`filters` list.** `spec.events[].filters` mirrors the upstream
+`<filters><filter eventparm="..." pattern="..." replacement="..."/>
+</filters>` shape. Each entry is a regex-replacement rule that
+eventd applies to a named event parameter at fire time:
+
+```
+Pattern.compile(pattern)
+  .matcher(parmValue)
+  .replaceAll(replacement)
+```
+
+All three fields are required (per the upstream JAXB
+`@XmlAttribute(required=true)`). `pattern` uses Java regex syntax;
+`replacement` supports `$1`/`$2`-style backreferences. The YAML is
+flat — operators write `filters:` directly on the event; the
+`<filters>` wrapper materializes only on XML render.
+
+**`<mask>` vs `<filters>`.** `<mask>` selects which events a source
+applies to (SNMP PDU shape matching: id / generic / specific /
+varbind values). `<filters>` operates *after* selection, transforming
+parameter values on the fired event. Two different layers, easy to
+confuse — `<mask>` is selection, `<filters>` is post-selection
+parameter rewrite.
 
 **Apply-time limitations** (`source apply --help` for full text):
 

@@ -210,6 +210,13 @@ pub enum SourceCmd {
         /// rather than truncate silently.
         #[arg(long, default_value = "16M")]
         max_bytes: String,
+        /// Cap on `EC001` (unmodeled-element) findings emitted per input
+        /// file. After the cap, one summary finding is emitted and the
+        /// scan stops walking further events. Default:
+        /// `convert::DEFAULT_EC001_FINDINGS_CAP`. Use `0` for unlimited
+        /// (the cap is disabled).
+        #[arg(long, default_value_t = crate::convert::DEFAULT_EC001_FINDINGS_CAP)]
+        max_findings: usize,
         /// Print the rule rationale for the given finding code (e.g.
         /// `--explain EC001`) and exit without converting. Inputs may
         /// be empty when this flag is used.
@@ -352,6 +359,7 @@ impl SourceCmd {
                         let source = api.get_source(id).await?;
                         let opts = crate::convert::ConvertOpts {
                             name_override: Some(source.name.clone()),
+                            max_findings: None,
                         };
                         let pseudo_path = Path::new("-");
                         let result = crate::convert::convert(&bytes, pseudo_path, &opts);
@@ -489,6 +497,7 @@ impl SourceCmd {
                 format,
                 force,
                 max_bytes,
+                max_findings,
                 explain,
             } => {
                 let exit_code = run_convert(ConvertCli {
@@ -499,6 +508,7 @@ impl SourceCmd {
                     format,
                     force,
                     max_bytes,
+                    max_findings,
                     explain,
                 })?;
                 if exit_code != 0 {
@@ -520,6 +530,7 @@ struct ConvertCli {
     format: String,
     force: bool,
     max_bytes: String,
+    max_findings: usize,
     explain: Option<String>,
 }
 
@@ -612,6 +623,7 @@ fn run_convert(args: ConvertCli) -> Result<i32> {
             } else {
                 None
             },
+            max_findings: Some(args.max_findings),
         };
         let mut result = convert::convert(&xml_bytes, input, &opts);
         let written_path = emit_convert_result(

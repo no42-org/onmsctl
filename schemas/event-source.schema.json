@@ -29,9 +29,8 @@
       "type": "object",
       "properties": {
         "alarmType": {
-          "description": "Alarm semantic. Must be one of:\n  - `1` — Problem: raises an alarm, paired with a Resolution event\n  - `2` — Resolution: clears a paired Problem alarm by `reductionKey`\n  - `3` — Unresolvable: a Problem-class event with no auto-clear from\n    the device. Common for hardware-failure traps. Requires manual\n    close or an alarmd cleanup policy.",
-          "type": "integer",
-          "format": "int32"
+          "description": "Alarm semantic. Strictly one of:\n  - `1` / `\"raise\"` — raises an alarm, paired with a Resolution\n    event. (Known as `Problem` in the alarmd Java code.)\n  - `2` / `\"resolution\"` — clears a paired Raise by `reductionKey`.\n  - `3` / `\"unresolvable\"` — Raise-class with no auto-clear from\n    the device. Common for hardware-failure traps.\n\nAnything else fails at parse (for YAML inputs) or surfaces as\n`EC007` during `source convert` (for downloaded XML that uses\nan unrecognized integer).",
+          "$ref": "#/$defs/AlarmType"
         },
         "autoClean": {
           "type": [
@@ -53,6 +52,27 @@
       "required": [
         "reductionKey",
         "alarmType"
+      ]
+    },
+    "AlarmType": {
+      "description": "Alarm-type discriminator. Strictly accepts the three known states — 'raise' (1), 'resolution' (2), or 'unresolvable' (3). Symbolic input is case-insensitive.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "raise",
+            "resolution",
+            "unresolvable"
+          ]
+        },
+        {
+          "type": "integer",
+          "enum": [
+            1,
+            2,
+            3
+          ]
+        }
       ]
     },
     "AutoackDef": {
@@ -168,6 +188,24 @@
             "null"
           ]
         },
+        "filters": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/FilterDef"
+          }
+        },
+        "forwards": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/ForwardDef"
+          }
+        },
         "label": {
           "type": "string"
         },
@@ -203,8 +241,36 @@
             "null"
           ]
         },
+        "parameters": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/ParameterDef"
+          }
+        },
+        "scripts": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/ScriptDef"
+          }
+        },
         "severity": {
           "type": "string"
+        },
+        "snmp": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SnmpDef"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "tticket": {
           "anyOf": [
@@ -250,6 +316,58 @@
           "items": {
             "$ref": "#/$defs/EventDef"
           }
+        }
+      },
+      "additionalProperties": false
+    },
+    "FilterDef": {
+      "description": "eventd regex-replacement filter on a named event parameter.\nMirrors the upstream `<filter eventparm=\"...\" pattern=\"...\"\nreplacement=\"...\"/>` — EMPTY element with three REQUIRED\nattributes per JAXB.\n\nAt event-fire time eventd compiles `pattern` as a Java regex and\napplies `Matcher.replaceAll(replacement)` to the value of the\nevent parameter named by `eventparm`. NOT a suppression filter —\na value-rewrite rule.\n\n`pattern` uses Java regex syntax (`java.util.regex.Pattern`). We\ndo NOT validate the syntax locally because Rust's `regex` crate\nhas subtly different feature support (no lookahead/lookbehind).\nBad patterns surface at event-fire time as eventd warnings.",
+      "type": "object",
+      "properties": {
+        "eventparm": {
+          "description": "Event-parameter name the filter targets. Required.",
+          "type": "string"
+        },
+        "pattern": {
+          "description": "Java regex matched against the parameter's value. Required.",
+          "type": "string"
+        },
+        "replacement": {
+          "description": "Replacement string for `Matcher.replaceAll`. Required —\n`$1`/`$2`/... backreferences supported per Java regex.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "eventparm",
+        "pattern",
+        "replacement"
+      ]
+    },
+    "ForwardDef": {
+      "description": "eventd forwarding directive. Mirrors the eventconf XSD's\n`<forward state=\"...\" mechanism=\"...\">target</forward>`. The XSD\nconstrains `state` to `{on, off}` and `mechanism` to a closed set\n(`snmpudp`, `snmptcp`, `xmltcp`, `xmludp`) — the local validator\nmatches the XSD so YAML caught locally instead of producing a\n400 from Horizon's upload endpoint. Every field is still\nindividually optional (XSD attributes default).",
+      "type": "object",
+      "properties": {
+        "mechanism": {
+          "description": "One of `snmpudp` / `snmptcp` / `xmltcp` / `xmludp` per the\neventconf XSD. Validated against the XSD-closed set.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "description": "`on` or `off`. Validated against the XSD-closed set.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target": {
+          "description": "Destination identifier (e.g. `alarmcentral:162` for SNMP UDP).",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "additionalProperties": false
@@ -356,6 +474,104 @@
       "required": [
         "name"
       ]
+    },
+    "ParameterDef": {
+      "description": "Static per-event configuration parameter. Mirrors the eventconf XSD's\n`<parameter name=\"...\" value=\"...\" expand=\"...\"/>`. eventd evaluates\nentries in document order at event-fire time.\n\nOperator vocabulary note: this is the *static* per-event parameter\nlist, distinct from the *runtime* `parmCollection` carried on fired\nevents (which the wire DTO has as [`crate::dto::Event::parm_collection`]\nand which this YAML schema deliberately doesn't model — it's a\nruntime-only concern that doesn't round-trip through eventconf XML).",
+      "type": "object",
+      "properties": {
+        "expand": {
+          "description": "Whether eventd should expand `%parm[#N]%` placeholders in `value`\nat event-fire time. Absent on the wire when not set in the source\nYAML — the absent vs explicit `true`/`false` distinction\nround-trips through `source apply` / `source download`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "Parameter name. Required; rejected if empty or whitespace-only.",
+          "type": "string"
+        },
+        "value": {
+          "description": "Parameter value. Required; rejected if empty or whitespace-only.\nMay contain `%parm[#N]%`-style placeholders that eventd expands\nwhen `expand: true`.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "value"
+      ]
+    },
+    "ScriptDef": {
+      "description": "Embedded executable logic. Mirrors the eventconf XSD's\n`<script language=\"beanshell\">body</script>`. eventd runs the body\nat event-fire time.\n\n**Security note.** Modeling this element in YAML makes it trivial\nto ship server-side code via `source apply`. The threat surface\nalready exists at the eventconf-XML upload path; this change does\nnot introduce new authority. Operators should ensure RBAC on\neventconf write access is appropriately scoped.",
+      "type": "object",
+      "properties": {
+        "body": {
+          "description": "Script source. Multi-line content via YAML `|` literal block.\nPreserved byte-for-byte through round-trip.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "language": {
+          "description": "Script language. The eventconf XSD declares this attribute\nREQUIRED (`use=\"required\"`), so the local schema makes it\nrequired too. Typical values: `beanshell`, `groovy`. Free\nstring in the value space (XSD is `xs:string`).",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "language"
+      ]
+    },
+    "SnmpDef": {
+      "description": "SNMP trap discriminator + metadata on an event. Mirrors the\neventconf XSD's `<snmp>` element. Every field is optional; the\nXSD does not require any particular combination. Real vendor MIBs\noften use only `id`/`generic`/`specific` and omit the rest.\n\nDocumented practical ranges (NOT enforced, per design — values\noutside these ranges round-trip verbatim through the wire/XML\nlayer because future SNMP semantics or vendor extensions may\nlegitimately use them):\n  - `generic`: `0..=6` per RFC 1157.\n  - `specific`: `>= 0`.\n  - `version`: typically `v1`, `v2c`, or `v3`. Free string —\n    `v3-auth-priv` and other Horizon-version-specific variants\n    are accepted verbatim.",
+      "type": "object",
+      "properties": {
+        "community": {
+          "description": "SNMP community string (typically `public`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "generic": {
+          "description": "SNMP generic-trap number. Per RFC 1157 this is `0..=6`;\nout-of-range values round-trip verbatim.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "id": {
+          "description": "Enterprise OID (e.g. `.1.3.6.1.4.1.9.1.13`). XSD types this\nas `xs:string`; no OID-format validation.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "idtext": {
+          "description": "Textual variant of the id (vendor-supplied human label).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "specific": {
+          "description": "SNMP specific-trap number. Per RFC 1157 this is `>= 0`;\nout-of-range values round-trip verbatim.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "version": {
+          "description": "SNMP protocol version. Free string; common values are `v1`,\n`v2c`, `v3`. Not enum-validated for forward-compat with\nHorizon-version-specific variants.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
     },
     "TticketDef": {
       "type": "object",
