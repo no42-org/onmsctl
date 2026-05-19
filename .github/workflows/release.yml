@@ -191,6 +191,14 @@ jobs:
 
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          # Pin to cosign 2.4.x — 2.5+ changed `sign-blob`'s default
+          # output to the new bundle format, breaking the split
+          # .sig / .pem flow our README + RELEASING.md document
+          # (`cosign verify-blob --signature ... --certificate ...`).
+          # Bump to a `--bundle`-based flow when we're ready to update
+          # the verification recipe in the docs and downstream tooling.
+          cosign-release: 'v2.4.3'
 
       - name: Sign artifacts (sigstore keyless OIDC)
         shell: bash
@@ -212,6 +220,10 @@ jobs:
           done
           to_sign+=("release/SHA256SUMS")
           for f in "${to_sign[@]}"; do
+            # cosign 2.4.x (pinned above) writes split .sig / .pem
+            # output natively. cosign 2.5+ default-bundled and broke
+            # this flow — bumping the pin requires migrating the
+            # README / RELEASING.md verification recipe to --bundle.
             cosign sign-blob --yes \
               --output-signature "${f}.sig" \
               --output-certificate "${f}.pem" \
