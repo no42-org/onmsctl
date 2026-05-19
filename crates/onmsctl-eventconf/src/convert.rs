@@ -24,7 +24,10 @@ use serde::Serialize;
 
 use crate::apply::from_wire::WireToLocalError;
 use crate::apply::local::{EventDef, EventSourceLocal, EventSourceSpec, Metadata};
-use crate::xml::{SourceLocation, parse_events_with_locations};
+use crate::xml::{
+    MODELED_EVENT_CHILDREN, SourceLocation, byte_offset_to_line_col, parse_events_with_locations,
+    scan_event_direct_children,
+};
 
 /// Canonical OpenNMS severity set. Used for the EC005 case-normalization
 /// check before invoking `EventSourceLocal::validate`, which is itself
@@ -92,9 +95,16 @@ pub struct ConversionMetrics {
 }
 
 /// Stable code identifying a finding's class. Codes are namespaced under
-/// `EC` (event-conf) and never renumbered or repurposed across releases.
+/// `EC` (event-conf). The catalog is contiguous from `EC001` through
+/// `EC008` after the EC009→EC006 renumber that landed alongside EC001.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum FindingCode {
+    /// EC001 — event contains direct-child elements not in the modeled
+    /// allowlist. Forward-compat warning for any element under `<event>`
+    /// that `onmsctl` doesn't model — including future Horizon schema
+    /// additions. Structural-only (does NOT detect attribute extensions
+    /// or enum-value drift).
+    Ec001,
     /// EC002 — source has zero events after parse.
     Ec002,
     /// EC003 — derived metadata.name is reserved by OpenNMS.
@@ -106,59 +116,60 @@ pub enum FindingCode {
     /// EC005 — severity value was normalized to canonical case
     /// (e.g. `WARNING` → `Warning`).
     Ec005,
+    /// EC006 — `EventSourceLocal::validate` rejected the assembled
+    /// document after the converter's own findings ran. Acts as a
+    /// safety net for schema rules the converter doesn't mirror
+    /// individually. (Was `EC009` prior to the EC001-introducing
+    /// renumber; renumbered to close the EC006 fallow slot.)
+    Ec006,
     /// EC007 — alarm-type value outside the accepted set `{1, 2, 3}`
     /// (i.e. zero, negative, or ≥ 4).
     Ec007,
     /// EC008 — derived metadata.name contains characters the schema
     /// rejects, or is otherwise structurally invalid.
     Ec008,
-    /// EC009 — `EventSourceLocal::validate` rejected the assembled
-    /// document after the converter's own findings ran. Acts as a
-    /// safety net for schema rules the converter doesn't mirror
-    /// individually.
-    Ec009,
 }
 
 impl FindingCode {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Ec001 => "EC001",
             Self::Ec002 => "EC002",
             Self::Ec003 => "EC003",
             Self::Ec004 => "EC004",
             Self::Ec005 => "EC005",
+            Self::Ec006 => "EC006",
             Self::Ec007 => "EC007",
             Self::Ec008 => "EC008",
-            Self::Ec009 => "EC009",
         }
     }
 
     pub fn parse(s: &str) -> Option<Self> {
         match s.to_ascii_uppercase().as_str() {
+            "EC001" => Some(Self::Ec001),
             "EC002" => Some(Self::Ec002),
             "EC003" => Some(Self::Ec003),
             "EC004" => Some(Self::Ec004),
             "EC005" => Some(Self::Ec005),
+            "EC006" => Some(Self::Ec006),
             "EC007" => Some(Self::Ec007),
             "EC008" => Some(Self::Ec008),
-            "EC009" => Some(Self::Ec009),
             _ => None,
         }
     }
 
-    /// All defined codes. Used by `--explain` for "unknown code" error
-    /// listings and by the compile-time explanation-completeness test.
-    /// EC001 and EC006 are reserved — both were defined-then-removed.
-    /// Their numbers are not reused for future finding codes. Future
-    /// codes append (EC010, EC011, ...) rather than recycling slots.
+    /// All defined codes. Catalog is contiguous EC001–EC008 with no
+    /// fallow slots. Future codes append (EC009, EC010, ...).
     pub fn all() -> &'static [Self] {
         &[
+            Self::Ec001,
             Self::Ec002,
             Self::Ec003,
             Self::Ec004,
             Self::Ec005,
+            Self::Ec006,
             Self::Ec007,
             Self::Ec008,
-            Self::Ec009,
         ]
     }
 }
@@ -227,6 +238,20 @@ pub enum FindingDetails {
     PostValidationFailed {
         validator_error: String,
     },
+    /// EC001 payload. `dropped_elements` lists distinct direct-child
+    /// element names found under this `<event>` that are not in the
+    /// modeled-element allowlist. `truncated_remaining`, when present,
+    /// signals a summary-mode finding emitted after the per-file cap
+    /// was reached (no per-event location data).
+    UnmodeledElements {
+        dropped_elements: Vec<String>,
+        location: Option<SourceLocation>,
+        /// When `Some(n)`, this is a synthetic summary finding emitted
+        /// once after the cap; `n` is the count of additional events
+        /// with unmodeled elements that were not individually reported.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        truncated_remaining: Option<usize>,
+    },
 }
 
 /// Options passed to [`convert`].
@@ -235,7 +260,18 @@ pub struct ConvertOpts {
     /// Override the metadata.name derived from the input filename. Required
     /// when the input has no filename (stdin).
     pub name_override: Option<String>,
+    /// Cap on the number of `EC001` (unmodeled-element) findings emitted
+    /// per input file. After the cap, a single summary finding is emitted
+    /// describing how many additional events were truncated, and the
+    /// per-event scan stops. `None` → default cap (1000). `Some(0)` →
+    /// unlimited (disabled cap). `Some(n)` for n > 0 → cap at n.
+    pub max_findings: Option<usize>,
 }
+
+/// Default cap on `EC001` findings emitted per converted file. Prevents
+/// memory pressure on pathological or hostile inputs (e.g. a 16 MiB XML
+/// where every event uses unmodeled elements).
+pub const DEFAULT_EC001_FINDINGS_CAP: usize = 1000;
 
 /// Default cap on bytes read per input. Mirrors the upload pipeline's
 /// `MAX_UPLOAD_BYTES_PER_FILE`. Overridable per-invocation via
@@ -390,6 +426,112 @@ pub fn convert(xml: &[u8], source_path: &Path, opts: &ConvertOpts) -> Conversion
         };
     }
 
+    // Step 4b: structural pre-walk for EC001 (unmodeled direct-child
+    // elements). The typed deserializer silently drops anything not in
+    // `XmlEvent`; this pass surfaces those drops as warnings so operators
+    // know what their YAML is losing.
+    let cap = match opts.max_findings {
+        None => DEFAULT_EC001_FINDINGS_CAP,
+        Some(0) => usize::MAX, // 0 means unlimited
+        Some(n) => n,
+    };
+    let scan_result = scan_event_direct_children(xml);
+    if let Err(e) = &scan_result {
+        // The structural scan is a forward-compat safety net — silent
+        // failure inverts its contract. Surface as a warning so operators
+        // know unmodeled-element detection was skipped on this run. The
+        // typed parse above already succeeded, so YAML emission proceeds.
+        findings.push(Finding {
+            code: FindingCode::Ec001,
+            severity: Severity::Warning,
+            message: format!(
+                "EC001 structural scan failed; unmodeled-element detection skipped: {e}"
+            ),
+            details: FindingDetails::UnmodeledElements {
+                dropped_elements: Vec::new(),
+                location: None,
+                truncated_remaining: None,
+            },
+            suggested_fix: "The typed XML parse succeeded but the auxiliary structural pass \
+                used for EC001 did not. The converted YAML may be missing unmodeled-element \
+                warnings. Inspect the XML for malformed structure (mismatched tags, \
+                unsupported namespaces, comments containing literal `<event>`); rerun after \
+                correcting."
+                .into(),
+        });
+    }
+    if let Ok(scans) = scan_result {
+        let mut emitted: usize = 0;
+        let mut truncated: usize = 0;
+        for scan in &scans {
+            let unmodeled: Vec<String> = scan
+                .direct_children
+                .iter()
+                .filter(|c| !MODELED_EVENT_CHILDREN.contains(&c.as_str()))
+                .cloned()
+                .collect();
+            if unmodeled.is_empty() {
+                continue;
+            }
+            if emitted >= cap {
+                truncated += 1;
+                continue;
+            }
+            let (line, column) = byte_offset_to_line_col(xml, scan.offset);
+            let location = SourceLocation {
+                file: source_path.to_path_buf(),
+                line,
+                column,
+                event_index: scan.event_index,
+            };
+            let names_joined = unmodeled
+                .iter()
+                .map(|n| format!("<{n}>"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            findings.push(Finding {
+                code: FindingCode::Ec001,
+                severity: Severity::Warning,
+                message: format!(
+                    "event contains unmodeled elements dropped on conversion: {names_joined}"
+                ),
+                details: FindingDetails::UnmodeledElements {
+                    dropped_elements: unmodeled,
+                    location: Some(location),
+                    truncated_remaining: None,
+                },
+                suggested_fix: "These elements are not part of the local YAML schema and will be \
+                    absent from the converted YAML. For full-fidelity round-tripping keep the \
+                    eventconf XML alongside the YAML and use `source upload`. Run \
+                    `onmsctl source convert --explain EC001` for the full rationale, or upgrade \
+                    `onmsctl` if these elements are modeled in a newer release."
+                    .into(),
+            });
+            emitted += 1;
+        }
+        if truncated > 0 {
+            findings.push(Finding {
+                code: FindingCode::Ec001,
+                severity: Severity::Warning,
+                message: format!(
+                    "{truncated} additional events with unmodeled elements were truncated \
+                     from this report; rerun with --max-findings <higher> (or 0 for unlimited) \
+                     to see all"
+                ),
+                details: FindingDetails::UnmodeledElements {
+                    dropped_elements: Vec::new(),
+                    location: None,
+                    truncated_remaining: Some(truncated),
+                },
+                suggested_fix: "Pass --max-findings 0 to disable the cap, or --max-findings <n> \
+                    to raise it."
+                    .into(),
+            });
+        }
+    }
+    // (Error path above emitted a synthetic EC001 warning before
+    // reaching here; we do not silently swallow walker failures.)
+
     // Step 5: per-event conversion with normalization detection
     let mut event_defs: Vec<EventDef> = Vec::new();
 
@@ -423,32 +565,30 @@ pub fn convert(xml: &[u8], source_path: &Path, opts: &ConvertOpts) -> Conversion
             local_wire.severity = Some(canonical.to_string());
         }
 
-        // EC007: alarm-type outside accepted set {1, 2, 3}
-        if let Some(alarm) = &local_wire.alarm_data
-            && let Some(t) = alarm.alarm_type
-            && !matches!(t, 1..=3)
-        {
-            findings.push(Finding {
-                code: FindingCode::Ec007,
-                severity: Severity::Warning,
-                message: format!("alarm-type {t} is outside the accepted set {{1, 2, 3}}"),
-                details: FindingDetails::AlarmTypeOutOfRange {
-                    value: t,
-                    location: location.clone(),
-                },
-                suggested_fix: "The local schema accepts alarm-type values 1 (Problem), 2 \
-                    (Resolution), 3 (Unresolvable). Negative, zero, or ≥4 values indicate \
-                    malformed input or a forward-compatibility issue with a future OpenNMS \
-                    schema; correct the value or widen the schema via a follow-up change."
-                    .into(),
-            });
-        }
-
-        // Convert wire → local
+        // Convert wire → local. EC007 (alarm-type out of range) and EC004
+        // (missing required field) both surface here via WireToLocalError.
         match EventDef::try_from(&local_wire) {
             Ok(def) => {
                 event_defs.push(def);
                 metrics.events_converted += 1;
+            }
+            Err(WireToLocalError::AlarmDataAlarmTypeOutOfRange { value }) => {
+                metrics.events_dropped += 1;
+                findings.push(Finding {
+                    code: FindingCode::Ec007,
+                    severity: Severity::Error,
+                    message: format!("alarm-type {value} is outside the accepted set {{1, 2, 3}}"),
+                    details: FindingDetails::AlarmTypeOutOfRange {
+                        value,
+                        location: location.clone(),
+                    },
+                    suggested_fix: "The local schema strictly accepts alarm-type values 1 \
+                        (raise), 2 (resolution), and 3 (unresolvable). The YAML form also \
+                        accepts the symbolic names directly. Correct the source XML; if this \
+                        is a new Horizon alarm semantic, file a follow-up change to widen the \
+                        schema."
+                        .into(),
+                });
             }
             Err(err) => {
                 metrics.events_dropped += 1;
@@ -470,7 +610,7 @@ pub fn convert(xml: &[u8], source_path: &Path, opts: &ConvertOpts) -> Conversion
         }
     }
 
-    // Step 6: cross-event validation — EC009 post-validate safety net
+    // Step 6: cross-event validation — EC006 post-validate safety net
     //   (D3 hybrid). We invoke the authoritative validator on the
     //   assembled local document; any rejection here represents a schema
     //   rule the converter did not already surface via EC002-EC008.
@@ -503,7 +643,7 @@ pub fn convert(xml: &[u8], source_path: &Path, opts: &ConvertOpts) -> Conversion
                 other => other.to_string(),
             };
             findings.push(Finding {
-                code: FindingCode::Ec009,
+                code: FindingCode::Ec006,
                 severity: Severity::Error,
                 message: format!("post-conversion validation failed: {err_str}"),
                 details: FindingDetails::PostValidationFailed {
@@ -511,9 +651,9 @@ pub fn convert(xml: &[u8], source_path: &Path, opts: &ConvertOpts) -> Conversion
                 },
                 suggested_fix: "The authoritative local-schema validator rejected the \
                     converted document. Read the validator's error message — it names the \
-                    offending field path. If this rule could have been surfaced earlier as \
-                    EC001-EC008, file a converter bug; otherwise correct the source XML and \
-                    re-run."
+                    offending field path. If this rule could have been surfaced earlier by \
+                    a more specific code (EC001-EC005, EC007, EC008), file a converter bug; \
+                    otherwise correct the source XML and re-run."
                     .into(),
             });
         }
@@ -659,6 +799,10 @@ fn field_name_for(err: WireToLocalError) -> &'static str {
         WireToLocalError::LogmsgMissingContent => "logmsg",
         WireToLocalError::LogmsgMissingDest => "logmsg.dest",
         WireToLocalError::MaskVarbindMissingDiscriminator => "mask.varbind",
+        // EC007 (alarm-type out of range) takes its own code path in the
+        // per-event conversion loop; field_name_for is only called for
+        // EC004 emissions, so this is unreachable.
+        WireToLocalError::AlarmDataAlarmTypeOutOfRange { .. } => "alarm-data.alarm-type",
     }
 }
 
@@ -669,13 +813,14 @@ fn field_name_for(err: WireToLocalError) -> &'static str {
 /// releases — wording may shift but the section structure does not.
 pub fn explain(code: FindingCode) -> &'static str {
     match code {
+        FindingCode::Ec001 => include_str!("explain/EC001.txt"),
         FindingCode::Ec002 => include_str!("explain/EC002.txt"),
         FindingCode::Ec003 => include_str!("explain/EC003.txt"),
         FindingCode::Ec004 => include_str!("explain/EC004.txt"),
         FindingCode::Ec005 => include_str!("explain/EC005.txt"),
+        FindingCode::Ec006 => include_str!("explain/EC006.txt"),
         FindingCode::Ec007 => include_str!("explain/EC007.txt"),
         FindingCode::Ec008 => include_str!("explain/EC008.txt"),
-        FindingCode::Ec009 => include_str!("explain/EC009.txt"),
     }
 }
 
@@ -800,6 +945,25 @@ fn render_finding_details(out: &mut String, d: &FindingDetails) {
         }
         FindingDetails::PostValidationFailed { validator_error } => {
             out.push_str(&format!("    Validator: {validator_error}\n"));
+        }
+        FindingDetails::UnmodeledElements {
+            dropped_elements,
+            location,
+            truncated_remaining,
+        } => {
+            if let Some(n) = truncated_remaining {
+                out.push_str(&format!("    Truncated: {n} additional events\n"));
+            } else {
+                let names = dropped_elements
+                    .iter()
+                    .map(|n| format!("<{n}>"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                out.push_str(&format!("    Dropped: {names}\n"));
+                if let Some(loc) = location {
+                    out.push_str(&format!("    At:      {}\n", fmt_location(loc)));
+                }
+            }
         }
     }
 }
@@ -935,12 +1099,12 @@ mod tests {
     }
 
     #[test]
-    fn alarm_type_4_produces_ec007_warning_and_ec009_blocks_emission() {
-        // alarm-type=4 emits EC007 (warning, location-rich) AND triggers
-        // EC009 from the post-validate safety net (since the v0.1 schema
-        // accepts only 1|2|3). Both findings are useful: EC007 cites the
-        // source event; EC009 tells the operator the YAML wouldn't pass
-        // apply. The presence of EC009 (error) blocks YAML emission.
+    fn alarm_type_4_produces_ec007_error_and_blocks_emission() {
+        // Strict mode: alarm-type outside {1,2,3} is an error, not a
+        // warning. The wire→local conversion fails with
+        // WireToLocalError::AlarmDataAlarmTypeOutOfRange; convert.rs
+        // surfaces that as EC007 (Error severity). YAML is NOT written;
+        // exit code is 2.
         let xml = br#"<events>
   <event>
     <uei>uei.test/foo</uei>
@@ -950,15 +1114,27 @@ mod tests {
   </event>
 </events>"#;
         let result = convert(xml, Path::new("/tmp/foo.test.xml"), &ConvertOpts::default());
-        assert!(
-            result.findings.iter().any(|f| f.code == FindingCode::Ec007),
-            "EC007 emitted"
+        let ec007s: Vec<_> = result
+            .findings
+            .iter()
+            .filter(|f| f.code == FindingCode::Ec007)
+            .collect();
+        assert_eq!(ec007s.len(), 1, "exactly one EC007");
+        assert_eq!(
+            ec007s[0].severity,
+            Severity::Error,
+            "EC007 is Error severity"
         );
         assert!(
-            result.findings.iter().any(|f| f.code == FindingCode::Ec009),
-            "EC009 emitted by post-validate"
+            ec007s[0].message.contains("4"),
+            "message cites the bad value"
         );
-        assert!(result.yaml.is_none(), "EC009 blocks YAML emission");
+        // EC004 is NOT emitted for this case — EC007 is the specific code.
+        assert!(
+            !result.findings.iter().any(|f| f.code == FindingCode::Ec004),
+            "EC004 not emitted; EC007 covers alarm-type out of range"
+        );
+        assert!(result.yaml.is_none(), "blocking error → no YAML");
         assert_eq!(result.exit_code(), 2);
     }
 
@@ -981,6 +1157,7 @@ mod tests {
             Path::new("/tmp/has spaces.xml"),
             &ConvertOpts {
                 name_override: Some("clean.name".into()),
+                max_findings: None,
             },
         );
         let yaml = result.yaml.expect("YAML emitted");
@@ -1001,6 +1178,7 @@ mod tests {
             Path::new("-"),
             &ConvertOpts {
                 name_override: Some("from.stdin".into()),
+                max_findings: None,
             },
         );
         let yaml = result.yaml.expect("YAML emitted from stdin");
@@ -1171,22 +1349,24 @@ mod tests {
     }
 
     #[test]
-    fn finding_code_ec006_remains_fallow_and_unparseable() {
-        // EC006 was descoped 2026-05-18 (unmodeled-element finding deferred
-        // to follow-up work). Its number stays fallow — parsing it should
-        // return None, and it should not appear in all().
-        assert!(FindingCode::parse("EC006").is_none());
-        assert!(!FindingCode::all().iter().any(|c| c.as_str() == "EC006"));
-    }
-
-    #[test]
-    fn finding_code_ec001_remains_fallow_and_unparseable() {
-        // EC001 was removed by the
-        // permit-duplicate-ueis-as-normalization-pattern change (duplicate
-        // UEIs are first-class, not a finding). Its number stays fallow —
-        // parsing it should return None, and it should not appear in all().
-        assert!(FindingCode::parse("EC001").is_none());
-        assert!(!FindingCode::all().iter().any(|c| c.as_str() == "EC001"));
+    fn catalog_is_contiguous_ec001_through_ec008() {
+        // After the EC009→EC006 renumber and the EC001 (unmodeled-element)
+        // activation, the catalog is contiguous EC001–EC008 with no fallow
+        // slots.
+        let codes: Vec<&str> = FindingCode::all().iter().map(|c| c.as_str()).collect();
+        assert_eq!(
+            codes,
+            [
+                "EC001", "EC002", "EC003", "EC004", "EC005", "EC006", "EC007", "EC008"
+            ]
+        );
+        // Every code in `all()` parses round-trip from its string form.
+        for &expected in &codes {
+            let parsed = FindingCode::parse(expected).expect("known code parses");
+            assert_eq!(parsed.as_str(), expected);
+        }
+        // EC009 is not yet assigned; parsing returns None.
+        assert!(FindingCode::parse("EC009").is_none());
     }
 
     #[test]
@@ -1204,5 +1384,488 @@ mod tests {
         let report = render_report_text(&result);
         assert!(report.contains("EC004"));
         assert!(report.contains("Exit: 2"));
+    }
+
+    // -- EC001 emission tests ---------------------------------------------
+
+    #[test]
+    fn ec001_event_with_unmodeled_elements_emits_one_finding_with_all_names() {
+        // Uses `<autoaction>` and `<priority>` — both real eventconf
+        // XSD children of `<event>` that this YAML schema doesn't
+        // model. (After event-source-filters, `<filters>` is modeled.)
+        let xml = br#"<events>
+  <event>
+    <uei>uei.test/foo</uei>
+    <event-label>Foo</event-label>
+    <severity>Warning</severity>
+    <autoaction state="off">cleanup()</autoaction>
+    <priority>17</priority>
+  </event>
+</events>"#;
+        let result = convert(
+            xml,
+            Path::new("/tmp/test.events.xml"),
+            &ConvertOpts::default(),
+        );
+        let ec001s: Vec<_> = result
+            .findings
+            .iter()
+            .filter(|f| f.code == FindingCode::Ec001)
+            .collect();
+        assert_eq!(ec001s.len(), 1, "exactly one EC001 per event");
+        let f = ec001s[0];
+        assert_eq!(f.severity, Severity::Warning);
+        // Message lists both unmodeled names in document order.
+        assert!(f.message.contains("<autoaction>"));
+        assert!(f.message.contains("<priority>"));
+        let auto_pos = f.message.find("<autoaction>").unwrap();
+        let pri_pos = f.message.find("<priority>").unwrap();
+        assert!(auto_pos < pri_pos, "document order preserved");
+        // YAML still written (warning, not error).
+        assert!(result.yaml.is_some(), "YAML written despite EC001 warning");
+        assert_eq!(result.exit_code(), 1, "warnings produce exit 1");
+        // Finding details carry the location and dropped element list.
+        match &f.details {
+            FindingDetails::UnmodeledElements {
+                dropped_elements,
+                location,
+                truncated_remaining,
+            } => {
+                assert_eq!(dropped_elements, &["autoaction", "priority"]);
+                assert!(truncated_remaining.is_none());
+                // Pin the file:line:column — spec requires file:line anchor
+                // and 0-based event index. The `<event>` opens on line 2 of
+                // the fixture (line 1 is `<events>`), at column 3 (after
+                // the two-space indent).
+                let loc = location.as_ref().expect("location present");
+                assert_eq!(loc.line, 2, "line anchored at <event> opening");
+                assert_eq!(loc.column, 3, "column anchored at the `<` byte");
+                assert_eq!(loc.event_index, 0, "first event is index 0");
+                assert_eq!(
+                    loc.file.to_string_lossy(),
+                    "/tmp/test.events.xml",
+                    "file path preserved from source_path"
+                );
+            }
+            other => panic!("unexpected details: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ec001_event_with_only_modeled_elements_emits_no_finding() {
+        let xml = br#"<events>
+  <event>
+    <uei>uei.test/foo</uei>
+    <event-label>Foo</event-label>
+    <severity>Warning</severity>
+    <logmsg dest="logndisplay">msg</logmsg>
+    <alarm-data reduction-key="k" alarm-type="1"/>
+  </event>
+</events>"#;
+        let result = convert(
+            xml,
+            Path::new("/tmp/test.events.xml"),
+            &ConvertOpts::default(),
+        );
+        assert!(
+            !result.findings.iter().any(|f| f.code == FindingCode::Ec001),
+            "no EC001 expected for fully-modeled event"
+        );
+        assert_eq!(result.exit_code(), 0);
+    }
+
+    #[test]
+    fn ec001_snmp_no_longer_fires_after_modeling() {
+        // Regression test for the event-source-snmp change. `<snmp>` is
+        // now in the modeled-element allowlist; XML containing it must
+        // convert without firing EC001 for that element. All six
+        // sub-fields must survive into the YAML output (idtext and
+        // community in particular — under-asserted in the prior
+        // version of this test).
+        let xml = br#"<events>
+  <event>
+    <uei>uei.test/cold-start</uei>
+    <event-label>Cold start</event-label>
+    <severity>Warning</severity>
+    <snmp>
+      <id>.1.3.6.1.4.1.9.1.13</id>
+      <idtext>Cisco</idtext>
+      <version>v2c</version>
+      <generic>6</generic>
+      <specific>1</specific>
+      <community>public</community>
+    </snmp>
+  </event>
+</events>"#;
+        let result = convert(
+            xml,
+            Path::new("/tmp/cisco.foo.events.xml"),
+            &ConvertOpts::default(),
+        );
+        assert!(
+            !result.findings.iter().any(|f| f.code == FindingCode::Ec001),
+            "no EC001 expected — <snmp> is modeled. Findings: {:?}",
+            result.findings.iter().map(|f| f.code).collect::<Vec<_>>()
+        );
+        assert_eq!(result.exit_code(), 0);
+        let yaml = result.yaml.as_ref().expect("YAML emitted");
+        // Confirm `snmp:` appears AT EVENT SCOPE — the assertion looks
+        // for `    snmp:` (event-level indentation, 4 spaces) to catch
+        // a serializer regression that placed snmp fields anywhere
+        // outside the nested block.
+        assert!(
+            yaml.contains("    snmp:"),
+            "snmp block at event scope:\n{yaml}"
+        );
+        assert!(yaml.contains("id: .1.3.6.1.4.1.9.1.13"));
+        assert!(yaml.contains("idtext: Cisco"), "idtext preserved:\n{yaml}");
+        assert!(yaml.contains("version: v2c"));
+        assert!(yaml.contains("generic: 6"));
+        assert!(yaml.contains("specific: 1"));
+        assert!(
+            yaml.contains("community: public"),
+            "community preserved:\n{yaml}"
+        );
+    }
+
+    #[test]
+    fn ec001_parameter_no_longer_fires_after_modeling() {
+        // event-source-parameter regression. <parameter> is now in the
+        // modeled-element allowlist; XML containing it must convert
+        // without firing EC001. All three attributes survive into YAML.
+        let xml = br#"<events>
+  <event>
+    <uei>uei.test/with-params</uei>
+    <event-label>With params</event-label>
+    <severity>Warning</severity>
+    <parameter name="endpoint" value="/var/log/foo"/>
+    <parameter name="context" value="%parm[#1]%" expand="true"/>
+  </event>
+</events>"#;
+        let result = convert(
+            xml,
+            Path::new("/tmp/vendor.foo.events.xml"),
+            &ConvertOpts::default(),
+        );
+        assert!(
+            !result.findings.iter().any(|f| f.code == FindingCode::Ec001),
+            "no EC001 — <parameter> is modeled. Findings: {:?}",
+            result.findings.iter().map(|f| f.code).collect::<Vec<_>>()
+        );
+        assert_eq!(result.exit_code(), 0);
+        let yaml = result.yaml.as_ref().expect("YAML emitted");
+        assert!(
+            yaml.contains("parameters:"),
+            "block under event scope:\n{yaml}"
+        );
+        assert!(yaml.contains("name: endpoint"));
+        assert!(yaml.contains("value: /var/log/foo"));
+        assert!(yaml.contains("name: context"));
+        assert!(
+            yaml.contains("expand: true"),
+            "explicit expand preserved:\n{yaml}"
+        );
+    }
+
+    #[test]
+    fn ec001_filters_no_longer_fires_after_modeling() {
+        // event-source-filters regression. `<filters>` is now in the
+        // modeled-element allowlist; XML with the wrapper converts
+        // cleanly. Content survives into YAML (flat, no wrapper).
+        let xml = br#"<events>
+  <event>
+    <uei>uei.test/with-filters</uei>
+    <event-label>With filters</event-label>
+    <severity>Warning</severity>
+    <filters>
+      <filter eventparm="trapMsg" pattern="\bWARN\b" replacement="WARNING"/>
+      <filter eventparm="ifAlias" pattern="^old-(.*)$" replacement="new-$1"/>
+    </filters>
+  </event>
+</events>"#;
+        let result = convert(
+            xml,
+            Path::new("/tmp/vendor.foo.events.xml"),
+            &ConvertOpts::default(),
+        );
+        assert!(
+            !result.findings.iter().any(|f| f.code == FindingCode::Ec001),
+            "no EC001 — <filters> is modeled. Findings: {:?}",
+            result.findings.iter().map(|f| f.code).collect::<Vec<_>>()
+        );
+        assert_eq!(result.exit_code(), 0);
+        let yaml = result.yaml.as_ref().expect("YAML emitted");
+        assert!(yaml.contains("filters:"), "filters block:\n{yaml}");
+        assert!(yaml.contains("eventparm: trapMsg"));
+        assert!(yaml.contains("eventparm: ifAlias"));
+        assert!(yaml.contains("replacement: WARNING"));
+        assert!(yaml.contains("replacement: new-$1"));
+    }
+
+    #[test]
+    fn ec001_forward_and_script_no_longer_fire_after_modeling() {
+        // event-source-forward-and-script regression. Both are in the
+        // modeled-element allowlist now; XML containing them converts
+        // without firing EC001. Content survives into YAML.
+        let xml = br#"<events>
+  <event>
+    <uei>uei.test/with-fwd-script</uei>
+    <event-label>With forward and script</event-label>
+    <severity>Warning</severity>
+    <forward state="on" mechanism="snmpudp">alarmcentral:162</forward>
+    <script language="beanshell">do_thing();</script>
+  </event>
+</events>"#;
+        let result = convert(
+            xml,
+            Path::new("/tmp/vendor.foo.events.xml"),
+            &ConvertOpts::default(),
+        );
+        assert!(
+            !result.findings.iter().any(|f| f.code == FindingCode::Ec001),
+            "no EC001 — <forward> and <script> are modeled. Findings: {:?}",
+            result.findings.iter().map(|f| f.code).collect::<Vec<_>>()
+        );
+        assert_eq!(result.exit_code(), 0);
+        let yaml = result.yaml.as_ref().expect("YAML emitted");
+        assert!(yaml.contains("forwards:"), "forwards block:\n{yaml}");
+        // serde_norway emits `state: on` unquoted because its YAML 1.2
+        // mode does not treat `on` as a boolean. Accept all common
+        // quote styles defensively.
+        assert!(
+            yaml.contains("state: on")
+                || yaml.contains("state: 'on'")
+                || yaml.contains("state: \"on\""),
+            "state preserved:\n{yaml}"
+        );
+        assert!(yaml.contains("mechanism: snmpudp"));
+        assert!(
+            yaml.contains("alarmcentral:162"),
+            "target preserved:\n{yaml}"
+        );
+        assert!(yaml.contains("scripts:"), "scripts block:\n{yaml}");
+        assert!(yaml.contains("language: beanshell"));
+        assert!(
+            yaml.contains("do_thing();"),
+            "script body preserved:\n{yaml}"
+        );
+    }
+
+    #[test]
+    fn snmp_out_of_range_integers_round_trip_verbatim() {
+        // README and proposal promise out-of-range integers round-trip
+        // verbatim (no range enforcement). Pin this contract: generic=-1
+        // and specific=999 survive XML → YAML without modification or
+        // findings.
+        let xml = br#"<events>
+  <event>
+    <uei>uei.test/odd</uei>
+    <event-label>Odd</event-label>
+    <severity>Warning</severity>
+    <snmp>
+      <generic>-1</generic>
+      <specific>999</specific>
+    </snmp>
+  </event>
+</events>"#;
+        let result = convert(
+            xml,
+            Path::new("/tmp/odd.foo.events.xml"),
+            &ConvertOpts::default(),
+        );
+        assert_eq!(
+            result.exit_code(),
+            0,
+            "out-of-range snmp integers should not block emission: {:?}",
+            result.findings.iter().map(|f| f.code).collect::<Vec<_>>()
+        );
+        let yaml = result.yaml.as_ref().expect("YAML emitted");
+        assert!(
+            yaml.contains("generic: -1"),
+            "negative generic preserved:\n{yaml}"
+        );
+        assert!(
+            yaml.contains("specific: 999"),
+            "specific 999 preserved:\n{yaml}"
+        );
+    }
+
+    #[test]
+    fn ec001_two_events_with_overlapping_unmodeled_children_emit_separate_findings() {
+        let xml = br#"<events>
+  <event>
+    <uei>uei.test/one</uei>
+    <event-label>One</event-label>
+    <severity>Warning</severity>
+    <autoaction state="off">a()</autoaction>
+  </event>
+  <event>
+    <uei>uei.test/two</uei>
+    <event-label>Two</event-label>
+    <severity>Major</severity>
+    <autoaction state="off">b()</autoaction>
+    <priority>17</priority>
+  </event>
+</events>"#;
+        let result = convert(
+            xml,
+            Path::new("/tmp/test.events.xml"),
+            &ConvertOpts::default(),
+        );
+        let ec001s: Vec<_> = result
+            .findings
+            .iter()
+            .filter(|f| f.code == FindingCode::Ec001)
+            .collect();
+        assert_eq!(ec001s.len(), 2, "one EC001 per event");
+        // Each finding anchored to a distinct event location.
+        let locs: Vec<_> = ec001s
+            .iter()
+            .filter_map(|f| match &f.details {
+                FindingDetails::UnmodeledElements { location, .. } => location.as_ref(),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(locs.len(), 2);
+        assert_ne!(locs[0].event_index, locs[1].event_index);
+        assert_ne!(locs[0].line, locs[1].line);
+    }
+
+    #[test]
+    fn ec001_default_cap_engages_on_oversized_input() {
+        // Build a pathological XML with 1005 events, each carrying an
+        // unmodeled <parameter>. Default cap (1000) triggers; we expect
+        // 1000 per-event findings + 1 summary finding listing 5 truncated.
+        let mut xml = String::from("<events>\n");
+        for i in 0..1005 {
+            xml.push_str(&format!(
+                "  <event>\n    <uei>uei.test/{i}</uei>\n    <event-label>L{i}</event-label>\n    \
+                 <severity>Warning</severity>\n    <autoaction state=\"off\">x()</autoaction>\n  </event>\n"
+            ));
+        }
+        xml.push_str("</events>\n");
+        let result = convert(
+            xml.as_bytes(),
+            Path::new("/tmp/big.events.xml"),
+            &ConvertOpts::default(),
+        );
+        let per_event_ec001s = result
+            .findings
+            .iter()
+            .filter(|f| {
+                f.code == FindingCode::Ec001
+                    && matches!(
+                        &f.details,
+                        FindingDetails::UnmodeledElements {
+                            truncated_remaining: None,
+                            ..
+                        }
+                    )
+            })
+            .count();
+        let summary_ec001s = result
+            .findings
+            .iter()
+            .filter(|f| {
+                matches!(
+                    &f.details,
+                    FindingDetails::UnmodeledElements {
+                        truncated_remaining: Some(_),
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(per_event_ec001s, 1000, "per-event findings capped at 1000");
+        assert_eq!(summary_ec001s, 1, "one summary finding emitted");
+        // Confirm the summary message includes the truncated count.
+        let summary = result
+            .findings
+            .iter()
+            .find(|f| {
+                matches!(
+                    &f.details,
+                    FindingDetails::UnmodeledElements {
+                        truncated_remaining: Some(_),
+                        ..
+                    }
+                )
+            })
+            .unwrap();
+        match &summary.details {
+            FindingDetails::UnmodeledElements {
+                truncated_remaining: Some(n),
+                ..
+            } => assert_eq!(*n, 5),
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn ec001_max_findings_zero_disables_cap() {
+        let mut xml = String::from("<events>\n");
+        for i in 0..1500 {
+            xml.push_str(&format!(
+                "  <event>\n    <uei>uei.test/{i}</uei>\n    <event-label>L{i}</event-label>\n    \
+                 <severity>Warning</severity>\n    <autoaction state=\"off\">x()</autoaction>\n  </event>\n"
+            ));
+        }
+        xml.push_str("</events>\n");
+        let opts = ConvertOpts {
+            max_findings: Some(0),
+            ..ConvertOpts::default()
+        };
+        let result = convert(xml.as_bytes(), Path::new("/tmp/big.events.xml"), &opts);
+        let per_event_ec001s = result
+            .findings
+            .iter()
+            .filter(|f| {
+                f.code == FindingCode::Ec001
+                    && matches!(
+                        &f.details,
+                        FindingDetails::UnmodeledElements {
+                            truncated_remaining: None,
+                            ..
+                        }
+                    )
+            })
+            .count();
+        let summary_ec001s = result
+            .findings
+            .iter()
+            .filter(|f| {
+                matches!(
+                    &f.details,
+                    FindingDetails::UnmodeledElements {
+                        truncated_remaining: Some(_),
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(
+            per_event_ec001s, 1500,
+            "all events reported when cap disabled"
+        );
+        assert_eq!(summary_ec001s, 0, "no summary needed when cap disabled");
+    }
+
+    #[test]
+    fn explain_ec001_mentions_key_terms() {
+        let text = explain(FindingCode::Ec001);
+        // Per spec scenario: --explain EC001 mentions "unmodeled",
+        // "structural", and pointer to `source upload`.
+        assert!(
+            text.contains("unmodeled"),
+            "EC001 explainer must say 'unmodeled'"
+        );
+        assert!(
+            text.contains("structural") || text.contains("STRUCTURAL"),
+            "EC001 explainer must describe its structural-only scope"
+        );
+        assert!(
+            text.contains("source upload"),
+            "EC001 explainer must point to the source upload fallback"
+        );
     }
 }

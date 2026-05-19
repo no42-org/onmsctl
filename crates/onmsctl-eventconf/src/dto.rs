@@ -197,14 +197,134 @@ pub struct Event {
     pub varbindsdecode: Option<Vec<Varbindsdecode>>,
     #[serde(skip_serializing_if = "Option::is_none", rename = "snmp")]
     pub snmp: Option<Snmp>,
-    /// Parameters extracted from the event payload. Mapped from
-    /// `parmCollection` in the Horizon schema. **Note:** this field has no
-    /// representation in eventconf XML (eventconf is a static
+    /// Static per-event configuration parameters. Mirrors the eventconf
+    /// XSD's `<parameter name="..." value="..." expand="..."/>`. Survives
+    /// the XML round-trip via [`crate::xml::XmlParameter`]; the local
+    /// YAML schema [`crate::apply::local::ParameterDef`] is the
+    /// operator-facing form.
+    ///
+    /// **NOT** the same as [`Event::parm_collection`] below — these are
+    /// two different domains:
+    ///
+    ///   - `parameter` (THIS field): static, defined alongside the event
+    ///     in eventconf XML. Round-trips through `source apply` /
+    ///     `source convert`. Per-event metadata that eventd attaches at
+    ///     fire time. eventd evaluates entries in document order.
+    ///   - `parm_collection` (below): runtime, present on a fired event
+    ///     instance. JSON-only on the wire; the XML render in
+    ///     [`crate::xml`] drops it.
+    ///
+    /// MUST NOT be conflated.
+    #[serde(skip_serializing_if = "Option::is_none", rename = "parameter")]
+    pub parameter: Option<Vec<Parameter>>,
+    /// eventd forwarding directives. Each entry tells eventd to forward
+    /// matched events to another destination (typically SNMP UDP / TCP).
+    /// State is `on`/`off`; mechanism is `snmpudp`/`snmptcp`/...; target
+    /// is the body text (destination address).
+    #[serde(skip_serializing_if = "Option::is_none", rename = "forward")]
+    pub forward: Option<Vec<Forward>>,
+    /// Embedded executable logic that eventd runs on event arrival.
+    /// Typically BeanShell. **Security note:** modeling this in YAML
+    /// makes it trivial to ship server-side code via `source apply` —
+    /// the threat surface already existed via raw XML upload, but
+    /// operators should ensure RBAC on eventconf write access is
+    /// configured appropriately.
+    #[serde(skip_serializing_if = "Option::is_none", rename = "script")]
+    pub script: Option<Vec<Script>>,
+    /// eventd regex-replacement filters. Each entry is a
+    /// `(eventparm, pattern, replacement)` triple that eventd applies
+    /// via `Pattern.compile(pattern).matcher(parm).replaceAll(replacement)`
+    /// at event-fire time. NOT a suppression filter — a value-rewrite
+    /// rule on named event parameters.
+    #[serde(skip_serializing_if = "Option::is_none", rename = "filters")]
+    pub filters: Option<Vec<Filter>>,
+    /// Runtime parameters extracted from the event payload. Mapped from
+    /// `parmCollection` in the Horizon schema. **Note:** this field has
+    /// no representation in eventconf XML (eventconf is a static
     /// configuration; `parmCollection` is a *runtime* event field). A
     /// JSON → XML → JSON round-trip via [`crate::xml`] therefore drops
     /// this field. Setting it has no effect on uploaded source XML.
+    ///
+    /// **NOT** the same as [`Event::parameter`] above — see that field's
+    /// doc-comment for the static-vs-runtime distinction.
     #[serde(skip_serializing_if = "Option::is_none", rename = "parmCollection")]
     pub parm_collection: Option<Vec<Parm>>,
+}
+
+/// Static per-event configuration parameter. Mirrors the eventconf XSD's
+/// `<parameter name="..." value="..." expand="..."/>`. See
+/// [`Event::parameter`] for the static-vs-runtime distinction with
+/// [`Parm`] / [`Event::parm_collection`].
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Parameter {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    /// Whether eventd should expand placeholder syntax (e.g. `%parm[#1]%`)
+    /// in `value` at fire time. Absent on the wire when not set in the
+    /// source XML — the local schema preserves the absent vs explicit
+    /// `true`/`false` distinction.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expand: Option<bool>,
+}
+
+/// eventd forwarding directive. Mirrors the eventconf XSD's
+/// `<forward state="on" mechanism="snmpudp">target</forward>`.
+/// All fields are free strings — no closed-set enum on `state` or
+/// `mechanism` so that Horizon-version-specific values (e.g. `kafka`)
+/// round-trip verbatim.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Forward {
+    /// Forwarding state — typically `on` or `off`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+    /// Forwarder mechanism — typically `snmpudp`, `snmptcp`, `xmpp`, ...
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mechanism: Option<String>,
+    /// Destination identifier (body text of `<forward>`), e.g.
+    /// `alarmcentral:162` for an SNMP trap forwarder.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+}
+
+/// Embedded executable logic. Mirrors the eventconf XSD's
+/// `<script language="beanshell">body</script>`. Body is preserved
+/// byte-for-byte through round-trip (no whitespace normalization).
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Script {
+    /// Script language — typically `beanshell`. Free string for
+    /// forward-compat with future eventd-supported languages.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    /// Script source. Multi-line content is preserved; eventd evaluates
+    /// the body verbatim.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+}
+
+/// eventd regex-replacement filter. Mirrors the upstream
+/// `<filter eventparm="..." pattern="..." replacement="..."/>` —
+/// EMPTY element with three required attributes per the JAXB
+/// `@XmlAttribute(required=true)` annotation. Wire-side fields are
+/// `Option<String>` to be liberal in what we accept on download; the
+/// local `FilterDef` requires all three.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Filter {
+    /// Name of the event parameter the filter operates on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub eventparm: Option<String>,
+    /// Java-style regular expression matched against the named parm
+    /// value via `Pattern.compile(...).matcher(value).replaceAll(...)`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pattern: Option<String>,
+    /// Replacement string passed to `Matcher.replaceAll`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replacement: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -299,11 +419,18 @@ pub struct Tticket {
 #[serde(rename_all = "kebab-case", default)]
 pub struct AlarmData {
     pub reduction_key: Option<String>,
-    /// Alarm semantic. Valid values:
-    ///   - `1` Problem (raises alarm, paired with Resolution)
-    ///   - `2` Resolution (clears a paired Problem by reductionKey)
-    ///   - `3` Unresolvable (no auto-clear from device; needs manual close
-    ///     or alarmd policy)
+    /// Alarm semantic, stored as the wire-format integer Horizon expects.
+    /// Operator-facing vocabulary (Web UI and YAML) uses the symbolic
+    /// form; this field stays integer-typed for wire compatibility.
+    ///
+    ///   - `1` raise — alarmd Java code calls this `Problem`.
+    ///   - `2` resolution — clears a paired Raise by reductionKey.
+    ///   - `3` unresolvable — no auto-clear from device; manual close
+    ///     or alarmd cleanup policy.
+    ///
+    /// Other integers round-trip verbatim and trigger `EC007` during
+    /// `source convert`. The local YAML schema `AlarmType` enum projects
+    /// to/from this integer via `to_wire()` / `from_wire()`.
     pub alarm_type: Option<i32>,
     pub clear_key: Option<String>,
     pub auto_clean: Option<bool>,

@@ -34,12 +34,13 @@
 //! This applies to `Tticket`, `Autoacknowledge`, and `Correlation`.
 
 use crate::apply::local::{
-    AlarmDataDef, AutoackDef, CorrelationDef, DecodeDef, EventDef, LogmsgDef, MaskDef,
-    MaskElementDef, MaskVarbindDef, TticketDef, VarbindsdecodeDef,
+    AlarmDataDef, AlarmType, AutoackDef, CorrelationDef, DecodeDef, EventDef, FilterDef,
+    ForwardDef, LogmsgDef, MaskDef, MaskElementDef, MaskVarbindDef, ParameterDef, ScriptDef,
+    SnmpDef, TticketDef, VarbindsdecodeDef,
 };
 use crate::dto::{
-    AlarmData, Autoacknowledge, Correlation, Decode, Event, Logmsg, Mask, MaskElement, MaskVarbind,
-    Tticket, Varbindsdecode,
+    AlarmData, Autoacknowledge, Correlation, Decode, Event, Forward, Logmsg, Mask, MaskElement,
+    MaskVarbind, Snmp, Tticket, Varbindsdecode,
 };
 
 /// Error variants produced when converting a wire [`Event`] to an
@@ -57,6 +58,10 @@ pub enum WireToLocalError {
     AlarmDataMissingReductionKey,
     /// Event has alarm-data but no `alarm-type` attribute.
     AlarmDataMissingAlarmType,
+    /// Event has an `alarm-data` `alarm-type` whose integer value is
+    /// outside the accepted set `{1, 2, 3}`. Surfaced as `EC007`
+    /// (Error severity) during `source convert`.
+    AlarmDataAlarmTypeOutOfRange { value: i32 },
     /// Event has a logmsg child but the inner text is empty / absent.
     LogmsgMissingContent,
     /// Event has a logmsg child but no `dest` attribute.
@@ -80,6 +85,13 @@ impl std::fmt::Display for WireToLocalError {
             }
             Self::AlarmDataMissingAlarmType => {
                 write!(f, "<alarm-data> is missing the `alarm-type` attribute")
+            }
+            Self::AlarmDataAlarmTypeOutOfRange { value } => {
+                write!(
+                    f,
+                    "<alarm-data> alarm-type {value} is outside the accepted set \
+                     {{1 (raise), 2 (resolution), 3 (unresolvable)}}"
+                )
             }
             Self::LogmsgMissingContent => write!(f, "<logmsg> has no inner text"),
             Self::LogmsgMissingDest => write!(f, "<logmsg> has no `dest` attribute"),
@@ -131,7 +143,121 @@ impl TryFrom<&Event> for EventDef {
                 .varbindsdecode
                 .as_ref()
                 .map(|groups| groups.iter().map(VarbindsdecodeDef::from).collect()),
+            snmp: e.snmp.as_ref().map(SnmpDef::from),
+            forwards: e
+                .forward
+                .as_ref()
+                .map(|wire| wire.iter().map(ForwardDef::from).collect()),
+            filters: e.filters.as_ref().map(|wire_filters| {
+                wire_filters
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(idx, f)| {
+                        let event_label = e.event_label.as_deref().unwrap_or("?");
+                        match (&f.eventparm, &f.pattern, &f.replacement) {
+                            // `replacement` is XSD-required (must be
+                            // present) but the empty string is a
+                            // legitimate value — `Matcher.replaceAll("")`
+                            // strips the matched text. Don't reject
+                            // empty `replacement`.
+                            (Some(ep), Some(p), Some(r)) if !ep.is_empty() && !p.is_empty() => {
+                                Some(FilterDef {
+                                    eventparm: ep.clone(),
+                                    pattern: p.clone(),
+                                    replacement: r.clone(),
+                                })
+                            }
+                            _ => {
+                                eprintln!(
+                                    "warning: event '{event_label}' filter[{idx}] dropped — \
+                                     wire shape is missing or has empty `eventparm` or \
+                                     `pattern` (both XSD-required and non-empty)"
+                                );
+                                None
+                            }
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            }),
+            scripts: e.script.as_ref().map(|wire_scripts| {
+                wire_scripts
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(idx, s)| {
+                        let event_label = e.event_label.as_deref().unwrap_or("?");
+                        match &s.language {
+                            Some(l) if !l.is_empty() => Some(ScriptDef {
+                                language: l.clone(),
+                                body: s.body.clone(),
+                            }),
+                            _ => {
+                                // Lossy with visibility: XSD requires
+                                // `language`; downloaded XML missing it
+                                // can't round-trip through the local
+                                // schema. Drop the entry and warn.
+                                eprintln!(
+                                    "warning: event '{event_label}' script[{idx}] dropped — \
+                                     wire shape lacks required `language` attribute"
+                                );
+                                None
+                            }
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            }),
+            parameters: e.parameter.as_ref().map(|wire_params| {
+                wire_params
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(idx, p)| {
+                        let event_label = e.event_label.as_deref().unwrap_or("?");
+                        match (&p.name, &p.value) {
+                            (Some(n), Some(v)) if !n.is_empty() && !v.is_empty() => {
+                                Some(ParameterDef {
+                                    name: n.clone(),
+                                    value: v.clone(),
+                                    expand: p.expand,
+                                })
+                            }
+                            _ => {
+                                // Lossy with visibility: drop the entry,
+                                // emit a structured warning to stderr.
+                                eprintln!(
+                                    "warning: event '{event_label}' parameter[{idx}] dropped — \
+                                     wire shape lacks required name or value (name={:?}, \
+                                     value={:?})",
+                                    p.name, p.value
+                                );
+                                None
+                            }
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            }),
         })
+    }
+}
+
+impl From<&Forward> for ForwardDef {
+    fn from(f: &Forward) -> Self {
+        ForwardDef {
+            state: f.state.clone(),
+            mechanism: f.mechanism.clone(),
+            target: f.target.clone(),
+        }
+    }
+}
+
+impl From<&Snmp> for SnmpDef {
+    fn from(s: &Snmp) -> Self {
+        SnmpDef {
+            id: s.id.clone(),
+            idtext: s.idtext.clone(),
+            version: s.version.clone(),
+            specific: s.specific,
+            generic: s.generic,
+            community: s.community.clone(),
+        }
     }
 }
 
@@ -163,9 +289,13 @@ impl TryFrom<&AlarmData> for AlarmDataDef {
                 .reduction_key
                 .clone()
                 .ok_or(WireToLocalError::AlarmDataMissingReductionKey)?,
-            alarm_type: a
-                .alarm_type
-                .ok_or(WireToLocalError::AlarmDataMissingAlarmType)?,
+            alarm_type: {
+                let raw = a
+                    .alarm_type
+                    .ok_or(WireToLocalError::AlarmDataMissingAlarmType)?;
+                AlarmType::from_wire(raw)
+                    .ok_or(WireToLocalError::AlarmDataAlarmTypeOutOfRange { value: raw })?
+            },
             auto_clean: a.auto_clean,
             clear_key: a.clear_key.clone(),
         })
@@ -324,6 +454,10 @@ mod tests {
                 }],
             }]),
             snmp: None,
+            parameter: None,
+            forward: None,
+            script: None,
+            filters: None,
             parm_collection: None,
         }
     }
@@ -345,7 +479,7 @@ mod tests {
 
         let alarm = local.alarm_data.unwrap();
         assert_eq!(alarm.reduction_key, "%uei%");
-        assert_eq!(alarm.alarm_type, 1);
+        assert_eq!(alarm.alarm_type, AlarmType::Raise);
 
         let mask = local.mask.unwrap();
         assert_eq!(mask.elements[0].name, "id");

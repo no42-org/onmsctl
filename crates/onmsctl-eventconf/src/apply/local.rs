@@ -86,6 +86,158 @@ pub struct EventDef {
     pub correlation: Option<CorrelationDef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub varbindsdecode: Option<Vec<VarbindsdecodeDef>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snmp: Option<SnmpDef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parameters: Option<Vec<ParameterDef>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forwards: Option<Vec<ForwardDef>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scripts: Option<Vec<ScriptDef>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filters: Option<Vec<FilterDef>>,
+}
+
+/// eventd regex-replacement filter on a named event parameter.
+/// Mirrors the upstream `<filter eventparm="..." pattern="..."
+/// replacement="..."/>` — EMPTY element with three REQUIRED
+/// attributes per JAXB.
+///
+/// At event-fire time eventd compiles `pattern` as a Java regex and
+/// applies `Matcher.replaceAll(replacement)` to the value of the
+/// event parameter named by `eventparm`. NOT a suppression filter —
+/// a value-rewrite rule.
+///
+/// `pattern` uses Java regex syntax (`java.util.regex.Pattern`). We
+/// do NOT validate the syntax locally because Rust's `regex` crate
+/// has subtly different feature support (no lookahead/lookbehind).
+/// Bad patterns surface at event-fire time as eventd warnings.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FilterDef {
+    /// Event-parameter name the filter targets. Required.
+    pub eventparm: String,
+    /// Java regex matched against the parameter's value. Required.
+    pub pattern: String,
+    /// Replacement string for `Matcher.replaceAll`. Required —
+    /// `$1`/`$2`/... backreferences supported per Java regex.
+    pub replacement: String,
+}
+
+/// eventd forwarding directive. Mirrors the eventconf XSD's
+/// `<forward state="..." mechanism="...">target</forward>`. The XSD
+/// constrains `state` to `{on, off}` and `mechanism` to a closed set
+/// (`snmpudp`, `snmptcp`, `xmltcp`, `xmludp`) — the local validator
+/// matches the XSD so YAML caught locally instead of producing a
+/// 400 from Horizon's upload endpoint. Every field is still
+/// individually optional (XSD attributes default).
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ForwardDef {
+    /// `on` or `off`. Validated against the XSD-closed set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+    /// One of `snmpudp` / `snmptcp` / `xmltcp` / `xmludp` per the
+    /// eventconf XSD. Validated against the XSD-closed set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mechanism: Option<String>,
+    /// Destination identifier (e.g. `alarmcentral:162` for SNMP UDP).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+}
+
+/// Accepted `forward.mechanism` values per the eventconf XSD pattern.
+const FORWARD_MECHANISMS: &[&str] = &["snmpudp", "snmptcp", "xmltcp", "xmludp"];
+
+/// Embedded executable logic. Mirrors the eventconf XSD's
+/// `<script language="beanshell">body</script>`. eventd runs the body
+/// at event-fire time.
+///
+/// **Security note.** Modeling this element in YAML makes it trivial
+/// to ship server-side code via `source apply`. The threat surface
+/// already exists at the eventconf-XML upload path; this change does
+/// not introduce new authority. Operators should ensure RBAC on
+/// eventconf write access is appropriately scoped.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ScriptDef {
+    /// Script language. The eventconf XSD declares this attribute
+    /// REQUIRED (`use="required"`), so the local schema makes it
+    /// required too. Typical values: `beanshell`, `groovy`. Free
+    /// string in the value space (XSD is `xs:string`).
+    pub language: String,
+    /// Script source. Multi-line content via YAML `|` literal block.
+    /// Preserved byte-for-byte through round-trip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+}
+
+/// Static per-event configuration parameter. Mirrors the eventconf XSD's
+/// `<parameter name="..." value="..." expand="..."/>`. eventd evaluates
+/// entries in document order at event-fire time.
+///
+/// Operator vocabulary note: this is the *static* per-event parameter
+/// list, distinct from the *runtime* `parmCollection` carried on fired
+/// events (which the wire DTO has as [`crate::dto::Event::parm_collection`]
+/// and which this YAML schema deliberately doesn't model — it's a
+/// runtime-only concern that doesn't round-trip through eventconf XML).
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ParameterDef {
+    /// Parameter name. Required; rejected if empty or whitespace-only.
+    pub name: String,
+    /// Parameter value. Required; rejected if empty or whitespace-only.
+    /// May contain `%parm[#N]%`-style placeholders that eventd expands
+    /// when `expand: true`.
+    pub value: String,
+    /// Whether eventd should expand `%parm[#N]%` placeholders in `value`
+    /// at event-fire time. Absent on the wire when not set in the source
+    /// YAML — the absent vs explicit `true`/`false` distinction
+    /// round-trips through `source apply` / `source download`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expand: Option<bool>,
+}
+
+/// SNMP trap discriminator + metadata on an event. Mirrors the
+/// eventconf XSD's `<snmp>` element. Every field is optional; the
+/// XSD does not require any particular combination. Real vendor MIBs
+/// often use only `id`/`generic`/`specific` and omit the rest.
+///
+/// Documented practical ranges (NOT enforced, per design — values
+/// outside these ranges round-trip verbatim through the wire/XML
+/// layer because future SNMP semantics or vendor extensions may
+/// legitimately use them):
+///   - `generic`: `0..=6` per RFC 1157.
+///   - `specific`: `>= 0`.
+///   - `version`: typically `v1`, `v2c`, or `v3`. Free string —
+///     `v3-auth-priv` and other Horizon-version-specific variants
+///     are accepted verbatim.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SnmpDef {
+    /// Enterprise OID (e.g. `.1.3.6.1.4.1.9.1.13`). XSD types this
+    /// as `xs:string`; no OID-format validation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// Textual variant of the id (vendor-supplied human label).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idtext: Option<String>,
+    /// SNMP protocol version. Free string; common values are `v1`,
+    /// `v2c`, `v3`. Not enum-validated for forward-compat with
+    /// Horizon-version-specific variants.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// SNMP specific-trap number. Per RFC 1157 this is `>= 0`;
+    /// out-of-range values round-trip verbatim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub specific: Option<i32>,
+    /// SNMP generic-trap number. Per RFC 1157 this is `0..=6`;
+    /// out-of-range values round-trip verbatim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generic: Option<i32>,
+    /// SNMP community string (typically `public`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub community: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, JsonSchema)]
@@ -98,17 +250,204 @@ pub struct LogmsgDef {
     pub notify: Option<bool>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, JsonSchema)]
+/// Alarm-type discriminator on an event's `alarmData` block. Strictly
+/// accepts only the three known states — anything else fails at parse
+/// or wire→local conversion. Accepts both integer (`1` / `2` / `3`)
+/// and symbolic-string (`raise` / `resolution` / `unresolvable`) forms
+/// in YAML; symbolic input is case-insensitive.
+///
+/// Vocabulary: the Horizon Web UI displays `raise` (1), `resolution`
+/// (2), `unresolvable` (3). The alarmd Java code uses `Problem` for
+/// state 1; this YAML schema follows the Web UI vocabulary so
+/// operators see the same term across surfaces.
+///
+/// Whitespace note: the deserializer does NOT trim. However, YAML's
+/// own scalar handling strips leading/trailing whitespace from
+/// *unquoted* plain scalars before the deserializer sees them — so
+/// `alarmType: raise ` (unquoted, trailing space) parses successfully.
+/// `alarmType: "raise "` (quoted) reaches the deserializer with the
+/// space and is rejected as unknown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AlarmType {
+    /// State 1 — Raise: raises an alarm, paired with a Resolution event.
+    /// Also known as `Problem` in the alarmd Java code; the YAML uses
+    /// `raise` to match the Horizon Web UI display.
+    Raise,
+    /// State 2 — Resolution: clears a paired Raise alarm by reductionKey.
+    Resolution,
+    /// State 3 — Unresolvable: a Raise-class event with no auto-clear
+    /// from the device. Common for hardware-failure traps. Requires
+    /// manual close or an alarmd cleanup policy.
+    Unresolvable,
+}
+
+impl AlarmType {
+    /// Project to the wire-format integer representation Horizon expects.
+    pub fn to_wire(self) -> i32 {
+        match self {
+            Self::Raise => 1,
+            Self::Resolution => 2,
+            Self::Unresolvable => 3,
+        }
+    }
+
+    /// Build from the wire integer. Returns `None` for any integer
+    /// outside `{1, 2, 3}` — the caller is expected to surface that
+    /// to operators (e.g. `from_wire.rs` returns
+    /// `WireToLocalError::AlarmDataAlarmTypeOutOfRange` so
+    /// `source convert` emits `EC007` against it).
+    pub fn from_wire(n: i32) -> Option<Self> {
+        match n {
+            1 => Some(Self::Raise),
+            2 => Some(Self::Resolution),
+            3 => Some(Self::Unresolvable),
+            _ => None,
+        }
+    }
+}
+
+impl Serialize for AlarmType {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Raise => s.serialize_str("raise"),
+            Self::Resolution => s.serialize_str("resolution"),
+            Self::Unresolvable => s.serialize_str("unresolvable"),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for AlarmType {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl<'de> serde::de::Visitor<'de> for V {
+            type Value = AlarmType;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str(
+                    "alarmType: integer 1, 2, or 3, or symbolic string \
+                     'raise', 'resolution', or 'unresolvable' (case-insensitive)",
+                )
+            }
+
+            fn visit_i64<E: serde::de::Error>(self, n: i64) -> Result<AlarmType, E> {
+                let narrowed = i32::try_from(n).map_err(|_| {
+                    E::custom(format!(
+                        "alarmType {n} is outside i32 range; expected 1, 2, or 3"
+                    ))
+                })?;
+                AlarmType::from_wire(narrowed).ok_or_else(|| {
+                    E::custom(format!(
+                        "alarmType {narrowed} is not in the accepted set; \
+                         expected 1 (raise), 2 (resolution), or 3 (unresolvable)"
+                    ))
+                })
+            }
+
+            fn visit_u64<E: serde::de::Error>(self, n: u64) -> Result<AlarmType, E> {
+                let narrowed = i32::try_from(n).map_err(|_| {
+                    E::custom(format!(
+                        "alarmType {n} is outside i32 range; expected 1, 2, or 3"
+                    ))
+                })?;
+                AlarmType::from_wire(narrowed).ok_or_else(|| {
+                    E::custom(format!(
+                        "alarmType {narrowed} is not in the accepted set; \
+                         expected 1 (raise), 2 (resolution), or 3 (unresolvable)"
+                    ))
+                })
+            }
+
+            fn visit_str<E: serde::de::Error>(self, s: &str) -> Result<AlarmType, E> {
+                // Case-insensitive ASCII matching. Whitespace is NOT
+                // trimmed — leading/trailing spaces in *quoted* YAML
+                // strings fail as unknown; unquoted plain scalars are
+                // already trimmed by the YAML parser before reaching us.
+                match s.to_ascii_lowercase().as_str() {
+                    "raise" => Ok(AlarmType::Raise),
+                    "resolution" => Ok(AlarmType::Resolution),
+                    "unresolvable" => Ok(AlarmType::Unresolvable),
+                    other => Err(E::custom(format!(
+                        "unknown alarmType {other:?}; expected one of \
+                         'raise', 'resolution', 'unresolvable', or integer 1, 2, 3"
+                    ))),
+                }
+            }
+
+            fn visit_string<E: serde::de::Error>(self, s: String) -> Result<AlarmType, E> {
+                self.visit_str(&s)
+            }
+
+            // Friendly diagnostics for YAML inputs the visitor doesn't
+            // accept. Without these, serde's stock errors don't mention
+            // alarmType at all.
+            fn visit_bool<E: serde::de::Error>(self, b: bool) -> Result<AlarmType, E> {
+                Err(E::custom(format!(
+                    "alarmType: expected integer or symbolic string, got boolean {b}"
+                )))
+            }
+
+            fn visit_f64<E: serde::de::Error>(self, f: f64) -> Result<AlarmType, E> {
+                Err(E::custom(format!(
+                    "alarmType: expected integer 1, 2, or 3 or symbolic string, \
+                     got float {f} (whole-number floats like 1.0 are not accepted)"
+                )))
+            }
+
+            fn visit_unit<E: serde::de::Error>(self) -> Result<AlarmType, E> {
+                Err(E::custom(
+                    "alarmType: expected integer or symbolic string, got null",
+                ))
+            }
+
+            fn visit_none<E: serde::de::Error>(self) -> Result<AlarmType, E> {
+                Err(E::custom(
+                    "alarmType: expected integer or symbolic string, got null/absent",
+                ))
+            }
+        }
+        d.deserialize_any(V)
+    }
+}
+
+impl JsonSchema for AlarmType {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "AlarmType".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        // oneOf: symbolic string (preferred, first so editors offer it
+        // as the default autocomplete) OR integer constrained to {1,2,3}.
+        schemars::json_schema!({
+            "oneOf": [
+                {
+                    "type": "string",
+                    "enum": ["raise", "resolution", "unresolvable"]
+                },
+                {
+                    "type": "integer",
+                    "enum": [1, 2, 3]
+                }
+            ],
+            "description": "Alarm-type discriminator. Strictly accepts the three known states — 'raise' (1), 'resolution' (2), or 'unresolvable' (3). Symbolic input is case-insensitive."
+        })
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AlarmDataDef {
     pub reduction_key: String,
-    /// Alarm semantic. Must be one of:
-    ///   - `1` — Problem: raises an alarm, paired with a Resolution event
-    ///   - `2` — Resolution: clears a paired Problem alarm by `reductionKey`
-    ///   - `3` — Unresolvable: a Problem-class event with no auto-clear from
-    ///     the device. Common for hardware-failure traps. Requires manual
-    ///     close or an alarmd cleanup policy.
-    pub alarm_type: i32,
+    /// Alarm semantic. Strictly one of:
+    ///   - `1` / `"raise"` — raises an alarm, paired with a Resolution
+    ///     event. (Known as `Problem` in the alarmd Java code.)
+    ///   - `2` / `"resolution"` — clears a paired Raise by `reductionKey`.
+    ///   - `3` / `"unresolvable"` — Raise-class with no auto-clear from
+    ///     the device. Common for hardware-failure traps.
+    ///
+    /// Anything else fails at parse (for YAML inputs) or surfaces as
+    /// `EC007` during `source convert` (for downloaded XML that uses
+    /// an unrecognized integer).
+    pub alarm_type: AlarmType,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_clean: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -475,6 +814,163 @@ impl EventDef {
                 }
             }
         }
+        if let Some(s) = &self.snmp {
+            s.validate(idx)?;
+        }
+        if let Some(params) = &self.parameters {
+            for (k, p) in params.iter().enumerate() {
+                p.validate(idx, k)?;
+            }
+        }
+        if let Some(forwards) = &self.forwards {
+            for (k, f) in forwards.iter().enumerate() {
+                f.validate(idx, k)?;
+            }
+        }
+        if let Some(scripts) = &self.scripts {
+            for (k, s) in scripts.iter().enumerate() {
+                s.validate(idx, k)?;
+            }
+        }
+        if let Some(filters) = &self.filters {
+            for (k, f) in filters.iter().enumerate() {
+                f.validate(idx, k)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl FilterDef {
+    /// All three fields are XSD-required. The struct type guarantees
+    /// non-Option. Validation:
+    ///
+    ///   - `eventparm` and `pattern` must be non-empty AND non-trimmed
+    ///     (no leading/trailing whitespace). Stored values flow
+    ///     verbatim to eventd's filter-map key — whitespace padding
+    ///     would silently break match lookups at runtime.
+    ///   - `replacement` is XSD-required (presence-only); the empty
+    ///     string is legitimate (`Matcher.replaceAll("")` strips the
+    ///     match). No empty / whitespace check.
+    fn validate(&self, event_idx: usize, filter_idx: usize) -> Result<()> {
+        let check_no_padding = |field: &str, value: &str| -> Result<()> {
+            if value.is_empty() {
+                return Err(Error::Config(format!(
+                    "spec.events[{event_idx}].filters[{filter_idx}].{field} is empty"
+                )));
+            }
+            if value != value.trim() {
+                return Err(Error::Config(format!(
+                    "spec.events[{event_idx}].filters[{filter_idx}].{field} has \
+                     leading or trailing whitespace; eventd's filter-map key uses \
+                     the raw value, so padding would silently prevent matches"
+                )));
+            }
+            Ok(())
+        };
+        check_no_padding("eventparm", &self.eventparm)?;
+        check_no_padding("pattern", &self.pattern)?;
+        Ok(())
+    }
+}
+
+impl ForwardDef {
+    /// Validate against the eventconf XSD's closed sets for `state` and
+    /// `mechanism`. Reject all-None entries (an empty `<forward/>` is
+    /// XSD-legal but operationally meaningless).
+    fn validate(&self, event_idx: usize, fwd_idx: usize) -> Result<()> {
+        if self.state.is_none() && self.mechanism.is_none() && self.target.is_none() {
+            return Err(Error::Config(format!(
+                "spec.events[{event_idx}].forwards[{fwd_idx}] is empty; at least one of \
+                 state, mechanism, or target must be set"
+            )));
+        }
+        if let Some(s) = &self.state {
+            validate_state(
+                s,
+                &format!("spec.events[{event_idx}].forwards[{fwd_idx}].state"),
+            )?;
+        }
+        if let Some(m) = &self.mechanism
+            && !FORWARD_MECHANISMS.contains(&m.as_str())
+        {
+            return Err(Error::Config(format!(
+                "spec.events[{event_idx}].forwards[{fwd_idx}].mechanism '{m}' is not in the \
+                 XSD-accepted set ({}); Horizon will reject the upload at validation time",
+                FORWARD_MECHANISMS.join(", ")
+            )));
+        }
+        if let Some(v) = &self.target
+            && v.trim().is_empty()
+        {
+            return Err(Error::Config(format!(
+                "spec.events[{event_idx}].forwards[{fwd_idx}].target is empty or \
+                 whitespace-only; omit the field or provide a value"
+            )));
+        }
+        Ok(())
+    }
+}
+
+impl ScriptDef {
+    /// `language` is required by the XSD and the struct type guarantees
+    /// it is `String` (not `Option`), but we still reject explicit empty
+    /// or whitespace-only values to catch typos. `body` may contain
+    /// leading/trailing whitespace (script content is preserved
+    /// byte-for-byte) so it is NOT trim-checked.
+    fn validate(&self, event_idx: usize, script_idx: usize) -> Result<()> {
+        if self.language.trim().is_empty() {
+            return Err(Error::Config(format!(
+                "spec.events[{event_idx}].scripts[{script_idx}].language is empty or \
+                 whitespace-only; required by the eventconf XSD"
+            )));
+        }
+        Ok(())
+    }
+}
+
+impl ParameterDef {
+    fn validate(&self, event_idx: usize, param_idx: usize) -> Result<()> {
+        if self.name.trim().is_empty() {
+            return Err(Error::Config(format!(
+                "spec.events[{event_idx}].parameters[{param_idx}].name is empty"
+            )));
+        }
+        if self.value.trim().is_empty() {
+            return Err(Error::Config(format!(
+                "spec.events[{event_idx}].parameters[{param_idx}].value is empty"
+            )));
+        }
+        Ok(())
+    }
+}
+
+impl SnmpDef {
+    /// Reject explicit empty or whitespace-only strings on `Some(...)`
+    /// fields — they're structurally legal per XSD but operationally
+    /// meaningless and usually indicate a typo or template-engine
+    /// misfire. Mirrors the `trim().is_empty()` policy used by sibling
+    /// validators (`EventDef::label`, `MaskDef::elements[].name`,
+    /// `VarbindsdecodeDef::parmid`).
+    ///
+    /// Numeric fields are NOT range-checked here; the doc-comment
+    /// ranges are guidance, not validation.
+    fn validate(&self, idx: usize) -> Result<()> {
+        let check_str = |field: &str, value: &Option<String>| -> Result<()> {
+            if let Some(v) = value
+                && v.trim().is_empty()
+            {
+                return Err(Error::Config(format!(
+                    "spec.events[{idx}].snmp.{field} is set but empty or whitespace-only; \
+                     omit the field or provide a value"
+                )));
+            }
+            Ok(())
+        };
+        check_str("id", &self.id)?;
+        check_str("idtext", &self.idtext)?;
+        check_str("version", &self.version)?;
+        check_str("community", &self.community)?;
         Ok(())
     }
 }
@@ -486,12 +982,11 @@ impl AlarmDataDef {
                 "spec.events[{idx}].alarmData.reductionKey is empty"
             )));
         }
-        if !matches!(self.alarm_type, 1..=3) {
-            return Err(Error::Config(format!(
-                "spec.events[{idx}].alarmData.alarmType must be 1 (Problem), 2 (Resolution), or 3 (Unresolvable); got {}",
-                self.alarm_type
-            )));
-        }
+        // Range validation: unknown integers (`AlarmType::Other(n)`) are
+        // permitted at the validator level. They round-trip verbatim and
+        // surface as `EC007` during `source convert` rather than as a
+        // blocking validation error here. The deserializer already
+        // rejects unknown symbolic strings (typos) up front.
         Ok(())
     }
 }
@@ -703,7 +1198,10 @@ spec:
     }
 
     #[test]
-    fn rejects_alarm_type_not_in_set() {
+    fn rejects_unknown_integer_alarm_type() {
+        // Strict mode: out-of-range integers reject at deserialize time.
+        // The error message must name the offending value AND the
+        // accepted set so operators can fix the YAML directly.
         let yaml = r#"
 apiVersion: eventconf.opennms.org/v1
 kind: EventSource
@@ -721,12 +1219,11 @@ spec:
         let err = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap_err();
         match err {
             Error::Config(m) => {
-                assert!(m.contains("got 7"));
-                // Error message must enumerate all three valid semantics so
-                // the operator knows the full accepted set.
-                assert!(m.contains("Problem"));
-                assert!(m.contains("Resolution"));
-                assert!(m.contains("Unresolvable"));
+                assert!(m.contains("7"), "error must cite the bad value: {m}");
+                assert!(
+                    m.contains("1") && m.contains("2") && m.contains("3"),
+                    "error must enumerate the accepted integers: {m}"
+                );
             }
             other => panic!("unexpected {other:?}"),
         }
@@ -754,14 +1251,23 @@ spec:
 "#;
         let local = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap();
         let alarm = local.spec.events[0].alarm_data.as_ref().unwrap();
-        assert_eq!(alarm.alarm_type, 3);
+        assert_eq!(alarm.alarm_type, AlarmType::Unresolvable);
     }
 
     #[test]
-    fn rejects_alarm_type_4_with_message_listing_all_valid_values() {
-        // Hard-reject anything outside {1, 2, 3} in v0.1. If OpenNMS adds
-        // alarm type 4 in the future, a follow-up change can widen the set.
-        let yaml = r#"
+    fn accepts_symbolic_alarm_type_case_insensitive() {
+        // YAML accepts "raise" / "resolution" / "unresolvable" alongside
+        // the integer forms; case-insensitive on input. Unknown integers
+        // round-trip; unknown strings reject at deserialize time.
+        for (input, expected) in &[
+            ("raise", AlarmType::Raise),
+            ("Raise", AlarmType::Raise),
+            ("RAISE", AlarmType::Raise),
+            ("resolution", AlarmType::Resolution),
+            ("Unresolvable", AlarmType::Unresolvable),
+        ] {
+            let yaml = format!(
+                r#"
 apiVersion: eventconf.opennms.org/v1
 kind: EventSource
 metadata:
@@ -773,17 +1279,53 @@ spec:
       severity: Warning
       alarmData:
         reductionKey: "key"
-        alarmType: 4
-"#;
-        let err = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap_err();
-        match err {
-            Error::Config(m) => {
-                assert!(m.contains("got 4"));
-                assert!(m.contains("Problem"));
-                assert!(m.contains("Resolution"));
-                assert!(m.contains("Unresolvable"));
+        alarmType: {input}
+"#,
+            );
+            let local = EventSourceLocal::from_yaml(yaml.as_bytes())
+                .unwrap_or_else(|e| panic!("input {input:?} failed: {e}"));
+            let got = local.spec.events[0].alarm_data.as_ref().unwrap().alarm_type;
+            assert_eq!(got, *expected, "input {input:?}");
+        }
+    }
+
+    #[test]
+    fn rejects_unknown_symbolic_alarm_type() {
+        // Unknown strings (typos or the alarmd Java alias `problem`) fail
+        // at deserialize time so operator intent surfaces immediately.
+        // Whitespace is NOT trimmed — leading/trailing spaces count.
+        // Includes "Problem" (capitalized Java alias) — lowercased before
+        // matching, so the strict rejection still fires.
+        for bad in &["problem", "Problem", "crit", "Raise ", " raise"] {
+            let yaml = format!(
+                r#"
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: cisco.foo
+spec:
+  events:
+    - uei: uei.opennms.org/test
+      label: "Test"
+      severity: Warning
+      alarmData:
+        reductionKey: "key"
+        alarmType: "{bad}"
+"#,
+            );
+            let result = EventSourceLocal::from_yaml(yaml.as_bytes());
+            assert!(
+                result.is_err(),
+                "input {bad:?} should fail at deserialize, got {:?}",
+                result.as_ref().map(|_| "Ok"),
+            );
+            // Error message should reference the unknown value.
+            if let Err(Error::Config(m)) = &result {
+                assert!(
+                    m.contains("unknown alarmType") || m.contains("alarmType"),
+                    "input {bad:?}: error message should mention alarmType: {m}"
+                );
             }
-            other => panic!("unexpected {other:?}"),
         }
     }
 
@@ -908,7 +1450,7 @@ spec:
         let e = &local.spec.events[0];
         assert_eq!(e.severity, "Major");
         assert_eq!(e.logmsg.as_ref().unwrap().dest, "logndisplay");
-        assert_eq!(e.alarm_data.as_ref().unwrap().alarm_type, 1);
+        assert_eq!(e.alarm_data.as_ref().unwrap().alarm_type, AlarmType::Raise);
         assert_eq!(e.mask.as_ref().unwrap().elements.len(), 2);
         assert_eq!(
             e.mask.as_ref().unwrap().elements[0].values,
@@ -973,6 +1515,7 @@ spec:
                     m.varbinds.iter().any(|v| v.vboid.is_some()),
                     "full.yaml: at least one vboid-style varbind"
                 );
+                assert!(e.snmp.is_some(), "full.yaml: snmp must populate");
                 assert!(
                     e.varbindsdecode.is_some(),
                     "full.yaml: varbindsdecode must populate"
@@ -1358,5 +1901,867 @@ spec:
             }
             other => panic!("unexpected {other:?}"),
         }
+    }
+
+    // -- AlarmType serialization round-trip tests --------------------------
+
+    #[test]
+    fn alarm_type_serializes_as_symbolic_for_known_variants() {
+        // Direct YAML serialization: AlarmType::X → "x".
+        let raise_yaml = serde_norway::to_string(&AlarmType::Raise).unwrap();
+        let resolution_yaml = serde_norway::to_string(&AlarmType::Resolution).unwrap();
+        let unresolvable_yaml = serde_norway::to_string(&AlarmType::Unresolvable).unwrap();
+        assert!(
+            raise_yaml.trim_end().ends_with("raise"),
+            "got {raise_yaml:?}"
+        );
+        assert!(
+            resolution_yaml.trim_end().ends_with("resolution"),
+            "got {resolution_yaml:?}"
+        );
+        assert!(
+            unresolvable_yaml.trim_end().ends_with("unresolvable"),
+            "got {unresolvable_yaml:?}"
+        );
+    }
+
+    #[test]
+    fn alarm_type_from_wire_returns_none_for_out_of_range() {
+        // Strict mode: from_wire returns None for any integer outside
+        // {1, 2, 3}. Callers (apply/from_wire.rs) surface that as
+        // WireToLocalError::AlarmDataAlarmTypeOutOfRange.
+        assert_eq!(AlarmType::from_wire(1), Some(AlarmType::Raise));
+        assert_eq!(AlarmType::from_wire(2), Some(AlarmType::Resolution));
+        assert_eq!(AlarmType::from_wire(3), Some(AlarmType::Unresolvable));
+        assert_eq!(AlarmType::from_wire(0), None);
+        assert_eq!(AlarmType::from_wire(4), None);
+        assert_eq!(AlarmType::from_wire(-1), None);
+        assert_eq!(AlarmType::from_wire(i32::MAX), None);
+    }
+
+    #[test]
+    fn alarm_type_yaml_round_trip_symbolic_form() {
+        // YAML containing `alarmType: raise` round-trips back to YAML
+        // containing the same symbolic form after parse + re-emit.
+        let yaml = r#"
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: cisco.foo
+spec:
+  events:
+    - uei: uei.opennms.org/test
+      label: "Test"
+      severity: Warning
+      alarmData:
+        reductionKey: "key"
+        alarmType: raise
+"#;
+        let local = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap();
+        let emitted = serde_norway::to_string(&local).unwrap();
+        assert!(
+            emitted.contains("alarmType: raise"),
+            "expected `alarmType: raise` after round-trip, got:\n{emitted}"
+        );
+    }
+
+    #[test]
+    fn alarm_type_yaml_round_trip_integer_normalizes_to_symbolic() {
+        // YAML containing `alarmType: 1` normalizes to `alarmType: raise`
+        // on re-emit — same canonical state regardless of input form.
+        let yaml = r#"
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: cisco.foo
+spec:
+  events:
+    - uei: uei.opennms.org/test
+      label: "Test"
+      severity: Warning
+      alarmData:
+        reductionKey: "key"
+        alarmType: 1
+"#;
+        let local = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap();
+        let emitted = serde_norway::to_string(&local).unwrap();
+        assert!(
+            emitted.contains("alarmType: raise"),
+            "integer input should normalize to symbolic on re-emit:\n{emitted}"
+        );
+    }
+
+    // -- SnmpDef parser / validator tests --------------------------------
+
+    #[test]
+    fn accepts_event_with_snmp_block() {
+        let yaml = r#"
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: cisco.foo
+spec:
+  events:
+    - uei: uei.test/cold-start
+      label: "Cold start"
+      severity: Warning
+      snmp:
+        id: ".1.3.6.1.4.1.9.1.13"
+        idtext: "Cisco"
+        version: v2c
+        generic: 6
+        specific: 1
+        community: public
+"#;
+        let local = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap();
+        let snmp = local.spec.events[0].snmp.as_ref().expect("snmp parsed");
+        assert_eq!(snmp.id.as_deref(), Some(".1.3.6.1.4.1.9.1.13"));
+        assert_eq!(snmp.idtext.as_deref(), Some("Cisco"));
+        assert_eq!(snmp.version.as_deref(), Some("v2c"));
+        assert_eq!(snmp.generic, Some(6));
+        assert_eq!(snmp.specific, Some(1));
+        assert_eq!(snmp.community.as_deref(), Some("public"));
+    }
+
+    #[test]
+    fn accepts_event_with_partial_snmp_block() {
+        // Real vendor MIBs often populate only id/generic/specific.
+        // Every field is optional and the validator must accept that.
+        let yaml = r#"
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: cisco.foo
+spec:
+  events:
+    - uei: uei.test/foo
+      label: "Foo"
+      severity: Warning
+      snmp:
+        id: ".1.3.6.1.4.1.9.1.13"
+        generic: 6
+"#;
+        let local = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap();
+        let snmp = local.spec.events[0].snmp.as_ref().unwrap();
+        assert_eq!(snmp.id.as_deref(), Some(".1.3.6.1.4.1.9.1.13"));
+        assert_eq!(snmp.generic, Some(6));
+        assert!(snmp.version.is_none());
+        assert!(snmp.specific.is_none());
+    }
+
+    #[test]
+    fn accepts_event_with_unknown_snmp_version_string() {
+        // Forward-compat: `version` is a free string. Horizon may use
+        // variants like `v3-auth-priv` in the future; verbatim round-trip.
+        let yaml = r#"
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: vendor.foo
+spec:
+  events:
+    - uei: uei.test/foo
+      label: "Foo"
+      severity: Warning
+      snmp:
+        version: "v3-auth-priv"
+"#;
+        let local = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap();
+        let snmp = local.spec.events[0].snmp.as_ref().unwrap();
+        assert_eq!(snmp.version.as_deref(), Some("v3-auth-priv"));
+    }
+
+    #[test]
+    fn rejects_snmp_with_explicit_empty_or_whitespace_string_field() {
+        // Empty AND whitespace-only string fields fail validation,
+        // mirroring the sibling validators' `trim().is_empty()` policy.
+        for (label, value) in &[("empty", "\"\""), ("whitespace", "\"   \"")] {
+            let yaml = format!(
+                r#"
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: vendor.foo
+spec:
+  events:
+    - uei: uei.test/foo
+      label: "Foo"
+      severity: Warning
+      snmp:
+        id: {value}
+"#,
+            );
+            let err = EventSourceLocal::from_yaml(yaml.as_bytes())
+                .err()
+                .unwrap_or_else(|| panic!("input {label} should fail"));
+            match err {
+                Error::Config(m) => {
+                    assert!(
+                        m.contains("snmp.id"),
+                        "{label}: error should cite the empty field: {m}"
+                    );
+                    assert!(
+                        m.contains("empty") || m.contains("whitespace"),
+                        "{label}: error should describe the issue: {m}"
+                    );
+                }
+                other => panic!("{label}: unexpected {other:?}"),
+            }
+        }
+    }
+
+    // -- ParameterDef tests -----------------------------------------------
+
+    #[test]
+    fn accepts_event_with_parameters_list() {
+        let yaml = r#"
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: cisco.foo
+spec:
+  events:
+    - uei: uei.test/foo
+      label: "Foo"
+      severity: Warning
+      parameters:
+        - name: endpoint
+          value: /var/log/foo
+        - name: context
+          value: "%parm[#1]%"
+          expand: true
+"#;
+        let local = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap();
+        let params = local.spec.events[0]
+            .parameters
+            .as_ref()
+            .expect("parameters parsed");
+        assert_eq!(params.len(), 2);
+        assert_eq!(params[0].name, "endpoint");
+        assert_eq!(params[0].value, "/var/log/foo");
+        assert!(params[0].expand.is_none(), "absent expand stays absent");
+        assert_eq!(params[1].name, "context");
+        assert_eq!(params[1].value, "%parm[#1]%");
+        assert_eq!(params[1].expand, Some(true));
+    }
+
+    #[test]
+    fn rejects_parameter_with_empty_name() {
+        let yaml = r#"
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: vendor.foo
+spec:
+  events:
+    - uei: uei.test/foo
+      label: "Foo"
+      severity: Warning
+      parameters:
+        - name: ""
+          value: "v"
+"#;
+        let err = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap_err();
+        match err {
+            Error::Config(m) => {
+                assert!(m.contains("parameters[0].name"), "{m}");
+                assert!(m.contains("empty"), "{m}");
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_parameter_with_empty_value() {
+        let yaml = r#"
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: vendor.foo
+spec:
+  events:
+    - uei: uei.test/foo
+      label: "Foo"
+      severity: Warning
+      parameters:
+        - name: "n"
+          value: ""
+"#;
+        let err = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap_err();
+        match err {
+            Error::Config(m) => {
+                assert!(m.contains("parameters[0].value"), "{m}");
+                assert!(m.contains("empty"), "{m}");
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parameters_round_trip_preserves_order_and_expand_absence() {
+        // event-source-parameter task 6.3 + 6.3a:
+        //   - order preservation through YAML → wire → XML → wire → YAML
+        //   - absent `expand` stays absent (not materialized to a default)
+        let yaml = r#"
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: cisco.foo
+spec:
+  events:
+    - uei: uei.test/foo
+      label: "Foo"
+      severity: Warning
+      parameters:
+        - name: first
+          value: "1"
+        - name: second
+          value: "2"
+          expand: false
+        - name: third
+          value: "3"
+"#;
+        let local = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap();
+        let emitted = serde_norway::to_string(&local).unwrap();
+        // Re-emit places fields in struct-declared order; pin presence
+        // and ordering of the three parameter names.
+        let p1 = emitted.find("name: first").expect("first present");
+        let p2 = emitted.find("name: second").expect("second present");
+        let p3 = emitted.find("name: third").expect("third present");
+        assert!(p1 < p2 && p2 < p3, "document order preserved:\n{emitted}");
+        // Absent `expand` on first/third stays absent.
+        let first_block = &emitted[p1..p2];
+        let third_block = &emitted[p3..];
+        assert!(
+            !first_block.contains("expand:"),
+            "absent expand on first should not materialize:\n{first_block}"
+        );
+        assert!(
+            !third_block.contains("expand:"),
+            "absent expand on third should not materialize:\n{third_block}"
+        );
+        // Explicit `expand: false` on second survives.
+        let second_block = &emitted[p2..p3];
+        assert!(
+            second_block.contains("expand: false"),
+            "explicit expand: false preserved:\n{second_block}"
+        );
+    }
+
+    #[test]
+    fn snmp_block_round_trips_through_yaml() {
+        // YAML → parse → re-emit preserves every populated field.
+        let yaml = r#"
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: cisco.foo
+spec:
+  events:
+    - uei: uei.test/cold-start
+      label: "Cold start"
+      severity: Warning
+      snmp:
+        id: ".1.3.6.1.4.1.9.1.13"
+        version: v2c
+        generic: 6
+        specific: 1
+"#;
+        let local = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap();
+        let emitted = serde_norway::to_string(&local).unwrap();
+        assert!(emitted.contains("snmp:"));
+        assert!(emitted.contains("id: .1.3.6.1.4.1.9.1.13"));
+        assert!(emitted.contains("version: v2c"));
+        assert!(emitted.contains("generic: 6"));
+        assert!(emitted.contains("specific: 1"));
+    }
+
+    // -- ForwardDef + ScriptDef tests -------------------------------------
+
+    #[test]
+    fn accepts_event_with_forwards_and_scripts() {
+        let yaml = r#"
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: cisco.foo
+spec:
+  events:
+    - uei: uei.test/foo
+      label: "Foo"
+      severity: Warning
+      forwards:
+        - state: "on"
+          mechanism: snmpudp
+          target: "alarmcentral:162"
+      scripts:
+        - language: beanshell
+          body: |
+            do_thing();
+            another_thing();
+"#;
+        let local = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap();
+        let e = &local.spec.events[0];
+        let fwds = e.forwards.as_ref().expect("forwards parsed");
+        assert_eq!(fwds.len(), 1);
+        assert_eq!(fwds[0].state.as_deref(), Some("on"));
+        assert_eq!(fwds[0].mechanism.as_deref(), Some("snmpudp"));
+        assert_eq!(fwds[0].target.as_deref(), Some("alarmcentral:162"));
+        let scripts = e.scripts.as_ref().expect("scripts parsed");
+        assert_eq!(scripts.len(), 1);
+        assert_eq!(scripts[0].language, "beanshell");
+        let body = scripts[0].body.as_deref().expect("body present");
+        assert!(body.contains("do_thing();"));
+        assert!(body.contains("another_thing();"));
+    }
+
+    #[test]
+    fn rejects_forward_mechanism_outside_xsd_set() {
+        // The eventconf XSD restricts mechanism to {snmpudp, snmptcp,
+        // xmltcp, xmludp}. Anything else (`kafka`, `xmpp`, …) is
+        // rejected locally so the operator sees the typo before Horizon
+        // produces a 400.
+        let yaml = r#"
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: vendor.foo
+spec:
+  events:
+    - uei: uei.test/foo
+      label: "Foo"
+      severity: Warning
+      forwards:
+        - state: "on"
+          mechanism: kafka
+          target: "topic.example"
+"#;
+        let err = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap_err();
+        match err {
+            Error::Config(m) => {
+                assert!(m.contains("kafka"), "error cites the bad value: {m}");
+                assert!(m.contains("snmpudp"), "error enumerates the XSD set: {m}");
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn forwards_accept_all_xsd_mechanisms_and_states() {
+        for mechanism in &["snmpudp", "snmptcp", "xmltcp", "xmludp"] {
+            for state in &["on", "off"] {
+                let yaml = format!(
+                    r#"
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: vendor.foo
+spec:
+  events:
+    - uei: uei.test/foo
+      label: "Foo"
+      severity: Warning
+      forwards:
+        - state: "{state}"
+          mechanism: {mechanism}
+          target: "host:162"
+"#,
+                );
+                EventSourceLocal::from_yaml(yaml.as_bytes())
+                    .unwrap_or_else(|e| panic!("state={state} mechanism={mechanism}: {e}"));
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_forward_with_invalid_state() {
+        // state is XSD-constrained to {on, off}; whitespace, typos, and
+        // any other value fail via validate_state.
+        for bad in &["   ", "yes", "Off", "1"] {
+            let yaml = format!(
+                r#"
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: vendor.foo
+spec:
+  events:
+    - uei: uei.test/foo
+      label: "Foo"
+      severity: Warning
+      forwards:
+        - state: "{bad}"
+          mechanism: snmpudp
+          target: "host:162"
+"#,
+            );
+            let err = EventSourceLocal::from_yaml(yaml.as_bytes())
+                .err()
+                .unwrap_or_else(|| panic!("input {bad:?} should fail"));
+            match err {
+                Error::Config(m) => {
+                    assert!(m.contains("forwards[0].state"), "{bad:?}: {m}");
+                    assert!(m.contains("on") && m.contains("off"), "{bad:?}: {m}");
+                }
+                other => panic!("{bad:?}: unexpected {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn script_body_clip_mode_preserves_one_trailing_newline_byte_for_byte() {
+        // YAML `|` clip mode emits a single trailing newline. The body
+        // bytes the deserializer sees MUST equal exactly
+        // "do_thing();\nanother_thing();\n" — nothing added, nothing
+        // stripped, no leading whitespace from the YAML indent.
+        let yaml = "
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: vendor.foo
+spec:
+  events:
+    - uei: uei.test/foo
+      label: \"Foo\"
+      severity: Warning
+      scripts:
+        - language: beanshell
+          body: |
+            do_thing();
+            another_thing();
+";
+        let local = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap();
+        let body = local.spec.events[0].scripts.as_ref().unwrap()[0]
+            .body
+            .as_deref()
+            .expect("body present");
+        assert_eq!(body, "do_thing();\nanother_thing();\n");
+    }
+
+    #[test]
+    fn script_body_strip_mode_preserves_no_trailing_newline_byte_for_byte() {
+        // YAML `|-` strip mode emits no trailing newline. The body
+        // bytes MUST equal exactly "do_thing();\nanother_thing();" —
+        // no trailing newline, no other modification.
+        let yaml = "
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: vendor.foo
+spec:
+  events:
+    - uei: uei.test/foo
+      label: \"Foo\"
+      severity: Warning
+      scripts:
+        - language: beanshell
+          body: |-
+            do_thing();
+            another_thing();
+";
+        let local = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap();
+        let body = local.spec.events[0].scripts.as_ref().unwrap()[0]
+            .body
+            .as_deref()
+            .expect("body present");
+        assert_eq!(body, "do_thing();\nanother_thing();");
+    }
+
+    #[test]
+    fn rejects_all_empty_forward_entry() {
+        // An entry with no state, mechanism, or target is operationally
+        // meaningless even though XSD attributes are individually
+        // optional.
+        let yaml = r#"
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: vendor.foo
+spec:
+  events:
+    - uei: uei.test/foo
+      label: "Foo"
+      severity: Warning
+      forwards:
+        - {}
+"#;
+        let err = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap_err();
+        match err {
+            Error::Config(m) => {
+                assert!(m.contains("forwards[0]"), "{m}");
+                assert!(m.contains("empty") || m.contains("at least one"), "{m}");
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_script_with_empty_language() {
+        let yaml = r#"
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: vendor.foo
+spec:
+  events:
+    - uei: uei.test/foo
+      label: "Foo"
+      severity: Warning
+      scripts:
+        - language: ""
+          body: "do_thing();"
+"#;
+        let err = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap_err();
+        match err {
+            Error::Config(m) => {
+                assert!(m.contains("scripts[0].language"), "{m}");
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn forwards_and_scripts_preserve_order_through_full_round_trip() {
+        // Full round-trip: YAML → wire → XML → wire → YAML. Order is
+        // preserved at every layer (eventd evaluates in document
+        // order at fire time).
+        let yaml = r#"
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: vendor.foo
+spec:
+  events:
+    - uei: uei.test/foo
+      label: "Foo"
+      severity: Warning
+      forwards:
+        - state: "on"
+          mechanism: snmpudp
+          target: "host1:162"
+        - state: "off"
+          mechanism: snmptcp
+          target: "host2:162"
+      scripts:
+        - language: beanshell
+          body: "first_script();"
+        - language: groovy
+          body: "second_script();"
+"#;
+        let local = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap();
+        // Render through the wire layer + XML and back to local.
+        use crate::dto::Event;
+        use crate::xml::{parse_events_from_xml, render_eventconf_xml};
+        let wire: Event = (&local.spec.events[0]).into();
+        let xml = render_eventconf_xml(std::slice::from_ref(&wire)).unwrap();
+        let parsed = parse_events_from_xml(xml.as_bytes()).unwrap();
+        let round_tripped = EventDef::try_from(&parsed[0]).unwrap();
+        // Forwards order survives the full loop.
+        let fwds = round_tripped.forwards.as_ref().expect("forwards present");
+        assert_eq!(fwds.len(), 2);
+        assert_eq!(fwds[0].target.as_deref(), Some("host1:162"));
+        assert_eq!(fwds[1].target.as_deref(), Some("host2:162"));
+        // Scripts order survives.
+        let scripts = round_tripped.scripts.as_ref().expect("scripts present");
+        assert_eq!(scripts.len(), 2);
+        assert_eq!(scripts[0].language, "beanshell");
+        assert_eq!(scripts[1].language, "groovy");
+        assert_eq!(scripts[0].body.as_deref(), Some("first_script();"));
+        assert_eq!(scripts[1].body.as_deref(), Some("second_script();"));
+    }
+
+    // -- FilterDef tests --------------------------------------------------
+
+    #[test]
+    fn accepts_event_with_flat_filters_list() {
+        // YAML is flat — no `<filters>` wrapper. Each entry has the
+        // three required attributes (eventparm, pattern, replacement).
+        let yaml = r#"
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: vendor.foo
+spec:
+  events:
+    - uei: uei.test/foo
+      label: "Foo"
+      severity: Warning
+      filters:
+        - eventparm: trapMsg
+          pattern: '\bWARN\b'
+          replacement: "WARNING"
+        - eventparm: ifAlias
+          pattern: '^old-(.*)$'
+          replacement: "new-$1"
+"#;
+        let local = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap();
+        let filters = local.spec.events[0]
+            .filters
+            .as_ref()
+            .expect("filters parsed");
+        assert_eq!(filters.len(), 2);
+        assert_eq!(filters[0].eventparm, "trapMsg");
+        // YAML single-quoted scalars preserve backslashes literally.
+        // `\bWARN\b` is the canonical Java regex for "match WARN at
+        // word boundaries" — single backslash, NOT double.
+        assert_eq!(filters[0].pattern, r"\bWARN\b");
+        assert_eq!(filters[0].replacement, "WARNING");
+        assert_eq!(filters[1].eventparm, "ifAlias");
+        assert_eq!(filters[1].replacement, "new-$1");
+    }
+
+    #[test]
+    fn rejects_filter_with_empty_eventparm() {
+        let yaml = r#"
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: vendor.foo
+spec:
+  events:
+    - uei: uei.test/foo
+      label: "Foo"
+      severity: Warning
+      filters:
+        - eventparm: ""
+          pattern: "x"
+          replacement: "y"
+"#;
+        let err = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap_err();
+        match err {
+            Error::Config(m) => {
+                assert!(m.contains("filters[0].eventparm"), "{m}");
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_filter_with_empty_pattern() {
+        let yaml = r#"
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: vendor.foo
+spec:
+  events:
+    - uei: uei.test/foo
+      label: "Foo"
+      severity: Warning
+      filters:
+        - eventparm: "x"
+          pattern: ""
+          replacement: "y"
+"#;
+        let err = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap_err();
+        match err {
+            Error::Config(m) => {
+                assert!(m.contains("filters[0].pattern"), "{m}");
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn accepts_filter_with_empty_replacement() {
+        // `Matcher.replaceAll("")` strips the matched text — a
+        // legitimate use case for "match this regex, delete the
+        // match." The XSD requires `replacement` to be PRESENT,
+        // not non-empty. The local schema follows.
+        let yaml = r#"
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: vendor.foo
+spec:
+  events:
+    - uei: uei.test/foo
+      label: "Foo"
+      severity: Warning
+      filters:
+        - eventparm: "x"
+          pattern: '\bsecret\b'
+          replacement: ""
+"#;
+        let local = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap();
+        let filter = &local.spec.events[0].filters.as_ref().unwrap()[0];
+        assert_eq!(filter.replacement, "");
+    }
+
+    #[test]
+    fn rejects_filter_with_padded_eventparm() {
+        // Whitespace around eventparm would silently prevent eventd
+        // from finding the filter in its (eventparm|uei) map.
+        let yaml = r#"
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: vendor.foo
+spec:
+  events:
+    - uei: uei.test/foo
+      label: "Foo"
+      severity: Warning
+      filters:
+        - eventparm: "  trapMsg  "
+          pattern: "x"
+          replacement: "y"
+"#;
+        let err = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap_err();
+        match err {
+            Error::Config(m) => {
+                assert!(m.contains("filters[0].eventparm"), "{m}");
+                assert!(m.contains("whitespace"), "{m}");
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn filters_yaml_is_flat_xml_renders_with_filters_wrapper() {
+        // YAML → wire → XML inserts the `<filters>` wrapper;
+        // parsing back strips it. Order is preserved.
+        use crate::dto::Event;
+        use crate::xml::{parse_events_from_xml, render_eventconf_xml};
+        let yaml = r#"
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: vendor.foo
+spec:
+  events:
+    - uei: uei.test/foo
+      label: "Foo"
+      severity: Warning
+      filters:
+        - eventparm: a
+          pattern: "p1"
+          replacement: "r1"
+        - eventparm: b
+          pattern: "p2"
+          replacement: "r2"
+"#;
+        let local = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap();
+        let wire: Event = (&local.spec.events[0]).into();
+        let xml = render_eventconf_xml(std::slice::from_ref(&wire)).unwrap();
+        // Wrapper present on render.
+        assert!(xml.contains("<filters>"), "wrapper present:\n{xml}");
+        assert!(xml.contains("</filters>"));
+        // Two filter children with attributes.
+        assert!(xml.contains(r#"eventparm="a""#));
+        assert!(xml.contains(r#"eventparm="b""#));
+        assert!(xml.contains(r#"pattern="p1""#));
+        assert!(xml.contains(r#"replacement="r2""#));
+        // Document order preserved (a before b).
+        let a_pos = xml.find(r#"eventparm="a""#).unwrap();
+        let b_pos = xml.find(r#"eventparm="b""#).unwrap();
+        assert!(a_pos < b_pos, "document order");
+        // Round-trip XML → wire → local.
+        let parsed = parse_events_from_xml(xml.as_bytes()).unwrap();
+        let round_tripped = EventDef::try_from(&parsed[0]).unwrap();
+        let rt_filters = round_tripped.filters.as_ref().expect("filters present");
+        assert_eq!(rt_filters.len(), 2);
+        assert_eq!(rt_filters[0].eventparm, "a");
+        assert_eq!(rt_filters[1].eventparm, "b");
     }
 }
