@@ -132,8 +132,7 @@ fn find_event_start_offsets(xml: &[u8]) -> Vec<usize> {
         if &xml[i..i + prefix.len()] == prefix {
             let terminator = xml.get(i + prefix.len()).copied();
             match terminator {
-                Some(b'>') | Some(b' ') | Some(b'\t') | Some(b'\n') | Some(b'\r')
-                | Some(b'/') => {
+                Some(b'>') | Some(b' ') | Some(b'\t') | Some(b'\n') | Some(b'\r') | Some(b'/') => {
                     offsets.push(i);
                     i += prefix.len() + 1;
                     continue;

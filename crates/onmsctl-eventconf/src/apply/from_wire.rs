@@ -75,10 +75,9 @@ impl std::fmt::Display for WireToLocalError {
             Self::MissingSeverity => {
                 write!(f, "event has no <severity> (required by local schema)")
             }
-            Self::AlarmDataMissingReductionKey => write!(
-                f,
-                "<alarm-data> is missing the `reduction-key` attribute"
-            ),
+            Self::AlarmDataMissingReductionKey => {
+                write!(f, "<alarm-data> is missing the `reduction-key` attribute")
+            }
             Self::AlarmDataMissingAlarmType => {
                 write!(f, "<alarm-data> is missing the `alarm-type` attribute")
             }
