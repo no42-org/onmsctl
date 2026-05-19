@@ -67,6 +67,12 @@ onmsctl source apply -f cisco.foo.yaml --diff
 Fetches the server's current state, prints a UEI-bucketed diff to stderr,
 uploads only when changes exist. Add `--dry-run` to simulate.
 
+`metadata.name` becomes the server's stored source name verbatim —
+`metadata.name: Cisco` → stored source name `Cisco`. Horizon also
+derives `vendor` server-side as the prefix before the first `.` in
+the name (so `metadata.name: cisco.foo` yields source name `cisco.foo`
+and vendor `cisco`). See apply-time limitations below.
+
 The `examples/` directory ships fixtures: `minimal.yaml`, `full.yaml`
 (every nested type — `mask`, `alarmData`, `logmsg`, `correlation`,
 `autoacknowledge`, `tticket`, `mouseovertext`), `severities.yaml`,
@@ -389,9 +395,9 @@ full fidelity.
 
 ### Known server-side issues
 
-Four `/eventconf/*` endpoint bugs reproducible on Horizon 35.0.5 and
-36.0.0; all tracked upstream. `onmsctl` works around NMS-19813
-client-side.
+Five `/eventconf/*` quirks reproducible on Horizon 35.0.5 and 36.0.0;
+all tracked upstream. `onmsctl` works around NMS-19813 and the
+filename-stripper quirk client-side.
 
 | # | Endpoint | Symptom | Upstream |
 |---|---|---|---|
@@ -399,6 +405,7 @@ client-side.
 | 2 | `GET /eventconf/filter/{id}/events` | HTTP 500 NPE when `offset` is omitted | [NMS-19811](https://opennms.atlassian.net/browse/NMS-19811) |
 | 3 | `/eventconf/filter/*` | paging-parameter requirements differ per endpoint, undocumented | [NMS-19812](https://opennms.atlassian.net/browse/NMS-19812) |
 | 4 | `POST /eventconf/upload` | HTTP 400 (empty body) unless the multipart field name is literally `upload` — CXF `@Multipart("upload")` qualifier on the JAX-RS interface | [NMS-19813](https://opennms.atlassian.net/browse/NMS-19813) |
+| 5 | `POST /eventconf/upload` | `EventConfRestService.stripPathAndExtension` derives the source name via `lastIndexOf('.')` — strips only the final extension. Uploading `Cisco.events.xml` produces stored source name `Cisco.events`. | (no ticket yet) |
 
 **User-visible cascade:**
 
@@ -412,6 +419,9 @@ client-side.
   until NMS-19810 is fixed upstream.
 - `source apply` and `source upload` work today: onmsctl sends
   `name="upload"` on every multipart part (NMS-19813 workaround).
+- `source apply` uploads as `{metadata.name}.xml` (not `.events.xml`)
+  so Horizon's naive filename stripper produces a source name equal
+  to `metadata.name` verbatim.
 
 ---
 
