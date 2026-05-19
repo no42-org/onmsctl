@@ -231,13 +231,27 @@ jobs:
           done
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
-        with:
-          generate_release_notes: true
-          fail_on_unmatched_files: true
-          prerelease: ${{ needs.validate-tag.outputs.is-prerelease == 'true' }}
-          files: |
-            release/onmsctl-*
-            release/SHA256SUMS
-            release/*.sig
-            release/*.pem
+        # Use the native gh CLI rather than softprops/action-gh-release —
+        # the action uploads assets in parallel and hits a GitHub
+        # asset-metadata-update race condition that drops random
+        # individual files. `gh release create` uploads sequentially
+        # and waits for each before continuing.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          PRERELEASE_FLAG=""
+          if [ "${{ needs.validate-tag.outputs.is-prerelease }}" = "true" ]; then
+            PRERELEASE_FLAG="--prerelease"
+          fi
+          # Create the release (no assets yet) with auto-generated notes.
+          gh release create "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" \
+            --title "${{ github.ref_name }}" \
+            --generate-notes \
+            $PRERELEASE_FLAG
+          # Upload all artifacts sequentially.
+          gh release upload "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" \
+            --clobber \
+            release/*
