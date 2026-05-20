@@ -15,6 +15,7 @@
 pub mod apply;
 pub mod auth;
 pub mod client;
+pub mod cmd;
 pub mod config;
 pub mod context;
 pub mod error;
@@ -24,6 +25,7 @@ pub mod render;
 pub use apply::{ApplyOptions, ApplyTarget, Diff, Outcome, run_apply};
 pub use auth::AuthCreds;
 pub use client::OnmsClient;
+pub use cmd::{Classify, CmdKind};
 pub use context::{Context, Overrides};
 pub use error::{Error, Result};
 pub use format::OutputFormat;

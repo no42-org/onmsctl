@@ -18,7 +18,7 @@ use anyhow::{Context as _, Result};
 use clap::builder::TypedValueParser as _;
 use clap::{ArgAction, CommandFactory, Parser, Subcommand};
 use onmsctl_core::{
-    Error, OutputFormat, Overrides,
+    Classify, CmdKind, Error, OutputFormat, Overrides,
     config::{ConfigFile, default_path as default_config_path, load as load_config},
     context::Context,
 };
@@ -76,6 +76,13 @@ struct Cli {
     #[arg(short, long, global = true)]
     verbose: bool,
 
+    /// Refuse any `WriteCmd` invocation locally before issuing HTTP.
+    /// Overrides the active context's `read-only` field (precedence:
+    /// flag > env `ONMSCTL_READ_ONLY` > context > default `false`).
+    /// Defense in depth on top of the server's role checks.
+    #[arg(long, global = true)]
+    read_only: bool,
+
     #[command(subcommand)]
     command: Option<TopCmd>,
 }
@@ -130,6 +137,30 @@ enum ConfigCmd {
     },
 }
 
+impl Classify for ConfigCmd {
+    fn kind(&self) -> CmdKind {
+        // Config verbs never issue HTTP. UseContext writes to the local
+        // config file but the read-only attribute is about server-side
+        // mutation; local config switching is always allowed.
+        CmdKind::Read
+    }
+}
+
+/// Refuse a `WriteCmd` invocation locally when the active context is
+/// read-only. Returns `Ok(())` for `Read` or non-read-only contexts.
+fn refuse_if_read_only(ctx: &Context, kind: CmdKind) -> Result<(), Error> {
+    if ctx.read_only && kind == CmdKind::Write {
+        return Err(Error::Config(
+            "active context is read-only; this is a Write command and was \
+             refused locally without issuing any HTTP request. Remove \
+             `read-only: true` from the context or unset --read-only / \
+             ONMSCTL_READ_ONLY to proceed."
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
@@ -172,6 +203,9 @@ async fn run(cli: Cli) -> Result<()> {
         // Password / token never come from CLI flags; only env or config.
         password: None,
         token: None,
+        // `--read-only` is one-way: passing the flag forces read-only.
+        // Omission defers to env / context per precedence.
+        read_only: if cli.read_only { Some(true) } else { None },
     };
     let merged = env.with_flags(flags);
 
@@ -192,11 +226,13 @@ async fn run(cli: Cli) -> Result<()> {
         TopCmd::Config(cmd) => run_config(cmd, &merged).await,
         TopCmd::Source(cmd) => {
             let ctx = resolve_context(&merged)?;
+            refuse_if_read_only(&ctx, cmd.kind())?;
             cmd.run(&ctx).await?;
             Ok(())
         }
         TopCmd::Event(cmd) => {
             let ctx = resolve_context(&merged)?;
+            refuse_if_read_only(&ctx, cmd.kind())?;
             cmd.run(&ctx).await?;
             Ok(())
         }
@@ -446,6 +482,7 @@ mod tests {
                     }),
                     bearer: None,
                 },
+                read_only: false,
             }],
         }
     }
@@ -467,6 +504,7 @@ mod tests {
                         keyring: None,
                     }),
                 },
+                read_only: false,
             }],
         }
     }
@@ -516,6 +554,7 @@ mod tests {
                     }),
                     bearer: None,
                 },
+                read_only: false,
             }],
         };
         redact_secrets(&mut cfg);

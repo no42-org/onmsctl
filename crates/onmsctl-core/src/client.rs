@@ -425,6 +425,7 @@ mod tests {
             insecure_skip_tls_verify: false,
             output_format: OutputFormat::Table,
             verbose: false,
+            read_only: false,
         }
     }
 

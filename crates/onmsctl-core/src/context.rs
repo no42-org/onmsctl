@@ -43,6 +43,11 @@ pub struct Overrides {
     pub insecure_tls: Option<bool>,
     pub output: Option<OutputFormat>,
     pub verbose: bool,
+    /// `Some(true)` forces read-only regardless of context; `Some(false)`
+    /// forces writable regardless of context; `None` defers to the
+    /// resolved context's `read-only` field. Precedence: flag > env >
+    /// context > default `false`.
+    pub read_only: Option<bool>,
 }
 
 impl Overrides {
@@ -60,6 +65,7 @@ impl Overrides {
             insecure_tls: None, // env-side opt-out is intentionally absent
             output: None,
             verbose: false,
+            read_only: env_bool("ONMSCTL_READ_ONLY"),
         }
     }
 
@@ -89,8 +95,25 @@ impl Overrides {
         if flags.output.is_some() {
             self.output = flags.output;
         }
+        if flags.read_only.is_some() {
+            self.read_only = flags.read_only;
+        }
         self.verbose = self.verbose || flags.verbose;
         self
+    }
+}
+
+/// Parse a boolean-shaped env var. Accepts `1`, `true`, `yes`, `on`
+/// (case-insensitive) as `Some(true)`; `0`, `false`, `no`, `off` as
+/// `Some(false)`; missing or empty as `None`. Anything else is treated as
+/// unset (silent — the resolver falls back to the context's declared
+/// value).
+fn env_bool(key: &str) -> Option<bool> {
+    let v = var_nonempty(key)?;
+    match v.to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
     }
 }
 
@@ -103,6 +126,12 @@ pub struct Context {
     pub insecure_skip_tls_verify: bool,
     pub output_format: OutputFormat,
     pub verbose: bool,
+    /// Refuse `WriteCmd` invocations against this context. Resolved with
+    /// precedence: flag > env > context's `read-only` field > default
+    /// `false`. The binary's dispatch layer checks this before running
+    /// any classified [`crate::CmdKind::Write`] command and refuses
+    /// locally without issuing HTTP.
+    pub read_only: bool,
 }
 
 impl Context {
@@ -141,12 +170,16 @@ impl Context {
         // -- Auth --
         let creds = resolve_creds(&active.auth, overrides)?;
 
+        // -- Read-only -- precedence: flag/env (Overrides) > context > default false.
+        let read_only = overrides.read_only.unwrap_or(active.read_only);
+
         Ok(Context {
             url,
             creds,
             insecure_skip_tls_verify,
             output_format: overrides.output.unwrap_or_default(),
             verbose: overrides.verbose,
+            read_only,
         })
     }
 }
@@ -304,6 +337,7 @@ mod tests {
                         keyring: None,
                     },
                 ),
+                read_only: false,
             }],
         }
     }
@@ -326,6 +360,7 @@ mod tests {
                         keyring: None,
                     },
                 ),
+                read_only: false,
             }],
         }
     }
@@ -399,6 +434,7 @@ mod tests {
                             keyring: None,
                         },
                     ),
+                    read_only: false,
                 },
                 NamedContext {
                     name: "prod".into(),
@@ -415,6 +451,7 @@ mod tests {
                             keyring: None,
                         },
                     ),
+                    read_only: false,
                 },
             ],
         };
@@ -455,6 +492,7 @@ mod tests {
                         keyring: None,
                     },
                 ),
+                read_only: false,
             }],
         };
         let o = Overrides {
@@ -488,6 +526,7 @@ mod tests {
                     token_file: Some(f.path().to_path_buf()),
                     keyring: None,
                 }),
+                read_only: false,
             }],
         };
         let ctx = Context::resolve(&cfg, &Overrides::default()).unwrap();

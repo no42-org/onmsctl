@@ -129,6 +129,20 @@ pub enum EventCmd {
     },
 }
 
+impl onmsctl_core::Classify for EventCmd {
+    fn kind(&self) -> onmsctl_core::CmdKind {
+        use onmsctl_core::CmdKind::{Read, Write};
+        match self {
+            EventCmd::List { .. } => Read,
+            EventCmd::Add { .. }
+            | EventCmd::Update { .. }
+            | EventCmd::Delete { .. }
+            | EventCmd::Enable { .. }
+            | EventCmd::Disable { .. } => Write,
+        }
+    }
+}
+
 impl EventCmd {
     pub async fn run(self, ctx: &Context) -> Result<()> {
         let client = OnmsClient::from_context(ctx)?;

@@ -99,6 +99,12 @@ pub struct NamedContext {
     pub name: String,
     pub server: ServerSpec,
     pub auth: AuthSpec,
+    /// When `true`, the CLI refuses any `WriteCmd` invocation against this
+    /// context **before issuing any HTTP request**. Defense in depth on top
+    /// of the server's own role checks. Defaults to `false`; existing
+    /// configs without this field continue to parse.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub read_only: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
