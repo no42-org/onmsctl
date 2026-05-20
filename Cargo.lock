@@ -1026,6 +1026,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "onmsctl-provisioning"
+version = "0.0.1"
+dependencies = [
+ "clap",
+ "onmsctl-core",
+]
+
+[[package]]
 name = "option-ext"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
