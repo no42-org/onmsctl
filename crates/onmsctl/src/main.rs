@@ -85,15 +85,15 @@ struct Cli {
 #[derive(Subcommand, Debug)]
 enum TopCmd {
     /// Manage eventconf sources.
-    #[command(subcommand)]
+    #[command(subcommand, visible_alias = "src")]
     Source(onmsctl_eventconf::cmd::SourceCmd),
     /// Manage eventconf events.
-    #[command(subcommand)]
+    #[command(subcommand, visible_alias = "evt")]
     Event(onmsctl_eventconf::cmd::EventCmd),
     /// Print the binary version and linked capability list.
     Version,
     /// Inspect or switch the active configuration.
-    #[command(subcommand)]
+    #[command(subcommand, visible_alias = "cfg")]
     Config(ConfigCmd),
     /// Generate a shell-completion script.
     ///
