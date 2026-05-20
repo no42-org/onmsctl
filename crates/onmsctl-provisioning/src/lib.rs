@@ -5,13 +5,13 @@
 
 //! Provisioning capability for `onmsctl`.
 //!
-//! **Scaffold stage.** This crate is a registered workspace member with
-//! the module skeleton in place, but exposes no public API yet — the
-//! `model`, `apply`, `convert`, `diff`, and `schema` modules are empty
-//! placeholders. Only `cmd::RequisitionCmd` exists, as a clap subcommand
-//! placeholder that returns "not implemented" if dispatched. Real
-//! capability surface lands in subsequent tasks of the
-//! `add-provisioning-capability` openspec change.
+//! **Partial.** The composite `kind: Requisition` data model (module
+//! `model`) and the JSON Schema annotation table (module `schema`) are
+//! live; the binary is not yet wired into this capability and the
+//! `apply`, `convert`, `diff` modules remain stubs. `cmd::RequisitionCmd`
+//! is a clap subcommand placeholder that returns "not implemented" if
+//! dispatched. Remaining capability surface lands in subsequent tasks
+//! of the `add-provisioning-capability` openspec change.
 
 pub mod apply;
 pub mod cmd;

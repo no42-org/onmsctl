@@ -1,0 +1,254 @@
+{
+  "$defs": {
+    "ApiVersion": {
+      "const": "provisioning.opennms.org/v1",
+      "description": "API version literal. Must equal 'provisioning.opennms.org/v1'.",
+      "type": "string"
+    },
+    "Detector": {
+      "additionalProperties": false,
+      "description": "A detector entry. `class` is optional only because the convert\nmigrator may surface a name-only entry from sparse XML; in practice\nproduction declarations carry the class.",
+      "properties": {
+        "class": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "parameters": {
+          "items": {
+            "$ref": "#/$defs/Parameter"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "ForeignSourceSpec": {
+      "additionalProperties": false,
+      "description": "Foreign-source definition: scan recipe + detection / policy logic\napplied during import. All fields optional — a `ForeignSourceSpec`\nwith all defaults is a valid declaration to \"use Horizon's behavior\"\nwhile still pinning that intent in the YAML.",
+      "properties": {
+        "detectors": {
+          "description": "Ordered list of detectors (provisiond runs them top-down).",
+          "items": {
+            "$ref": "#/$defs/Detector"
+          },
+          "type": "array",
+          "x-onmsctl-list-kind": "ordered"
+        },
+        "policies": {
+          "description": "Ordered list of policies (evaluated in order; first match wins\nper provisiond semantics).",
+          "items": {
+            "$ref": "#/$defs/Policy"
+          },
+          "type": "array",
+          "x-onmsctl-list-kind": "ordered"
+        },
+        "scanInterval": {
+          "description": "Humanized scan-interval like `1d`, `30m`. Optional.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "Interface": {
+      "additionalProperties": false,
+      "description": "A network interface on a node. `ip` is required; `services` and\n`snmpPrimary` are optional. The IP is parsed only at apply time\n(the model accepts a string so the YAML schema can be edited\noff-server without an IP-parser dependency at this layer).",
+      "properties": {
+        "ip": {
+          "type": "string"
+        },
+        "services": {
+          "description": "Service names as known to provisiond (`ICMP`, `SNMP`, `HTTP`, …).\nStrings rather than an enum because the catalog is server-side\nand grows independently of this CLI.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true,
+          "x-onmsctl-list-kind": "set"
+        },
+        "snmpPrimary": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SnmpPrimary"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "ip"
+      ],
+      "type": "object"
+    },
+    "Kind": {
+      "const": "Requisition",
+      "description": "Kind literal. Must equal 'Requisition'.",
+      "type": "string"
+    },
+    "Metadata": {
+      "additionalProperties": false,
+      "description": "Document metadata. `name` is the foreign-source identifier — the value\nused in the REST path `/requisitions/{fs}` and `/foreignSources/{fs}`.",
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "Node": {
+      "additionalProperties": false,
+      "description": "A node within the requisition. `foreignId` is the stable identifier\nin the source-of-truth (e.g. CMDB id, hostname). `label` is the\nhuman-readable display name (becomes Horizon's `nodeLabel`).",
+      "properties": {
+        "assets": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Asset record (free-form `key: value` pairs). Stored as `BTreeMap`\nso the YAML output is sorted and diffs stay stable.",
+          "type": "object"
+        },
+        "categories": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true,
+          "x-onmsctl-list-kind": "set"
+        },
+        "foreignId": {
+          "type": "string"
+        },
+        "interfaces": {
+          "items": {
+            "$ref": "#/$defs/Interface"
+          },
+          "type": "array"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "foreignId",
+        "label"
+      ],
+      "type": "object"
+    },
+    "Parameter": {
+      "additionalProperties": false,
+      "description": "`{key, value}` pair as used by detector / policy `parameters` arrays.\nOpenNMS XML uses this shape verbatim.",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "value"
+      ],
+      "type": "object"
+    },
+    "Policy": {
+      "additionalProperties": false,
+      "description": "A policy entry. `class` is required — policies without a class are\nnot exercisable by provisiond.",
+      "properties": {
+        "class": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "parameters": {
+          "items": {
+            "$ref": "#/$defs/Parameter"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "class"
+      ],
+      "type": "object"
+    },
+    "SnmpPrimary": {
+      "description": "SNMP-primary discriminator on an interface. `P` = primary SNMP interface for data collection; `S` = secondary SNMP interface; `N` = not eligible for SNMP.",
+      "enum": [
+        "P",
+        "S",
+        "N"
+      ],
+      "type": "string"
+    },
+    "Spec": {
+      "additionalProperties": false,
+      "description": "Composite spec carrying both the foreign-source definition and the\nrequisition data. `foreignSource` is optional per D1: omission means\n\"inherit Horizon's default foreign-source.\" `nodes` is required (use\n`[]` for a requisition with no nodes yet).",
+      "properties": {
+        "foreignSource": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ForeignSourceSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional per D1. Absence triggers default-FS inheritance."
+        },
+        "nodes": {
+          "description": "Required. May be empty. Parse-time invariants enforced via\n[`deserialize_nodes_strict`]: no duplicate `foreignId` across the\narray, no duplicate `ip` across interfaces within the same node.",
+          "items": {
+            "$ref": "#/$defs/Node"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "nodes"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Composite `kind: Requisition` YAML document (top-level).\n\nParse-time invariants:\n- `apiVersion` must equal [`API_VERSION`] exactly (custom deserialization)\n- `kind` must equal [`KIND`] exactly (custom deserialization)\n- `metadata.name` must be present (no default)\n- `spec.nodes` must be present (no default; may be an empty `[]`)\n- `spec.foreignSource` is optional per design D1 (default-FS inherit)\n- Unknown fields at any nesting level fail parse",
+  "properties": {
+    "apiVersion": {
+      "$ref": "#/$defs/ApiVersion"
+    },
+    "kind": {
+      "$ref": "#/$defs/Kind"
+    },
+    "metadata": {
+      "$ref": "#/$defs/Metadata"
+    },
+    "spec": {
+      "$ref": "#/$defs/Spec"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "spec"
+  ],
+  "title": "RequisitionLocal",
+  "type": "object"
+}

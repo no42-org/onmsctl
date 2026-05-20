@@ -13,8 +13,10 @@ publish = false
 onmsctl-core = { workspace = true }
 clap = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 serde_norway = { workspace = true }
-# Additional dependencies (quick-xml, schemars, thiserror, async-trait,
-# anyhow, percent-encoding) are added in the tasks that first consume
-# them — see openspec change add-provisioning-capability tasks.md
-# groups 3 (schema), 4 (diff), 8 (convert).
+schemars = { workspace = true }
+# Further dependencies (quick-xml for the XML migrator, thiserror /
+# anyhow for capability-local errors, async-trait / percent-encoding
+# for the apply path) are added when those features land — kept
+# minimal here to surface dep review only when each is actually used.
