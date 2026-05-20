@@ -195,6 +195,122 @@ fn sort_dedup_strings(items: &mut Vec<Value>) {
 }
 
 // ---------------------------------------------------------------------------
+// Rescan-relevance classification (task 4.7, design.md §D3)
+// ---------------------------------------------------------------------------
+//
+// The future L3 layer emits a set of leaf-path strings describing every
+// change between local and remote. The apply path then needs to decide
+// whether to import with `rescanExisting=true` (re-scans every node,
+// expensive) or `rescanExisting=false` (cheap, only imports newly-added
+// or definition-changed nodes). The classifier below decides per-leaf;
+// the aggregator does the OR — any single Relevant leaf forces a full
+// rescan.
+//
+// Unknown leaf paths fall through to `Relevant` (conservative default):
+// better to do an unnecessary rescan than to silently skip one that
+// turns out to be needed.
+
+/// Whether a single leaf change requires re-scanning existing nodes on
+/// the server. Per design D3, scan-relevant changes are those that
+/// affect what provisiond would discover (node identity, interface
+/// services, SNMP discriminator, detection/policy logic); scan-
+/// irrelevant changes are pure metadata (display labels, asset records,
+/// scan-interval, category tags — provisiond doesn't re-collect data
+/// for them).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScanRelevance {
+    /// Touching this leaf changes a scan input. Apply MUST trigger
+    /// `rescanExisting=true` so already-imported nodes pick up the
+    /// new value on the next scan cycle.
+    Relevant,
+    /// Touching this leaf does not affect scan inputs. Apply MAY use
+    /// `rescanExisting=false` if no other change in the diff is
+    /// `Relevant`.
+    Irrelevant,
+}
+
+/// Classify a single leaf-path string against the rescan-relevance
+/// table in `design.md §D3`. Paths are JSON-Pointer-like with `[N]` for
+/// concrete array indices; they're normalized to `[*]` before matching
+/// so the classifier doesn't care which specific node/interface index
+/// is affected.
+///
+/// The table is encoded by *irrelevant* paths (small, finite set);
+/// everything else defaults to `Relevant`. This biases toward
+/// conservative correctness — a new leaf path that the classifier
+/// doesn't recognize triggers a rescan rather than silently skipping
+/// one.
+pub fn classify_leaf(path: &str) -> ScanRelevance {
+    let normalized = normalize_indices(path);
+    let s = normalized.as_str();
+
+    // Irrelevant paths (design.md §D3). Match either exactly or as a
+    // prefix when the path could end at a nested field (e.g.
+    // `spec.nodes[*].assets.building` is irrelevant because
+    // `spec.nodes[*].assets` is).
+    const IRRELEVANT: &[&str] = &[
+        "spec.nodes[*].label",
+        "spec.nodes[*].categories",
+        "spec.nodes[*].assets",
+        "spec.foreignSource.scanInterval",
+    ];
+
+    for &prefix in IRRELEVANT {
+        if s == prefix
+            || s.starts_with(&format!("{prefix}."))
+            || s.starts_with(&format!("{prefix}["))
+        {
+            return ScanRelevance::Irrelevant;
+        }
+    }
+
+    // Everything else: relevant. This covers `spec.nodes[*]` (whole-
+    // node add/remove), `spec.nodes[*].interfaces[*]` (interfaces and
+    // their fields), `spec.foreignSource.detectors[*]` /
+    // `spec.foreignSource.policies[*]` (detection logic), and the
+    // conservative-default catch-all.
+    ScanRelevance::Relevant
+}
+
+/// Aggregate per-leaf classifications into a single `rescanExisting`
+/// boolean for the import call. Returns `true` iff at least one leaf
+/// in the input is `Relevant`. Empty input returns `false` — but the
+/// apply path should have L1-short-circuited before this point.
+pub fn aggregate_rescan_decision<'a, I>(paths: I) -> bool
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    paths
+        .into_iter()
+        .any(|p| classify_leaf(p) == ScanRelevance::Relevant)
+}
+
+/// Replace `[N]` (concrete array indices) with `[*]` (wildcards) for
+/// classification matching. Used internally by [`classify_leaf`].
+fn normalize_indices(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    let bytes = path.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'[' {
+            // Look ahead for digits-then-`]`
+            let mut j = i + 1;
+            while j < bytes.len() && bytes[j].is_ascii_digit() {
+                j += 1;
+            }
+            if j > i + 1 && j < bytes.len() && bytes[j] == b']' {
+                out.push_str("[*]");
+                i = j + 1;
+                continue;
+            }
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
 // Tests — golden-fixture invariants for L1 (task 4.6)
 // ---------------------------------------------------------------------------
 
@@ -382,5 +498,117 @@ mod tests {
     fn l1_compare_reflexive() {
         let d = doc("  nodes: []\n");
         assert_eq!(l1_compare(&d, &d), L1Result::Unchanged);
+    }
+
+    // -- Rescan classifier (task 4.7) -------------------------------------
+
+    #[test]
+    fn rescan_classifier_scan_relevant_leaves() {
+        // Per design.md §D3 — these MUST trigger rescanExisting=true.
+        let relevant = [
+            "spec.nodes[0]",                                // whole node add/remove
+            "spec.nodes[0].interfaces[0]",                  // whole interface
+            "spec.nodes[0].interfaces[0].ip",               // IP change
+            "spec.nodes[0].interfaces[0].services",         // services array change
+            "spec.nodes[0].interfaces[0].services[2]",      // individual service
+            "spec.nodes[0].interfaces[0].snmpPrimary",      // SNMP discriminator
+            "spec.foreignSource.detectors",                 // detectors array
+            "spec.foreignSource.detectors[0]",              // individual detector
+            "spec.foreignSource.detectors[0].class",        // detector property
+            "spec.foreignSource.policies",                  // policies array
+            "spec.foreignSource.policies[1].parameters[0]", // deep policy edit
+        ];
+        for p in relevant {
+            assert_eq!(
+                classify_leaf(p),
+                ScanRelevance::Relevant,
+                "{p} should be scan-relevant"
+            );
+        }
+    }
+
+    #[test]
+    fn rescan_classifier_scan_irrelevant_leaves() {
+        // Per design.md §D3 — these do NOT need rescanExisting=true.
+        let irrelevant = [
+            "spec.nodes[0].label",             // display name
+            "spec.nodes[0].categories",        // category array (whole)
+            "spec.nodes[0].categories[0]",     // individual category
+            "spec.nodes[0].assets",            // asset block (whole)
+            "spec.nodes[0].assets.building",   // individual asset field
+            "spec.foreignSource.scanInterval", // scan cadence (next scan picks up)
+        ];
+        for p in irrelevant {
+            assert_eq!(
+                classify_leaf(p),
+                ScanRelevance::Irrelevant,
+                "{p} should be scan-irrelevant"
+            );
+        }
+    }
+
+    #[test]
+    fn rescan_classifier_unknown_path_defaults_relevant() {
+        // Conservative default: an unrecognized leaf triggers a rescan.
+        // Better to over-rescan once than to silently skip one we
+        // should have done.
+        let unknown = [
+            "spec.somethingFuture",
+            "spec.nodes[0].newField",
+            "spec.foreignSource.newField",
+            "topLevel.elsewhere",
+        ];
+        for p in unknown {
+            assert_eq!(
+                classify_leaf(p),
+                ScanRelevance::Relevant,
+                "{p} should default to scan-relevant"
+            );
+        }
+    }
+
+    #[test]
+    fn rescan_classifier_normalizes_indices() {
+        // Concrete indices in the input path are normalized to `[*]`
+        // before matching, so the same field on node 0 vs node 999
+        // classifies identically.
+        assert_eq!(
+            classify_leaf("spec.nodes[0].label"),
+            classify_leaf("spec.nodes[999].label")
+        );
+        assert_eq!(
+            classify_leaf("spec.nodes[0].interfaces[0].ip"),
+            classify_leaf("spec.nodes[42].interfaces[7].ip")
+        );
+    }
+
+    #[test]
+    fn rescan_aggregator_any_relevant_means_true() {
+        let paths = [
+            "spec.nodes[0].label",                  // irrelevant
+            "spec.nodes[0].categories",             // irrelevant
+            "spec.foreignSource.detectors[0].name", // RELEVANT
+        ];
+        assert!(aggregate_rescan_decision(paths.iter().copied()));
+    }
+
+    #[test]
+    fn rescan_aggregator_all_irrelevant_means_false() {
+        let paths = [
+            "spec.nodes[0].label",
+            "spec.nodes[0].categories[0]",
+            "spec.nodes[0].assets.building",
+            "spec.foreignSource.scanInterval",
+        ];
+        assert!(!aggregate_rescan_decision(paths.iter().copied()));
+    }
+
+    #[test]
+    fn rescan_aggregator_empty_is_false() {
+        // No changes → no rescan. (The L1 layer should have
+        // short-circuited before reaching this, but the aggregator's
+        // contract must still be defined for the empty input.)
+        let empty: [&str; 0] = [];
+        assert!(!aggregate_rescan_decision(empty.iter().copied()));
     }
 }
