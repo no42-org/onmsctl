@@ -15,7 +15,10 @@ Each `v*.*.*` tag produces, via CI:
   - `onmsctl-vX.Y.Z-aarch64-apple-darwin`
 - **SHA256 checksums** per binary (`*.sha256`) plus an aggregate
   `SHA256SUMS` covering binaries and SBOMs.
-- **CycloneDX SBOM** per workspace crate (`*.cdx.json`).
+- **CycloneDX SBOM** (`onmsctl-vX.Y.Z-onmsctl.cdx.json`) for the
+  shipped binary, spec version 1.5. Library and test crates are not
+  shipped separately — their runtime deps are already in the binary's
+  transitive tree.
 - **Sigstore (cosign) keyless signatures** for every artifact:
   one `.sig` and one `.pem` per file.
 - **GitHub Release** with auto-generated release notes.
