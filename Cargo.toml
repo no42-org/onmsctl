@@ -50,6 +50,7 @@ percent-encoding = "2"
 # wildcard. The version mirrors `workspace.package.version`.
 onmsctl-core = { path = "crates/onmsctl-core", version = "=0.0.1" }
 onmsctl-eventconf = { path = "crates/onmsctl-eventconf", version = "=0.0.1" }
+onmsctl-provisioning = { path = "crates/onmsctl-provisioning", version = "=0.0.1" }
 
 [profile.release]
 strip = "symbols"
