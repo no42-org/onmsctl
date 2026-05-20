@@ -12,7 +12,12 @@ publish = false
 [dependencies]
 onmsctl-core = { workspace = true }
 clap = { workspace = true }
-# Additional dependencies (serde, serde_norway, quick-xml, schemars,
-# thiserror, async-trait, anyhow, percent-encoding, tokio) are added
-# in the tasks that first consume them — see openspec change
-# add-provisioning-capability tasks.md groups 2–8.
+serde = { workspace = true }
+serde_norway = { workspace = true }
+# Additional dependencies (quick-xml, schemars, thiserror, async-trait,
+# anyhow, percent-encoding) are added in the tasks that first consume
+# them — see openspec change add-provisioning-capability tasks.md
+# groups 3 (schema), 4 (diff), 8 (convert).
+
+[dev-dependencies]
+serde_norway = { workspace = true }
