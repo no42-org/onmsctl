@@ -112,6 +112,7 @@ impl Harness {
             insecure_skip_tls_verify: false,
             output_format: OutputFormat::Table,
             verbose,
+            read_only: false,
         }
     }
 

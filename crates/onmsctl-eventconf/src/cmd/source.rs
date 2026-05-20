@@ -225,6 +225,28 @@ pub enum SourceCmd {
     },
 }
 
+impl onmsctl_core::Classify for SourceCmd {
+    fn kind(&self) -> onmsctl_core::CmdKind {
+        use onmsctl_core::CmdKind::{Read, Write};
+        match self {
+            // GET-only or no-HTTP variants.
+            SourceCmd::List { .. }
+            | SourceCmd::Get { .. }
+            | SourceCmd::Names
+            | SourceCmd::NamesAndIds
+            | SourceCmd::Download { .. }
+            | SourceCmd::Convert { .. } => Read,
+            // Issue POST / PUT / PATCH / DELETE.
+            SourceCmd::Create { .. }
+            | SourceCmd::Delete { .. }
+            | SourceCmd::Enable { .. }
+            | SourceCmd::Disable { .. }
+            | SourceCmd::Upload { .. }
+            | SourceCmd::Apply { .. } => Write,
+        }
+    }
+}
+
 impl SourceCmd {
     pub async fn run(self, ctx: &Context) -> Result<()> {
         let client = OnmsClient::from_context(ctx)?;
