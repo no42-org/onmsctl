@@ -13,6 +13,7 @@
 //! architecture and `cli-core` spec deltas for observable requirements.
 
 pub mod apply;
+pub mod async_flags;
 pub mod auth;
 pub mod client;
 pub mod cmd;
@@ -23,6 +24,7 @@ pub mod format;
 pub mod render;
 
 pub use apply::{ApplyOptions, ApplyTarget, Diff, Outcome, run_apply};
+pub use async_flags::{AsyncFlags, parse_duration};
 pub use auth::AuthCreds;
 pub use client::OnmsClient;
 pub use cmd::{Classify, CmdKind};

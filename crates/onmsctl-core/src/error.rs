@@ -173,6 +173,24 @@ pub enum Error {
     )]
     ReadOnlyRefused { context: String },
 
+    /// `--wait` was requested but the async server-side operation did not
+    /// reach a terminal state within the configured `--timeout`. The
+    /// `handle` (e.g. scan-report id) is included so the operator can
+    /// resume waiting via the relevant `status` subcommand. Dedicated
+    /// exit code 10 per the cli-core spec.
+    #[error(
+        "timed out waiting for async operation to complete after {timeout}; \
+         the server-side operation may still be running. Handle: {handle}. \
+         Resume via the relevant `status` subcommand."
+    )]
+    WaitTimeout { handle: String, timeout: String },
+
+    /// `--wait` observed the async server-side operation transition to a
+    /// terminal failure state. The `reason` is the server's reported
+    /// failure message. Dedicated exit code 11 per the cli-core spec.
+    #[error("async operation failed: {reason} (handle: {handle})")]
+    AsyncOpFailed { handle: String, reason: String },
+
     /// A multi-item batch operation completed with at least one failed
     /// item. Distinct from `Error::Config` (misuse) and `Error::HttpStatus`
     /// (single HTTP failure) so ops scripts can branch on it via exit
@@ -227,6 +245,11 @@ impl Error {
             Error::TlsHandshake(_) => 7,
             Error::Redirect(_) => 8,
             Error::UnsupportedAuthScheme(_) => 9,
+            // Async waiting outcomes (cli-core spec): timeout and
+            // server-reported failure get distinct codes so ops scripts
+            // can branch on "still running, gave up" vs "actually failed".
+            Error::WaitTimeout { .. } => 10,
+            Error::AsyncOpFailed { .. } => 11,
             // Read-only refusal: distinct so ops scripts can branch on
             // "policy refused" vs config misuse.
             Error::ReadOnlyRefused { .. } => 12,

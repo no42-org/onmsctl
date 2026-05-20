@@ -27,6 +27,10 @@ reqwest = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 
+# CLI flags shared across capability crates (AsyncFlags clap-derive struct
+# for the standard --wait / --timeout / --poll-interval set).
+clap = { workspace = true }
+
 # Output rendering
 comfy-table = { workspace = true }
 similar = { workspace = true }
