@@ -1032,7 +1032,9 @@ version = "0.0.1"
 dependencies = [
  "clap",
  "onmsctl-core",
+ "schemars",
  "serde",
+ "serde_json",
  "serde_norway",
 ]
 

@@ -76,12 +76,15 @@ sbom: install-cargo-cyclonedx  ## Generate per-crate CycloneDX SBOMs under sbom/
 integration:  ## Run live-Horizon integration tests (needs ONMSCTL_TEST_URL/USER/PASSWORD)
 	cargo test -p onmsctl-it -- --include-ignored --nocapture --test-threads=1
 
-# Regenerate schemas/event-source.schema.json from EventSourceLocal.
-# Atomic write so a generator crash doesn't corrupt the file. The
-# `schema_matches_committed` test fails CI if this drifts from the
-# type definitions.
-schema:  ## Regenerate schemas/event-source.schema.json from the Rust types
+# Regenerate the committed JSON Schemas from each capability's Rust
+# types. Atomic writes per file so a generator crash doesn't corrupt
+# the artifact. The per-crate `schema_drift` integration tests fail CI
+# if any schema falls behind its source types.
+schema:  ## Regenerate every committed schemas/*.schema.json from the Rust types
 	@mkdir -p schemas
 	cargo run --quiet --release --example gen_schema -p onmsctl-eventconf \
 		> schemas/event-source.schema.json.tmp \
 		&& mv schemas/event-source.schema.json.tmp schemas/event-source.schema.json
+	cargo run --quiet --release --example gen_schema -p onmsctl-provisioning \
+		> schemas/requisition.schema.json.tmp \
+		&& mv schemas/requisition.schema.json.tmp schemas/requisition.schema.json

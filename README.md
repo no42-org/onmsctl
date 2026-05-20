@@ -198,18 +198,28 @@ path replaces events under an existing basename).
 
 ### Editor integration
 
-A JSON Schema (draft 2020-12) lives at
-[`schemas/event-source.schema.json`](schemas/event-source.schema.json).
-One line at the top of your YAML enables in-editor validation via
-[`yaml-language-server`](https://github.com/redhat-developer/yaml-language-server):
+JSON Schemas (draft 2020-12) live under [`schemas/`](schemas/), one per
+capability YAML kind. One line at the top of your YAML enables in-editor
+validation via [`yaml-language-server`](https://github.com/redhat-developer/yaml-language-server):
 
 ```yaml
+# For kind: EventSource
 # yaml-language-server: $schema=https://raw.githubusercontent.com/no42-org/onmsctl/main/schemas/event-source.schema.json
+
+# For kind: Requisition
+# yaml-language-server: $schema=https://raw.githubusercontent.com/no42-org/onmsctl/main/schemas/requisition.schema.json
 ```
 
 Pin to a release tag for stability or reference a clone with
-`./schemas/event-source.schema.json`. Regenerate with `make schema`;
-CI fails if the committed artifact lags.
+`./schemas/<name>.schema.json`. Regenerate with `make schema`; CI
+fails if any committed artifact lags.
+
+**Project-specific extension** — the requisition schema annotates list
+fields with `x-onmsctl-list-kind: ordered|set` so downstream diff
+tooling distinguishes ordered sequences (`detectors`, `policies` —
+order is semantically meaningful in provisiond) from sets
+(`categories`, `services` — order is ignored). Editors that don't
+understand the extension ignore it harmlessly.
 
 ---
 

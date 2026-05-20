@@ -25,6 +25,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 // ---------------------------------------------------------------------------
@@ -104,7 +105,7 @@ pub const KIND: &str = "Requisition";
 /// - `spec.nodes` must be present (no default; may be an empty `[]`)
 /// - `spec.foreignSource` is optional per design D1 (default-FS inherit)
 /// - Unknown fields at any nesting level fail parse
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RequisitionLocal {
     #[serde(rename = "apiVersion")]
@@ -154,6 +155,20 @@ impl fmt::Display for ApiVersion {
     }
 }
 
+impl JsonSchema for ApiVersion {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "ApiVersion".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "const": API_VERSION,
+            "description": "API version literal. Must equal 'provisioning.opennms.org/v1'."
+        })
+    }
+}
+
 /// Newtype wrapping the `kind` literal. Same shape as [`ApiVersion`] —
 /// deserialization rejects anything other than [`KIND`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -189,13 +204,27 @@ impl fmt::Display for Kind {
     }
 }
 
+impl JsonSchema for Kind {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "Kind".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "const": KIND,
+            "description": "Kind literal. Must equal 'Requisition'."
+        })
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Metadata
 // ---------------------------------------------------------------------------
 
 /// Document metadata. `name` is the foreign-source identifier — the value
 /// used in the REST path `/requisitions/{fs}` and `/foreignSources/{fs}`.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Metadata {
     #[serde(deserialize_with = "deserialize_non_empty")]
@@ -210,7 +239,7 @@ pub struct Metadata {
 /// requisition data. `foreignSource` is optional per D1: omission means
 /// "inherit Horizon's default foreign-source." `nodes` is required (use
 /// `[]` for a requisition with no nodes yet).
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Spec {
     /// Optional per D1. Absence triggers default-FS inheritance.
@@ -232,7 +261,7 @@ pub struct Spec {
 /// applied during import. All fields optional — a `ForeignSourceSpec`
 /// with all defaults is a valid declaration to "use Horizon's behavior"
 /// while still pinning that intent in the YAML.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ForeignSourceSpec {
     /// Humanized scan-interval like `1d`, `30m`. Optional.
@@ -252,7 +281,7 @@ pub struct ForeignSourceSpec {
 /// A detector entry. `class` is optional only because the convert
 /// migrator may surface a name-only entry from sparse XML; in practice
 /// production declarations carry the class.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Detector {
     #[serde(deserialize_with = "deserialize_non_empty")]
@@ -265,7 +294,7 @@ pub struct Detector {
 
 /// A policy entry. `class` is required — policies without a class are
 /// not exercisable by provisiond.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Policy {
     #[serde(deserialize_with = "deserialize_non_empty")]
@@ -278,7 +307,7 @@ pub struct Policy {
 
 /// `{key, value}` pair as used by detector / policy `parameters` arrays.
 /// OpenNMS XML uses this shape verbatim.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Parameter {
     pub key: String,
@@ -292,7 +321,7 @@ pub struct Parameter {
 /// A node within the requisition. `foreignId` is the stable identifier
 /// in the source-of-truth (e.g. CMDB id, hostname). `label` is the
 /// human-readable display name (becomes Horizon's `nodeLabel`).
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Node {
     #[serde(deserialize_with = "deserialize_non_empty")]
@@ -313,7 +342,7 @@ pub struct Node {
 /// `snmpPrimary` are optional. The IP is parsed only at apply time
 /// (the model accepts a string so the YAML schema can be edited
 /// off-server without an IP-parser dependency at this layer).
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Interface {
     #[serde(deserialize_with = "deserialize_non_empty")]
@@ -338,7 +367,12 @@ pub struct Interface {
 /// variant identifiers. Deserialization accepts only the three
 /// single-character literals; any other value (`Primary`, `primary`,
 /// `1`) is rejected as an unknown variant.
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
+#[schemars(
+    description = "SNMP-primary discriminator on an interface. `P` = primary SNMP \
+                   interface for data collection; `S` = secondary SNMP interface; \
+                   `N` = not eligible for SNMP."
+)]
 pub enum SnmpPrimary {
     #[serde(rename = "P")]
     P,
