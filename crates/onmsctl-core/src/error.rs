@@ -161,6 +161,18 @@ pub enum Error {
     )]
     UnsupportedAuthScheme(String),
 
+    /// A classified `WriteCmd` invocation was refused locally because the
+    /// active context is `read-only`. Distinct from [`Error::Config`] so
+    /// ops scripts can branch on it via its dedicated exit code (12).
+    /// No HTTP request was issued.
+    #[error(
+        "active context '{context}' is read-only; this is a Write command and \
+         was refused locally without issuing any HTTP request. Remove \
+         `read-only: true` from the context or switch to a writable context \
+         to proceed."
+    )]
+    ReadOnlyRefused { context: String },
+
     /// A multi-item batch operation completed with at least one failed
     /// item. Distinct from `Error::Config` (misuse) and `Error::HttpStatus`
     /// (single HTTP failure) so ops scripts can branch on it via exit
@@ -215,6 +227,9 @@ impl Error {
             Error::TlsHandshake(_) => 7,
             Error::Redirect(_) => 8,
             Error::UnsupportedAuthScheme(_) => 9,
+            // Read-only refusal: distinct so ops scripts can branch on
+            // "policy refused" vs config misuse.
+            Error::ReadOnlyRefused { .. } => 12,
             // Generic/internal errors collapse to 2 (analogous to misuse).
             _ => 2,
         }

@@ -420,6 +420,7 @@ mod tests {
 
     fn ctx_for(server_url: &str, creds: AuthCreds) -> Context {
         Context {
+            name: "test".into(),
             url: Url::parse(server_url).unwrap(),
             creds,
             insecure_skip_tls_verify: false,

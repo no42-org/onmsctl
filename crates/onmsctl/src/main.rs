@@ -150,13 +150,9 @@ impl Classify for ConfigCmd {
 /// read-only. Returns `Ok(())` for `Read` or non-read-only contexts.
 fn refuse_if_read_only(ctx: &Context, kind: CmdKind) -> Result<(), Error> {
     if ctx.read_only && kind == CmdKind::Write {
-        return Err(Error::Config(
-            "active context is read-only; this is a Write command and was \
-             refused locally without issuing any HTTP request. Remove \
-             `read-only: true` from the context or unset --read-only / \
-             ONMSCTL_READ_ONLY to proceed."
-                .into(),
-        ));
+        return Err(Error::ReadOnlyRefused {
+            context: ctx.name.clone(),
+        });
     }
     Ok(())
 }
