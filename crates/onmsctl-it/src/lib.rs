@@ -107,6 +107,7 @@ impl Harness {
     /// flap notice).
     pub fn context(&self, verbose: bool) -> Context {
         Context {
+            name: "integration-test".into(),
             url: self.url.clone(),
             creds: self.creds.clone(),
             insecure_skip_tls_verify: false,

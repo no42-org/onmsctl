@@ -43,10 +43,12 @@ pub struct Overrides {
     pub insecure_tls: Option<bool>,
     pub output: Option<OutputFormat>,
     pub verbose: bool,
-    /// `Some(true)` forces read-only regardless of context; `Some(false)`
-    /// forces writable regardless of context; `None` defers to the
-    /// resolved context's `read-only` field. Precedence: flag > env >
-    /// context > default `false`.
+    /// `Some(true)` forces read-only on; `None` defers to the resolved
+    /// context's `read-only` field. Read-only is sticky one-way — there
+    /// is no `Some(false)` path from flag or env (a falsy env value is
+    /// silently ignored). To downgrade a `read-only: true` context the
+    /// operator must edit the context's `read-only` field or switch
+    /// contexts. Precedence: flag > env > context > default `false`.
     pub read_only: Option<bool>,
 }
 
@@ -103,17 +105,29 @@ impl Overrides {
     }
 }
 
-/// Parse a boolean-shaped env var. Accepts `1`, `true`, `yes`, `on`
-/// (case-insensitive) as `Some(true)`; `0`, `false`, `no`, `off` as
-/// `Some(false)`; missing or empty as `None`. Anything else is treated as
-/// unset (silent — the resolver falls back to the context's declared
-/// value).
+/// Parse a sticky-on boolean env var for read-only.
+///
+/// Returns `Some(true)` for `1`, `true`, `yes`, `on` (case-insensitive,
+/// trimmed). All other values — including falsy ones like `0`, `false`,
+/// `no`, `off` — return `None`. This is intentional: read-only is sticky
+/// defense-in-depth, so an env var cannot downgrade a `read-only: true`
+/// context. Unparseable values emit one warning to stderr; falsy values
+/// are silent (they're a legitimate "leave alone").
 fn env_bool(key: &str) -> Option<bool> {
-    let v = var_nonempty(key)?;
-    match v.to_ascii_lowercase().as_str() {
+    let raw = var_nonempty(key)?;
+    let normalized = raw.trim().to_ascii_lowercase();
+    match normalized.as_str() {
         "1" | "true" | "yes" | "on" => Some(true),
-        "0" | "false" | "no" | "off" => Some(false),
-        _ => None,
+        // Sticky one-way: do not downgrade a read-only context via env.
+        "" | "0" | "false" | "no" | "off" => None,
+        _ => {
+            eprintln!(
+                "warning: ignoring unrecognized {key} value {raw:?} \
+                 (expected 1/true/yes/on to force read-only on); \
+                 read-only state falls back to context"
+            );
+            None
+        }
     }
 }
 
@@ -121,6 +135,10 @@ fn env_bool(key: &str) -> Option<bool> {
 /// the output preference, with no further config lookups required.
 #[derive(Clone, Debug)]
 pub struct Context {
+    /// Name of the resolved context (e.g. `"prod"`, `"dev"`). Carried
+    /// here so refusals and diagnostics can name it without re-reading
+    /// the config file.
+    pub name: String,
     pub url: reqwest::Url,
     pub creds: AuthCreds,
     pub insecure_skip_tls_verify: bool,
@@ -174,6 +192,7 @@ impl Context {
         let read_only = overrides.read_only.unwrap_or(active.read_only);
 
         Ok(Context {
+            name: active_name,
             url,
             creds,
             insecure_skip_tls_verify,

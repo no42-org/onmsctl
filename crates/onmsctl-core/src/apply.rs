@@ -270,6 +270,7 @@ mod tests {
 
     fn test_ctx() -> Context {
         Context {
+            name: "test".into(),
             url: reqwest::Url::parse("http://unused/").unwrap(),
             creds: AuthCreds::bearer("t"),
             insecure_skip_tls_verify: false,
