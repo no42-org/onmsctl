@@ -62,7 +62,7 @@ release-build:  ## Build a stripped release binary for TARGET=<triple>
 # same name, causing the follow-up `mv` to clobber two of three SBOMs.
 sbom: install-cargo-cyclonedx  ## Generate per-crate CycloneDX SBOMs under sbom/
 	@mkdir -p sbom
-	cargo cyclonedx --format json
+	cargo cyclonedx --format json --spec-version 1.5
 	@find . -maxdepth 3 -name '*.cdx.json' -not -path './sbom/*' -exec mv {} sbom/ \;
 
 # Live-instance integration tests. Reads ONMSCTL_TEST_URL / _USER /
