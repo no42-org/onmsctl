@@ -18,6 +18,3 @@ serde_norway = { workspace = true }
 # anyhow, percent-encoding) are added in the tasks that first consume
 # them — see openspec change add-provisioning-capability tasks.md
 # groups 3 (schema), 4 (diff), 8 (convert).
-
-[dev-dependencies]
-serde_norway = { workspace = true }

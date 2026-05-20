@@ -22,10 +22,64 @@
 //! by task 2.4 of the `add-provisioning-capability` change once a sample
 //! Horizon payload is available to mirror.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+// ---------------------------------------------------------------------------
+// Validation helpers (used via `#[serde(deserialize_with = ...)]`)
+// ---------------------------------------------------------------------------
+
+/// Deserialize a `String` and reject if it is empty. Pinned at parse time
+/// so the strict-on-local-parse convention isn't violated by empty
+/// required strings (which would build malformed REST paths or be silently
+/// rejected by the server with cryptic errors).
+fn deserialize_non_empty<'de, D>(d: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let s = String::deserialize(d)?;
+    if s.is_empty() {
+        return Err(serde::de::Error::custom("must be a non-empty string"));
+    }
+    Ok(s)
+}
+
+/// Deserialize `spec.nodes` and reject structural collisions:
+///
+/// 1. Duplicate `foreignId` across nodes (would silently overwrite at apply time).
+/// 2. Duplicate `ip` across interfaces on the same node (same risk per node).
+///
+/// Other uniqueness invariants (duplicate categories, duplicate parameter
+/// keys, duplicate detector/policy names) are intentionally NOT enforced
+/// here per the third-pass review decision — the server tolerates them or
+/// operators dedup intentionally.
+fn deserialize_nodes_strict<'de, D>(d: D) -> Result<Vec<Node>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let nodes = Vec::<Node>::deserialize(d)?;
+    let mut seen_fids: HashSet<&str> = HashSet::new();
+    for n in &nodes {
+        if !seen_fids.insert(n.foreign_id.as_str()) {
+            return Err(serde::de::Error::custom(format!(
+                "duplicate foreignId {:?} across spec.nodes",
+                n.foreign_id
+            )));
+        }
+        let mut seen_ips: HashSet<&str> = HashSet::new();
+        for iface in &n.interfaces {
+            if !seen_ips.insert(iface.ip.as_str()) {
+                return Err(serde::de::Error::custom(format!(
+                    "duplicate interface ip {:?} on node {:?}",
+                    iface.ip, n.foreign_id
+                )));
+            }
+        }
+    }
+    Ok(nodes)
+}
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -144,6 +198,7 @@ impl fmt::Display for Kind {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Metadata {
+    #[serde(deserialize_with = "deserialize_non_empty")]
     pub name: String,
 }
 
@@ -162,7 +217,10 @@ pub struct Spec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub foreign_source: Option<ForeignSourceSpec>,
 
-    /// Required. May be empty.
+    /// Required. May be empty. Parse-time invariants enforced via
+    /// [`deserialize_nodes_strict`]: no duplicate `foreignId` across the
+    /// array, no duplicate `ip` across interfaces within the same node.
+    #[serde(deserialize_with = "deserialize_nodes_strict")]
     pub nodes: Vec<Node>,
 }
 
@@ -197,6 +255,7 @@ pub struct ForeignSourceSpec {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Detector {
+    #[serde(deserialize_with = "deserialize_non_empty")]
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub class: Option<String>,
@@ -209,7 +268,9 @@ pub struct Detector {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Policy {
+    #[serde(deserialize_with = "deserialize_non_empty")]
     pub name: String,
+    #[serde(deserialize_with = "deserialize_non_empty")]
     pub class: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub parameters: Vec<Parameter>,
@@ -234,7 +295,9 @@ pub struct Parameter {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Node {
+    #[serde(deserialize_with = "deserialize_non_empty")]
     pub foreign_id: String,
+    #[serde(deserialize_with = "deserialize_non_empty")]
     pub label: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub interfaces: Vec<Interface>,
@@ -253,6 +316,7 @@ pub struct Node {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Interface {
+    #[serde(deserialize_with = "deserialize_non_empty")]
     pub ip: String,
     /// Service names as known to provisiond (`ICMP`, `SNMP`, `HTTP`, …).
     /// Strings rather than an enum because the catalog is server-side
@@ -269,13 +333,18 @@ pub struct Interface {
 /// - `S` — secondary SNMP interface
 /// - `N` — not eligible for SNMP
 ///
-/// Deserialization accepts only the three single-character literals;
-/// any other value (`Primary`, `primary`, `1`) is rejected with a
-/// clear error.
+/// Variants are renamed explicitly via `#[serde(rename = ...)]` so the
+/// wire contract (`P` / `S` / `N`) is pinned independent of the Rust
+/// variant identifiers. Deserialization accepts only the three
+/// single-character literals; any other value (`Primary`, `primary`,
+/// `1`) is rejected as an unknown variant.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub enum SnmpPrimary {
+    #[serde(rename = "P")]
     P,
+    #[serde(rename = "S")]
     S,
+    #[serde(rename = "N")]
     N,
 }
 
@@ -517,9 +586,15 @@ spec:
           snmpPrimary: Primary
 "#;
         let err = parse(yaml).expect_err("non-PSN snmpPrimary rejected");
-        // Error message phrasing varies by serde — we just want a failure
-        // that points at snmpPrimary, not silent acceptance.
-        assert!(err.to_string().to_lowercase().contains("primary"));
+        let msg = err.to_string();
+        // Serde rejects unknown enum variants with an "unknown variant"
+        // phrase; the variant literal `Primary` must appear so the
+        // operator can locate the bad value. Substring `"primary"` alone
+        // is too loose — `snmpPrimary` would falsely match.
+        assert!(
+            msg.contains("unknown variant") && msg.contains("Primary"),
+            "expected an 'unknown variant `Primary`'-style error, got: {msg}"
+        );
     }
 
     // -- Asserting on the literal types ------------------------------------
@@ -528,5 +603,403 @@ spec:
     fn api_version_constants_are_exact() {
         assert_eq!(API_VERSION, "provisioning.opennms.org/v1");
         assert_eq!(KIND, "Requisition");
+    }
+
+    // -- Non-empty validation (P3) -----------------------------------------
+
+    #[test]
+    fn empty_metadata_name_is_rejected() {
+        let yaml = r#"
+apiVersion: provisioning.opennms.org/v1
+kind: Requisition
+metadata:
+  name: ""
+spec:
+  nodes: []
+"#;
+        let err = parse(yaml).expect_err("empty metadata.name rejected");
+        assert!(err.to_string().contains("non-empty"));
+    }
+
+    #[test]
+    fn empty_node_foreign_id_is_rejected() {
+        let yaml = r#"
+apiVersion: provisioning.opennms.org/v1
+kind: Requisition
+metadata:
+  name: acme-prod
+spec:
+  nodes:
+    - foreignId: ""
+      label: web01.acme
+"#;
+        let err = parse(yaml).expect_err("empty foreignId rejected");
+        assert!(err.to_string().contains("non-empty"));
+    }
+
+    #[test]
+    fn empty_interface_ip_is_rejected() {
+        let yaml = r#"
+apiVersion: provisioning.opennms.org/v1
+kind: Requisition
+metadata:
+  name: acme-prod
+spec:
+  nodes:
+    - foreignId: web01
+      label: web01.acme
+      interfaces:
+        - ip: ""
+"#;
+        let err = parse(yaml).expect_err("empty interface.ip rejected");
+        assert!(err.to_string().contains("non-empty"));
+    }
+
+    #[test]
+    fn empty_policy_class_is_rejected() {
+        let yaml = r#"
+apiVersion: provisioning.opennms.org/v1
+kind: Requisition
+metadata:
+  name: acme-prod
+spec:
+  foreignSource:
+    policies:
+      - name: MatchByCategory
+        class: ""
+  nodes: []
+"#;
+        let err = parse(yaml).expect_err("empty policy.class rejected");
+        assert!(err.to_string().contains("non-empty"));
+    }
+
+    // -- Structural uniqueness (P10 / decision DN1) ------------------------
+
+    #[test]
+    fn duplicate_foreign_id_across_nodes_is_rejected() {
+        let yaml = r#"
+apiVersion: provisioning.opennms.org/v1
+kind: Requisition
+metadata:
+  name: acme-prod
+spec:
+  nodes:
+    - foreignId: web01
+      label: web01.acme
+    - foreignId: web01
+      label: web01-dup.acme
+"#;
+        let err = parse(yaml).expect_err("duplicate foreignId rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("duplicate foreignId") && msg.contains("web01"),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
+    fn duplicate_interface_ip_on_same_node_is_rejected() {
+        let yaml = r#"
+apiVersion: provisioning.opennms.org/v1
+kind: Requisition
+metadata:
+  name: acme-prod
+spec:
+  nodes:
+    - foreignId: web01
+      label: web01.acme
+      interfaces:
+        - ip: 10.0.0.5
+        - ip: 10.0.0.5
+"#;
+        let err = parse(yaml).expect_err("duplicate interface ip rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("duplicate interface ip") && msg.contains("10.0.0.5"),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
+    fn duplicate_ip_across_different_nodes_is_accepted() {
+        // Uniqueness is per-node, not workspace-wide. Two nodes claiming
+        // 10.0.0.5 is unusual but not a structural collision at the
+        // requisition layer.
+        let yaml = r#"
+apiVersion: provisioning.opennms.org/v1
+kind: Requisition
+metadata:
+  name: acme-prod
+spec:
+  nodes:
+    - foreignId: web01
+      label: web01.acme
+      interfaces:
+        - ip: 10.0.0.5
+    - foreignId: web02
+      label: web02.acme
+      interfaces:
+        - ip: 10.0.0.5
+"#;
+        parse(yaml).expect("per-node uniqueness only; cross-node IP dup allowed");
+    }
+
+    // -- Missing-required-field tests (P5) ---------------------------------
+
+    #[test]
+    fn missing_api_version_is_rejected() {
+        let yaml = r#"
+kind: Requisition
+metadata:
+  name: acme-prod
+spec:
+  nodes: []
+"#;
+        let err = parse(yaml).expect_err("missing apiVersion rejected");
+        assert!(err.to_string().contains("apiVersion"));
+    }
+
+    #[test]
+    fn missing_kind_is_rejected() {
+        let yaml = r#"
+apiVersion: provisioning.opennms.org/v1
+metadata:
+  name: acme-prod
+spec:
+  nodes: []
+"#;
+        let err = parse(yaml).expect_err("missing kind rejected");
+        assert!(err.to_string().contains("kind"));
+    }
+
+    #[test]
+    fn missing_metadata_is_rejected() {
+        let yaml = r#"
+apiVersion: provisioning.opennms.org/v1
+kind: Requisition
+spec:
+  nodes: []
+"#;
+        let err = parse(yaml).expect_err("missing metadata rejected");
+        assert!(err.to_string().contains("metadata"));
+    }
+
+    #[test]
+    fn missing_spec_is_rejected() {
+        let yaml = r#"
+apiVersion: provisioning.opennms.org/v1
+kind: Requisition
+metadata:
+  name: acme-prod
+"#;
+        let err = parse(yaml).expect_err("missing spec rejected");
+        assert!(err.to_string().contains("spec"));
+    }
+
+    #[test]
+    fn missing_spec_nodes_is_rejected() {
+        let yaml = r#"
+apiVersion: provisioning.opennms.org/v1
+kind: Requisition
+metadata:
+  name: acme-prod
+spec: {}
+"#;
+        let err = parse(yaml).expect_err("missing spec.nodes rejected");
+        assert!(err.to_string().contains("nodes"));
+    }
+
+    // -- Deny-unknown-fields at every nesting level (P4) -------------------
+
+    #[test]
+    fn unknown_field_on_metadata_is_rejected() {
+        let yaml = r#"
+apiVersion: provisioning.opennms.org/v1
+kind: Requisition
+metadata:
+  name: acme-prod
+  mystery: yes
+spec:
+  nodes: []
+"#;
+        let err = parse(yaml).expect_err("unknown metadata field rejected");
+        assert!(err.to_string().contains("mystery"));
+    }
+
+    #[test]
+    fn unknown_field_on_spec_is_rejected() {
+        let yaml = r#"
+apiVersion: provisioning.opennms.org/v1
+kind: Requisition
+metadata:
+  name: acme-prod
+spec:
+  nodes: []
+  mystery: yes
+"#;
+        let err = parse(yaml).expect_err("unknown spec field rejected");
+        assert!(err.to_string().contains("mystery"));
+    }
+
+    #[test]
+    fn unknown_field_on_foreign_source_is_rejected() {
+        let yaml = r#"
+apiVersion: provisioning.opennms.org/v1
+kind: Requisition
+metadata:
+  name: acme-prod
+spec:
+  foreignSource:
+    mystery: yes
+  nodes: []
+"#;
+        let err = parse(yaml).expect_err("unknown foreignSource field rejected");
+        assert!(err.to_string().contains("mystery"));
+    }
+
+    #[test]
+    fn unknown_field_on_interface_is_rejected() {
+        let yaml = r#"
+apiVersion: provisioning.opennms.org/v1
+kind: Requisition
+metadata:
+  name: acme-prod
+spec:
+  nodes:
+    - foreignId: web01
+      label: web01.acme
+      interfaces:
+        - ip: 10.0.0.5
+          mystery: yes
+"#;
+        let err = parse(yaml).expect_err("unknown interface field rejected");
+        assert!(err.to_string().contains("mystery"));
+    }
+
+    #[test]
+    fn unknown_field_on_detector_is_rejected() {
+        let yaml = r#"
+apiVersion: provisioning.opennms.org/v1
+kind: Requisition
+metadata:
+  name: acme-prod
+spec:
+  foreignSource:
+    detectors:
+      - name: ICMP
+        mystery: yes
+  nodes: []
+"#;
+        let err = parse(yaml).expect_err("unknown detector field rejected");
+        assert!(err.to_string().contains("mystery"));
+    }
+
+    #[test]
+    fn unknown_field_on_policy_is_rejected() {
+        let yaml = r#"
+apiVersion: provisioning.opennms.org/v1
+kind: Requisition
+metadata:
+  name: acme-prod
+spec:
+  foreignSource:
+    policies:
+      - name: P1
+        class: org.opennms.example.Policy
+        mystery: yes
+  nodes: []
+"#;
+        let err = parse(yaml).expect_err("unknown policy field rejected");
+        assert!(err.to_string().contains("mystery"));
+    }
+
+    #[test]
+    fn unknown_field_on_parameter_is_rejected() {
+        let yaml = r#"
+apiVersion: provisioning.opennms.org/v1
+kind: Requisition
+metadata:
+  name: acme-prod
+spec:
+  foreignSource:
+    detectors:
+      - name: SNMP
+        parameters:
+          - key: timeout
+            value: "1000"
+            mystery: yes
+  nodes: []
+"#;
+        let err = parse(yaml).expect_err("unknown parameter field rejected");
+        assert!(err.to_string().contains("mystery"));
+    }
+
+    // -- MAY-optional acceptance (P6) --------------------------------------
+
+    #[test]
+    fn interface_with_omitted_snmp_primary_and_services_is_accepted() {
+        let yaml = r#"
+apiVersion: provisioning.opennms.org/v1
+kind: Requisition
+metadata:
+  name: acme-prod
+spec:
+  nodes:
+    - foreignId: web01
+      label: web01.acme
+      interfaces:
+        - ip: 10.0.0.5
+"#;
+        let doc = parse(yaml).expect("MAY-optional interface fields can be omitted");
+        let iface = &doc.spec.nodes[0].interfaces[0];
+        assert!(iface.snmp_primary.is_none());
+        assert!(iface.services.is_empty());
+    }
+
+    #[test]
+    fn empty_foreign_source_block_is_accepted() {
+        let yaml = r#"
+apiVersion: provisioning.opennms.org/v1
+kind: Requisition
+metadata:
+  name: acme-prod
+spec:
+  foreignSource: {}
+  nodes: []
+"#;
+        let doc = parse(yaml).expect("empty foreignSource block is valid");
+        let fs = doc.spec.foreign_source.expect("present");
+        assert!(fs.scan_interval.is_none());
+        assert!(fs.detectors.is_empty());
+        assert!(fs.policies.is_empty());
+    }
+
+    // -- Wire-shape pinning for SnmpPrimary (P9) ---------------------------
+
+    #[test]
+    fn snmp_primary_serializes_to_single_char() {
+        // serde_norway emits YAML scalar plus trailing newline; trim
+        // before comparing.
+        let p = serde_norway::to_string(&SnmpPrimary::P).unwrap();
+        let s = serde_norway::to_string(&SnmpPrimary::S).unwrap();
+        let n = serde_norway::to_string(&SnmpPrimary::N).unwrap();
+        assert_eq!(p.trim(), "P");
+        assert_eq!(s.trim(), "S");
+        assert_eq!(n.trim(), "N");
+    }
+
+    // -- Idempotent serialization (P8) -------------------------------------
+
+    #[test]
+    fn serialize_is_idempotent_on_reparse() {
+        // yaml → struct → yaml(1) → struct → yaml(2) must produce
+        // yaml(1) == yaml(2). Surfaces non-determinism (insertion-order
+        // dependence, hash-map iteration, …) before it lands in shipped
+        // diffs.
+        let original = parse(FULL_YAML).expect("parse");
+        let s1 = serde_norway::to_string(&original).expect("serialize once");
+        let reparsed = parse(&s1).expect("re-parse");
+        let s2 = serde_norway::to_string(&reparsed).expect("serialize twice");
+        assert_eq!(s1, s2, "serialize must be idempotent on re-parse");
     }
 }
