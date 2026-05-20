@@ -133,18 +133,17 @@ jobs:
       - name: Generate CycloneDX SBOM
         run: make sbom
 
-      - name: Stage SBOMs with release-versioned filenames
+      - name: Stage SBOM with release-versioned filename
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p dist
-          # `make sbom` emits one `*.cdx.json` per workspace member with
-          # crate-name-prefixed filenames. Tag-prefix each so the release
-          # asset names are self-describing without crate-name collision.
-          for f in sbom/*.cdx.json; do
-            base="$(basename "$f")"
-            cp "$f" "dist/onmsctl-${{ github.ref_name }}-${base}"
-          done
+          # `make sbom` emits one SBOM per workspace member, but only the
+          # binary crate's SBOM (`onmsctl.cdx.json`) is meaningful to ship —
+          # its transitive dep tree already covers the linked library
+          # crates (`onmsctl-core`, `onmsctl-eventconf`), and `onmsctl-it`
+          # is a test-only crate whose dev-deps aren't in the binary.
+          cp sbom/onmsctl.cdx.json "dist/onmsctl-${{ github.ref_name }}-onmsctl.cdx.json"
           ls -la dist/
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
