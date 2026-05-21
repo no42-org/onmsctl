@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Clean round-trip fixture for the requisition convert pipeline (task 8.6).
+
+  Exercises every field the local YAML model carries:
+    - root: foreign-source, date-stamp, last-import attrs
+    - node: foreign-id, node-label
+    - interface: ip-addr, snmp-primary
+    - monitored-service: service-name
+    - category: name
+    - asset: name, value
+
+  Deliberately omits every known-unmodeled field so the migrator
+  produces ZERO findings (no PR001/PR002/PR003/PR004/PR005) when
+  paired with clean-foreign-source.xml.
+-->
+<model-import foreign-source="acme-prod"
+              date-stamp="2024-01-15T10:30:00Z"
+              last-import="2024-01-15T10:31:00Z">
+  <node foreign-id="web01" node-label="web01.acme.com">
+    <interface ip-addr="10.0.0.1" snmp-primary="P">
+      <monitored-service service-name="HTTP"/>
+      <monitored-service service-name="HTTPS"/>
+      <monitored-service service-name="SNMP"/>
+    </interface>
+    <interface ip-addr="10.0.0.2" snmp-primary="S">
+      <monitored-service service-name="ICMP"/>
+    </interface>
+    <category name="Production"/>
+    <category name="Web"/>
+    <asset name="city" value="NYC"/>
+    <asset name="rack" value="R3"/>
+    <asset name="serial" value="SN-12345"/>
+  </node>
+  <node foreign-id="db01" node-label="db01.acme.com">
+    <interface ip-addr="10.0.1.1" snmp-primary="P">
+      <monitored-service service-name="PostgreSQL"/>
+      <monitored-service service-name="SNMP"/>
+    </interface>
+    <category name="Production"/>
+    <category name="Database"/>
+    <asset name="city" value="NYC"/>
+  </node>
+  <node foreign-id="cache01" node-label="cache01.acme.com">
+    <interface ip-addr="10.0.2.1" snmp-primary="N"/>
+    <category name="Production"/>
+    <category name="Cache"/>
+  </node>
+</model-import>

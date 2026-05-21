@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Edge-case fixture (task 8.7): exercises every known-unmodeled
+  attribute / element so that flag_unmodeled raises one PR001 per
+  field. The catalog covered here:
+    - node.@location, @city
+    - interface.@status, @descr
+    - node.<meta-data>, interface.<meta-data>, service.<meta-data>
+-->
+<model-import foreign-source="legacy-site">
+  <node foreign-id="web01"
+        node-label="web01.legacy"
+        location="DataCenterEast"
+        city="Boston">
+    <interface ip-addr="10.5.0.1"
+               snmp-primary="P"
+               status="1"
+               descr="primary management nic">
+      <monitored-service service-name="HTTP">
+        <meta-data context="r" key="probe-interval" value="60"/>
+      </monitored-service>
+      <meta-data context="r" key="vlan" value="42"/>
+    </interface>
+    <category name="Production"/>
+    <asset name="city" value="Boston"/>
+    <meta-data context="r" key="owner" value="ops-team"/>
+    <meta-data context="r" key="cost-center" value="CC-100"/>
+  </node>
+</model-import>

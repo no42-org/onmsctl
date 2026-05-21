@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Edge-case fixture (task 8.7): malformed input (truncated mid-tag).
+  Convert must surface a clear parse error, not panic.
+-->
+<model-import foreign-source="broken">
+  <node foreign-id="web01" node-label="web01">
+    <interface ip-addr="10.0.0.1" snmp-primary="P"

@@ -1,0 +1,72 @@
+apiVersion: provisioning.opennms.org/v1
+kind: Requisition
+metadata:
+  name: acme-prod
+spec:
+  foreignSource:
+    scanInterval: 1d
+    detectors:
+    - name: ICMP
+      class: org.opennms.netmgt.provision.detector.icmp.IcmpDetector
+      parameters:
+      - key: timeout
+        value: '2000'
+      - key: retries
+        value: '1'
+    - name: SNMP
+      class: org.opennms.netmgt.provision.detector.snmp.SnmpDetector
+      parameters:
+      - key: port
+        value: '161'
+      - key: timeout
+        value: '2000'
+    policies:
+    - name: Production tag
+      class: org.opennms.netmgt.provision.persist.policies.NodeCategorySettingPolicy
+      parameters:
+      - key: category
+        value: Production
+      - key: matchBehavior
+        value: ALL_PARAMETERS
+  nodes:
+  - foreignId: web01
+    label: web01.acme.com
+    interfaces:
+    - ip: 10.0.0.1
+      services:
+      - HTTP
+      - HTTPS
+      - SNMP
+      snmpPrimary: P
+    - ip: 10.0.0.2
+      services:
+      - ICMP
+      snmpPrimary: S
+    categories:
+    - Production
+    - Web
+    assets:
+      city: NYC
+      rack: R3
+      serial: SN-12345
+  - foreignId: db01
+    label: db01.acme.com
+    interfaces:
+    - ip: 10.0.1.1
+      services:
+      - PostgreSQL
+      - SNMP
+      snmpPrimary: P
+    categories:
+    - Production
+    - Database
+    assets:
+      city: NYC
+  - foreignId: cache01
+    label: cache01.acme.com
+    interfaces:
+    - ip: 10.0.2.1
+      snmpPrimary: N
+    categories:
+    - Production
+    - Cache
