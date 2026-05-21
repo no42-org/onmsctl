@@ -19,6 +19,7 @@ pub mod cmd;
 pub mod convert;
 pub mod diff;
 pub mod model;
+pub mod render;
 pub mod schema;
 
 /// Capability crate version. Surfaced by the binary's `version` subcommand
