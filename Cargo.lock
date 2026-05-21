@@ -1035,10 +1035,12 @@ dependencies = [
  "clap",
  "onmsctl-core",
  "percent-encoding",
+ "quick-xml",
  "schemars",
  "serde",
  "serde_json",
  "serde_norway",
+ "tempfile",
  "tokio",
  "wiremock",
 ]
