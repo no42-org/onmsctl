@@ -5,16 +5,20 @@
 
 //! Three-level diff engine for the composite `kind: Requisition` model.
 //!
-//! - **L1** (this module today): canonicalization + byte-equality
+//! - **L1** ([`l1_compare`]): canonicalization + byte-equality
 //!   compare. Returns [`L1Result::Unchanged`] / [`L1Result::Changed`].
 //!   Drives the early-exit "nothing to apply" path so a CI run that
 //!   parses an unchanged YAML file does no mutating HTTP work.
-//! - **L2** (task 4.3, future): per-node semantic delta — added /
-//!   removed / modified — drives the `--diff` preview output and feeds
-//!   the rescan-classification table.
-//! - **L3** (task 4.4, future): per-leaf delta within modified nodes,
-//!   yielding `{path, from, to}` records for `--explain-rescan` and
-//!   `-o json` machine output.
+//! - **L2** ([`diff_requisition`]): per-node semantic delta — added /
+//!   removed / modified — keyed by `foreignId`. Feeds the
+//!   `--diff` preview output (task 4.5, future).
+//! - **L3** ([`LeafChange`]): per-leaf detail within modified nodes
+//!   (and within `spec.foreignSource`), yielding `{path, from, to}`
+//!   records that feed the rescan-relevance classifier and
+//!   `--explain-rescan` / `-o json` output.
+//! - **Rescan classifier** ([`classify_leaf`] / [`aggregate_rescan_decision`]):
+//!   maps leaf paths to `ScanRelevance::{Relevant, Irrelevant}` per
+//!   design D3, used by the apply path to pick `rescanExisting=true|false`.
 //!
 //! L1 canonicalization rules — applied recursively to the JSON
 //! representation of [`crate::model::RequisitionLocal`]:
@@ -74,9 +78,241 @@ pub fn l1_compare(local: &RequisitionLocal, remote: &RequisitionLocal) -> L1Resu
 /// as-is. Finally serialize back to JSON bytes (compact form, no
 /// whitespace — only structural content matters).
 pub fn canonicalize(req: &RequisitionLocal) -> Vec<u8> {
+    serde_json::to_vec(&canonical_value(req)).expect("canonical Value serializes as JSON")
+}
+
+/// Produce the canonical [`serde_json::Value`] for a `RequisitionLocal`.
+/// Same normalization rules as [`canonicalize`]; exposed so the L2/L3
+/// diff machinery can compare canonical forms directly without
+/// round-tripping through bytes.
+pub fn canonical_value(req: &RequisitionLocal) -> Value {
     let mut value: Value = serde_json::to_value(req).expect("RequisitionLocal serializes as JSON");
     normalize(&mut value, &mut Vec::new());
-    serde_json::to_vec(&value).expect("canonical Value serializes as JSON")
+    value
+}
+
+// ---------------------------------------------------------------------------
+// L2 per-node delta + L3 per-leaf delta (tasks 4.3, 4.4)
+// ---------------------------------------------------------------------------
+
+/// Whole-requisition diff. L2 partitions the node list into added /
+/// removed / modified subsets (keyed by `foreignId`); L3 supplies the
+/// per-leaf detail attached to each modified node. Foreign-source
+/// changes are surfaced as a separate leaf list since the foreignSource
+/// half lives outside the node array.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct RequisitionDelta {
+    /// Leaf changes within `spec.foreignSource` (or whole-block
+    /// add/remove when one side omits the field). Paths are rooted at
+    /// `spec.foreignSource`.
+    pub foreign_source_changes: Vec<LeafChange>,
+    /// Nodes present locally but not remotely (by `foreignId`).
+    pub nodes_added: Vec<NodeRef>,
+    /// Nodes present remotely but not locally.
+    pub nodes_removed: Vec<NodeRef>,
+    /// Nodes present in both but differing.
+    pub nodes_modified: Vec<NodeModification>,
+}
+
+impl RequisitionDelta {
+    /// `true` when there are no changes — equivalent to L1's
+    /// `Unchanged` outcome. Useful when callers want the structured
+    /// diff anyway (e.g. for `--dry-run`).
+    pub fn is_empty(&self) -> bool {
+        self.foreign_source_changes.is_empty()
+            && self.nodes_added.is_empty()
+            && self.nodes_removed.is_empty()
+            && self.nodes_modified.is_empty()
+    }
+
+    /// Iterate every leaf-path string in the delta, regardless of
+    /// which bucket it lives in. Used by the apply path to feed the
+    /// rescan-relevance classifier — node add/remove emits a synthetic
+    /// path so the classifier sees them as `spec.nodes[*]` events
+    /// (which default to `Relevant`).
+    pub fn iter_paths(&self) -> impl Iterator<Item = &str> {
+        let fs = self.foreign_source_changes.iter().map(|c| c.path.as_str());
+        // Node add/remove → synthetic `spec.nodes[*]` path so the
+        // classifier treats them as scan-relevant.
+        let added = self.nodes_added.iter().map(|_| "spec.nodes[*]");
+        let removed = self.nodes_removed.iter().map(|_| "spec.nodes[*]");
+        let modified = self
+            .nodes_modified
+            .iter()
+            .flat_map(|m| m.leaves.iter().map(|c| c.path.as_str()));
+        fs.chain(added).chain(removed).chain(modified)
+    }
+}
+
+/// A node identified by its `foreignId`, used as a summary entry for
+/// L2's add/remove buckets. The canonical-form JSON value is attached
+/// so consumers that need richer detail (e.g. `-o json` output) can
+/// render the whole node without re-fetching.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NodeRef {
+    pub foreign_id: String,
+    pub value: Value,
+}
+
+/// A node that exists in both local and remote with substantive
+/// differences. `leaves` is the L3 per-leaf delta computed for the
+/// node's body; paths are rooted at `spec.nodes[*]` so they feed the
+/// rescan classifier directly.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NodeModification {
+    pub foreign_id: String,
+    pub leaves: Vec<LeafChange>,
+}
+
+/// A single leaf-path change. `from` is the remote (server) side;
+/// `to` is the local (YAML) side. Either side may be `Value::Null`
+/// when the leaf was added or removed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LeafChange {
+    /// Dotted path from the document root, with `[N]` for array
+    /// indices. Example: `spec.nodes[*].interfaces[0].snmpPrimary`.
+    pub path: String,
+    /// Value present on the remote side. `Value::Null` means the
+    /// leaf was absent remotely (i.e. the local change adds it).
+    pub from: Value,
+    /// Value present on the local side. `Value::Null` means the
+    /// leaf is absent locally (i.e. the local change removes it).
+    pub to: Value,
+}
+
+/// Compute the L2+L3 diff between two requisitions. Both sides are
+/// canonicalized first so:
+///   - Reordered set members (categories, services) don't surface as
+///     changes.
+///   - Reordered node arrays / interface arrays don't either
+///     (they're keyed by `foreignId` / `ip` and sorted).
+///   - Reordered detector / policy arrays DO surface — they're
+///     order-sensitive.
+pub fn diff_requisition(local: &RequisitionLocal, remote: &RequisitionLocal) -> RequisitionDelta {
+    let local_v = canonical_value(local);
+    let remote_v = canonical_value(remote);
+
+    let mut delta = RequisitionDelta::default();
+
+    // --- spec.foreignSource ---
+    let local_fs = local_v
+        .pointer("/spec/foreignSource")
+        .unwrap_or(&Value::Null);
+    let remote_fs = remote_v
+        .pointer("/spec/foreignSource")
+        .unwrap_or(&Value::Null);
+    diff_value(
+        local_fs,
+        remote_fs,
+        "spec.foreignSource",
+        &mut delta.foreign_source_changes,
+    );
+
+    // --- spec.nodes ---
+    let empty: Vec<Value> = Vec::new();
+    let local_nodes = local_v
+        .pointer("/spec/nodes")
+        .and_then(Value::as_array)
+        .unwrap_or(&empty);
+    let remote_nodes = remote_v
+        .pointer("/spec/nodes")
+        .and_then(Value::as_array)
+        .unwrap_or(&empty);
+
+    // Index by foreignId. After canonicalization both arrays are
+    // already sorted by foreignId, but we still index for O(1) lookup
+    // during partitioning.
+    let local_by_fid: std::collections::BTreeMap<&str, &Value> =
+        local_nodes.iter().map(|n| (foreign_id_of(n), n)).collect();
+    let remote_by_fid: std::collections::BTreeMap<&str, &Value> =
+        remote_nodes.iter().map(|n| (foreign_id_of(n), n)).collect();
+
+    for (fid, local_node) in &local_by_fid {
+        match remote_by_fid.get(fid) {
+            Some(remote_node) if local_node == remote_node => {
+                // No change for this node.
+            }
+            Some(remote_node) => {
+                let mut leaves = Vec::new();
+                diff_value(local_node, remote_node, "spec.nodes[*]", &mut leaves);
+                delta.nodes_modified.push(NodeModification {
+                    foreign_id: fid.to_string(),
+                    leaves,
+                });
+            }
+            None => delta.nodes_added.push(NodeRef {
+                foreign_id: fid.to_string(),
+                value: (*local_node).clone(),
+            }),
+        }
+    }
+    for (fid, remote_node) in &remote_by_fid {
+        if !local_by_fid.contains_key(fid) {
+            delta.nodes_removed.push(NodeRef {
+                foreign_id: fid.to_string(),
+                value: (*remote_node).clone(),
+            });
+        }
+    }
+
+    delta
+}
+
+/// Pull the `foreignId` string out of a canonical node Value. Returns
+/// the empty string if absent or non-string (parse-time validation
+/// should make this case unreachable for well-formed input).
+fn foreign_id_of(node: &Value) -> &str {
+    node.get("foreignId").and_then(Value::as_str).unwrap_or("")
+}
+
+/// Recursively diff two `Value`s, emitting one [`LeafChange`] per
+/// substantive difference. Walks objects key-by-key and arrays
+/// position-by-position. The canonicalization step ensures arrays are
+/// already in stable order — for set-like arrays a reordering looks
+/// identical; for ordered arrays (detectors / policies) the diff
+/// surfaces position-mismatches as the user expects.
+///
+/// Path format: dotted segments with `[N]` for array indices. Example
+/// path produced inside a node modification:
+/// `spec.nodes[*].interfaces[0].snmpPrimary`.
+fn diff_value(local: &Value, remote: &Value, path: &str, out: &mut Vec<LeafChange>) {
+    if local == remote {
+        return;
+    }
+    match (local, remote) {
+        (Value::Object(l), Value::Object(r)) => {
+            // Walk the union of keys so missing-on-either-side surfaces
+            // as a leaf change at the child path.
+            let mut keys: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+            keys.extend(l.keys().map(String::as_str));
+            keys.extend(r.keys().map(String::as_str));
+            for k in keys {
+                let lv = l.get(k).unwrap_or(&Value::Null);
+                let rv = r.get(k).unwrap_or(&Value::Null);
+                let child_path = if path.is_empty() {
+                    k.to_string()
+                } else {
+                    format!("{path}.{k}")
+                };
+                diff_value(lv, rv, &child_path, out);
+            }
+        }
+        (Value::Array(l), Value::Array(r)) => {
+            let max = l.len().max(r.len());
+            for i in 0..max {
+                let lv = l.get(i).unwrap_or(&Value::Null);
+                let rv = r.get(i).unwrap_or(&Value::Null);
+                let child_path = format!("{path}[{i}]");
+                diff_value(lv, rv, &child_path, out);
+            }
+        }
+        // Leaf-level difference (scalars, mixed-type, or one-side-null).
+        _ => out.push(LeafChange {
+            path: path.to_string(),
+            from: remote.clone(),
+            to: local.clone(),
+        }),
+    }
 }
 
 /// Walk a JSON `Value` recursively applying canonicalization rules.
@@ -610,5 +846,206 @@ mod tests {
         // contract must still be defined for the empty input.)
         let empty: [&str; 0] = [];
         assert!(!aggregate_rescan_decision(empty.iter().copied()));
+    }
+
+    // -- L2 + L3: per-node delta + per-leaf delta (tasks 4.3, 4.4) -------
+
+    #[test]
+    fn diff_empty_for_identical_requisitions() {
+        let a = doc(
+            "  nodes:\n    - foreignId: web01\n      label: w\n      interfaces:\n        - ip: 10.0.0.5\n",
+        );
+        let b = a.clone();
+        let d = diff_requisition(&a, &b);
+        assert!(d.is_empty(), "identical inputs produce empty delta");
+        assert_eq!(d.iter_paths().count(), 0);
+    }
+
+    #[test]
+    fn diff_detects_added_node() {
+        let a = doc(
+            "  nodes:\n    - foreignId: web01\n      label: w1\n    - foreignId: web02\n      label: w2\n",
+        );
+        let b = doc("  nodes:\n    - foreignId: web01\n      label: w1\n");
+        let d = diff_requisition(&a, &b);
+        assert_eq!(d.nodes_added.len(), 1);
+        assert_eq!(d.nodes_added[0].foreign_id, "web02");
+        assert!(d.nodes_removed.is_empty());
+        assert!(d.nodes_modified.is_empty());
+        // iter_paths emits a synthetic spec.nodes[*] for the add so the
+        // classifier flags it as scan-relevant.
+        assert!(d.iter_paths().any(|p| p == "spec.nodes[*]"));
+    }
+
+    #[test]
+    fn diff_detects_removed_node() {
+        let a = doc("  nodes:\n    - foreignId: web01\n      label: w1\n");
+        let b = doc(
+            "  nodes:\n    - foreignId: web01\n      label: w1\n    - foreignId: web02\n      label: w2\n",
+        );
+        let d = diff_requisition(&a, &b);
+        assert_eq!(d.nodes_removed.len(), 1);
+        assert_eq!(d.nodes_removed[0].foreign_id, "web02");
+        assert!(d.nodes_added.is_empty());
+    }
+
+    #[test]
+    fn diff_detects_modified_label_as_irrelevant_leaf() {
+        let a = doc("  nodes:\n    - foreignId: web01\n      label: changed\n");
+        let b = doc("  nodes:\n    - foreignId: web01\n      label: original\n");
+        let d = diff_requisition(&a, &b);
+        assert_eq!(d.nodes_modified.len(), 1);
+        let m = &d.nodes_modified[0];
+        assert_eq!(m.foreign_id, "web01");
+        assert!(m.leaves.iter().any(|c| c.path.ends_with(".label")));
+        // Aggregator: only label changed → no rescan.
+        assert!(!aggregate_rescan_decision(d.iter_paths()));
+    }
+
+    #[test]
+    fn diff_detects_modified_snmp_primary_as_relevant_leaf() {
+        let a = doc(
+            "  nodes:\n    - foreignId: web01\n      label: w\n      interfaces:\n        - ip: 10.0.0.5\n          snmpPrimary: P\n",
+        );
+        let b = doc(
+            "  nodes:\n    - foreignId: web01\n      label: w\n      interfaces:\n        - ip: 10.0.0.5\n          snmpPrimary: S\n",
+        );
+        let d = diff_requisition(&a, &b);
+        assert_eq!(d.nodes_modified.len(), 1);
+        let m = &d.nodes_modified[0];
+        assert!(
+            m.leaves.iter().any(|c| c.path.ends_with(".snmpPrimary")),
+            "leaves = {:?}",
+            m.leaves
+        );
+        // Aggregator: snmpPrimary is scan-relevant → rescan required.
+        assert!(aggregate_rescan_decision(d.iter_paths()));
+    }
+
+    #[test]
+    fn diff_detects_foreign_source_detector_reorder() {
+        let a = doc(
+            "  foreignSource:\n    detectors:\n      - name: ICMP\n      - name: SNMP\n  nodes: []\n",
+        );
+        let b = doc(
+            "  foreignSource:\n    detectors:\n      - name: SNMP\n      - name: ICMP\n  nodes: []\n",
+        );
+        let d = diff_requisition(&a, &b);
+        assert!(
+            !d.foreign_source_changes.is_empty(),
+            "ordered list reorder must surface"
+        );
+        // Aggregator: detector change is scan-relevant.
+        assert!(aggregate_rescan_decision(d.iter_paths()));
+    }
+
+    #[test]
+    fn diff_ignores_category_reorder() {
+        // Set-like: canonicalization sorts before diff, so reordering
+        // surfaces no change.
+        let a = doc(
+            "  nodes:\n    - foreignId: web01\n      label: w\n      categories: [Production, Web]\n",
+        );
+        let b = doc(
+            "  nodes:\n    - foreignId: web01\n      label: w\n      categories: [Web, Production]\n",
+        );
+        let d = diff_requisition(&a, &b);
+        assert!(d.is_empty(), "set reorder does not surface in L2");
+    }
+
+    #[test]
+    fn diff_paths_are_rooted_at_spec() {
+        // Leaf paths from node modifications must be rooted at
+        // `spec.nodes[*]` so the rescan classifier sees them in their
+        // full form.
+        let a = doc("  nodes:\n    - foreignId: web01\n      label: changed\n");
+        let b = doc("  nodes:\n    - foreignId: web01\n      label: original\n");
+        let d = diff_requisition(&a, &b);
+        for leaf in &d.nodes_modified[0].leaves {
+            assert!(
+                leaf.path.starts_with("spec.nodes[*]"),
+                "leaf path '{}' should start with spec.nodes[*]",
+                leaf.path
+            );
+        }
+    }
+
+    #[test]
+    fn diff_foreign_source_paths_are_rooted() {
+        let a = doc("  foreignSource:\n    scanInterval: 1d\n  nodes: []\n");
+        let b = doc("  foreignSource:\n    scanInterval: 2h\n  nodes: []\n");
+        let d = diff_requisition(&a, &b);
+        assert!(!d.foreign_source_changes.is_empty());
+        for leaf in &d.foreign_source_changes {
+            assert!(
+                leaf.path.starts_with("spec.foreignSource"),
+                "leaf path '{}' should start with spec.foreignSource",
+                leaf.path
+            );
+        }
+        // Aggregator: only scanInterval changed → irrelevant → no rescan.
+        assert!(!aggregate_rescan_decision(d.iter_paths()));
+    }
+
+    #[test]
+    fn diff_mixed_buckets_at_once() {
+        // Add web03, remove web04, modify web01 (label only — irrelevant
+        // leaf) so we exercise all three node-buckets in one diff.
+        let a = doc(
+            "  nodes:\n    - foreignId: web01\n      label: NEW\n    - foreignId: web03\n      label: w3\n",
+        );
+        let b = doc(
+            "  nodes:\n    - foreignId: web01\n      label: OLD\n    - foreignId: web04\n      label: w4\n",
+        );
+        let d = diff_requisition(&a, &b);
+        let added_ids: Vec<_> = d
+            .nodes_added
+            .iter()
+            .map(|n| n.foreign_id.as_str())
+            .collect();
+        let removed_ids: Vec<_> = d
+            .nodes_removed
+            .iter()
+            .map(|n| n.foreign_id.as_str())
+            .collect();
+        let modified_ids: Vec<_> = d
+            .nodes_modified
+            .iter()
+            .map(|n| n.foreign_id.as_str())
+            .collect();
+        assert_eq!(added_ids, vec!["web03"]);
+        assert_eq!(removed_ids, vec!["web04"]);
+        assert_eq!(modified_ids, vec!["web01"]);
+        // Aggregator: web03 added + web04 removed are scan-relevant (synthetic spec.nodes[*]).
+        assert!(aggregate_rescan_decision(d.iter_paths()));
+    }
+
+    #[test]
+    fn diff_leaf_change_carries_from_and_to() {
+        let a = doc("  nodes:\n    - foreignId: web01\n      label: NEW\n");
+        let b = doc("  nodes:\n    - foreignId: web01\n      label: OLD\n");
+        let d = diff_requisition(&a, &b);
+        let label_change = d.nodes_modified[0]
+            .leaves
+            .iter()
+            .find(|c| c.path.ends_with(".label"))
+            .expect("label leaf change present");
+        assert_eq!(label_change.from, Value::String("OLD".into()));
+        assert_eq!(label_change.to, Value::String("NEW".into()));
+    }
+
+    #[test]
+    fn diff_added_foreign_source_block_surfaces() {
+        // local has foreignSource, remote omits it → foreign-source-side
+        // change surfaces with one or more leaves.
+        let a = doc("  foreignSource:\n    scanInterval: 1d\n  nodes: []\n");
+        let b = doc("  nodes: []\n");
+        let d = diff_requisition(&a, &b);
+        assert!(
+            !d.foreign_source_changes.is_empty(),
+            "adding foreignSource must surface"
+        );
+        // Aggregator: foreignSource-level change defaults to relevant.
+        assert!(aggregate_rescan_decision(d.iter_paths()));
     }
 }
