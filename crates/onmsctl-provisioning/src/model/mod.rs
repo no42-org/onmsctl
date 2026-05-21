@@ -28,6 +28,11 @@ use std::fmt;
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+pub mod convert;
+pub mod server;
+
+pub use convert::{requisition_from_wire, requisition_to_wire};
+
 // ---------------------------------------------------------------------------
 // Validation helpers (used via `#[serde(deserialize_with = ...)]`)
 // ---------------------------------------------------------------------------

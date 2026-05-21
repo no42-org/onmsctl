@@ -1,0 +1,20 @@
+{
+  "name": "default",
+  "date-stamp": 1779349757883,
+  "scan-interval": "1d",
+  "detectors": [
+    { "name": "DNS",   "class": "org.opennms.netmgt.provision.detector.datagram.DnsDetector", "parameter": [] },
+    { "name": "HTTP",  "class": "org.opennms.netmgt.provision.detector.simple.HttpDetector",  "parameter": [] },
+    { "name": "ICMP",  "class": "org.opennms.netmgt.provision.detector.icmp.IcmpDetector",    "parameter": [] },
+    { "name": "SNMP",  "class": "org.opennms.netmgt.provision.detector.snmp.SnmpDetector",    "parameter": [] },
+    { "name": "SSH",   "class": "org.opennms.netmgt.provision.detector.ssh.SshDetector",      "parameter": [] },
+    {
+      "name": "MS-RDP",
+      "class": "org.opennms.netmgt.provision.detector.simple.TcpDetector",
+      "parameter": [
+        { "key": "port", "value": "3389" }
+      ]
+    }
+  ],
+  "policies": []
+}
