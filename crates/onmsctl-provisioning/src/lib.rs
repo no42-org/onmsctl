@@ -13,6 +13,7 @@
 //! dispatched. Remaining capability surface lands in subsequent tasks
 //! of the `add-provisioning-capability` openspec change.
 
+pub mod api;
 pub mod apply;
 pub mod cmd;
 pub mod convert;

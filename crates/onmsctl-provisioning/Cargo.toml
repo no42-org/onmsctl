@@ -16,7 +16,13 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 serde_norway = { workspace = true }
 schemars = { workspace = true }
+async-trait = { workspace = true }
+percent-encoding = { workspace = true }
 # Further dependencies (quick-xml for the XML migrator, thiserror /
-# anyhow for capability-local errors, async-trait / percent-encoding
-# for the apply path) are added when those features land — kept
-# minimal here to surface dep review only when each is actually used.
+# anyhow for capability-local errors) are added when those features
+# land — kept minimal here to surface dep review only when each is
+# actually used.
+
+[dev-dependencies]
+wiremock = "0.6"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
