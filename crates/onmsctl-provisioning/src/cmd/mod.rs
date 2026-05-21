@@ -19,6 +19,7 @@ use onmsctl_core::{
 
 use crate::api::ProvisioningApi;
 use crate::apply::{ApplyOptions, RescanChoice, apply_requisition};
+use crate::convert::{ConversionResult, FindingCode, Severity, convert_directory, explain};
 use crate::model::RequisitionLocal;
 use crate::render::render_apply_diff;
 use crate::wait::wait_for_import_completion;
@@ -122,6 +123,40 @@ pub enum RequisitionCmd {
         #[arg(value_parser = nonempty_fs)]
         fs: String,
     },
+    /// Convert provision.pl-shape XML to declarative `kind: Requisition`
+    /// YAML for git-managed apply workflows.
+    ///
+    /// Reads every `*.xml` under `--from <xml-dir>` as a requisition.
+    /// Each is paired with a matching foreign-source XML
+    /// (`<basename>.xml` under `--foreign-sources-dir`, when supplied)
+    /// to produce the composite YAML form. Findings are reported to
+    /// stderr with stable `PR###` codes — `--explain <code>` prints
+    /// the rationale for any single code.
+    ///
+    /// Pure local transform: no HTTP, no context required. Classified
+    /// `Read` so even a `--read-only` context permits the verb.
+    Convert {
+        /// Directory of requisition `*.xml` files (the
+        /// `provision.pl`-shape inputs).
+        #[arg(long)]
+        from: Option<PathBuf>,
+        /// Optional directory of foreign-source `*.xml` files. Matched
+        /// to requisitions by basename (`acme-prod.xml` pairs with
+        /// `acme-prod.xml`). Orphans (no matching requisition) raise
+        /// PR002 findings.
+        #[arg(long)]
+        foreign_sources_dir: Option<PathBuf>,
+        /// Write per-requisition YAML files to this directory instead
+        /// of stdout. Output filenames mirror the input basenames with
+        /// `.yaml` extension.
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Print the rationale for the given finding code (e.g.
+        /// `--explain PR001`) and exit without converting. `--from`
+        /// may be omitted when this flag is used.
+        #[arg(long)]
+        explain: Option<String>,
+    },
 }
 
 impl Classify for RequisitionCmd {
@@ -136,6 +171,9 @@ impl Classify for RequisitionCmd {
             RequisitionCmd::Import { .. } => CmdKind::Write,
             // Status is read-only.
             RequisitionCmd::Status { .. } => CmdKind::Read,
+            // Convert is pure local file transform — no HTTP at all.
+            // Classified Read so --read-only contexts still allow it.
+            RequisitionCmd::Convert { .. } => CmdKind::Read,
         }
     }
 }
@@ -157,6 +195,12 @@ impl RequisitionCmd {
                 wait_flags,
             } => run_import(fs, rescan_existing, wait_flags, ctx).await,
             RequisitionCmd::Status { fs } => run_status(fs, ctx).await,
+            RequisitionCmd::Convert {
+                from,
+                foreign_sources_dir,
+                out,
+                explain,
+            } => run_convert(from, foreign_sources_dir, out, explain).await,
         }
     }
 }
@@ -430,6 +474,149 @@ fn opt_ms(ms: Option<i64>) -> String {
         Some(v) => v.to_string(),
         None => "<absent>".into(),
     }
+}
+
+async fn run_convert(
+    from: Option<PathBuf>,
+    foreign_sources_dir: Option<PathBuf>,
+    out: Option<PathBuf>,
+    explain_code: Option<String>,
+) -> Result<()> {
+    // --explain short-circuits everything else (no XML inputs needed).
+    if let Some(code_str) = explain_code {
+        match FindingCode::parse(&code_str) {
+            Some(code) => {
+                write_stdout_line(explain(code).as_bytes())?;
+                if from.is_some() {
+                    eprintln!(
+                        "note: --explain was set; --from was ignored. Drop --explain to run the conversion."
+                    );
+                }
+                return Ok(());
+            }
+            None => {
+                let known: Vec<&str> = FindingCode::all().iter().map(|c| c.as_str()).collect();
+                return Err(Error::Config(format!(
+                    "unknown finding code '{code_str}'; known: {}",
+                    known.join(", ")
+                )));
+            }
+        }
+    }
+
+    let xml_dir = from.ok_or_else(|| {
+        Error::Config(
+            "missing --from <xml-dir>; pass --explain <code> if you wanted to print rationale instead"
+                .into(),
+        )
+    })?;
+    let meta = std::fs::metadata(&xml_dir).map_err(|e| {
+        Error::Config(format!("failed to stat {}: {e}", xml_dir.display()))
+    })?;
+    if !meta.is_dir() {
+        return Err(Error::Config(format!(
+            "{} is not a directory",
+            xml_dir.display()
+        )));
+    }
+
+    let results = convert_directory(&xml_dir, foreign_sources_dir.as_deref())
+        .map_err(Error::Config)?;
+
+    // Emit YAML — stdout when --out is None (one document per
+    // requisition, separated by `---` so the user can pipe through
+    // `yq` or split downstream), or per-file when --out is set.
+    if let Some(out_dir) = &out {
+        std::fs::create_dir_all(out_dir)
+            .map_err(|e| Error::Config(format!("creating {}: {e}", out_dir.display())))?;
+        for r in &results {
+            if let Some(yaml) = &r.yaml {
+                // Validate the foreign-source name against a safe
+                // filename whitelist before joining into --out. The
+                // value flows from the XML root @foreign-source
+                // attribute and is operator-controllable (or
+                // attacker-controllable if the XML came from an
+                // untrusted source) — a malicious name like
+                // `../../etc/passwd` would otherwise escape --out.
+                if !is_safe_filename(&r.foreign_source) {
+                    return Err(Error::Config(format!(
+                        "refusing to write to '{out_dir}/{name}.yaml': foreign-source name \
+                         contains path-unsafe characters (allowed: alphanumeric, '-', '_', '.')",
+                        out_dir = out_dir.display(),
+                        name = r.foreign_source,
+                    )));
+                }
+                let path = out_dir.join(format!("{}.yaml", r.foreign_source));
+                std::fs::write(&path, yaml)
+                    .map_err(|e| Error::Config(format!("write {}: {e}", path.display())))?;
+            }
+        }
+    } else {
+        let mut first = true;
+        for r in &results {
+            if let Some(yaml) = &r.yaml {
+                if !first {
+                    write_stdout(b"---\n")?;
+                }
+                first = false;
+                write_stdout(yaml.as_bytes())?;
+            }
+        }
+    }
+
+    // Findings always go to stderr, regardless of --out. Format:
+    // `<PRxxx> <severity> [source-path] message`.
+    print_findings(&results);
+
+    // Exit code per design D4 mirrored on convert: aggregate the
+    // worst severity across all results.
+    let exit = worst_exit_code(&results);
+    if exit != 0 {
+        std::process::exit(exit);
+    }
+    Ok(())
+}
+
+fn print_findings(results: &[ConversionResult]) {
+    for r in results {
+        for f in &r.findings {
+            let sev = match f.severity {
+                Severity::Info => "info",
+                Severity::Warning => "warning",
+                Severity::Error => "error",
+            };
+            let src = f
+                .source_path
+                .as_ref()
+                .map(|p| format!(" [{}]", p.display()))
+                .unwrap_or_default();
+            eprintln!("{} {sev}{src}: {}", f.code.as_str(), f.message);
+        }
+    }
+}
+
+fn worst_exit_code(results: &[ConversionResult]) -> i32 {
+    let mut worst = 0;
+    for r in results {
+        let c = r.exit_code();
+        if c > worst {
+            worst = c;
+        }
+    }
+    worst
+}
+
+/// Whitelist check for foreign-source names that flow into `--out`
+/// paths. Allowed characters: ASCII alphanumeric plus `-`, `_`, `.`.
+/// Empty string and leading `.` (hidden files) are also rejected.
+/// Anything else — `/`, `..`, null, control chars, Unicode — is
+/// refused before `path.join` constructs an escape vector.
+fn is_safe_filename(s: &str) -> bool {
+    if s.is_empty() || s.starts_with('.') {
+        return false;
+    }
+    s.bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.')
 }
 
 /// clap value parser for foreign-source CLI arguments. Rejects empty
