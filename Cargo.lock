@@ -1030,12 +1030,16 @@ dependencies = [
 name = "onmsctl-provisioning"
 version = "0.0.1"
 dependencies = [
+ "async-trait",
  "clap",
  "onmsctl-core",
+ "percent-encoding",
  "schemars",
  "serde",
  "serde_json",
  "serde_norway",
+ "tokio",
+ "wiremock",
 ]
 
 [[package]]
