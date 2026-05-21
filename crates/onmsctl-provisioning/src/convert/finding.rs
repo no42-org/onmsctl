@@ -160,7 +160,8 @@ impl Finding {
 /// Returns one paragraph of guidance per code; never panics.
 pub fn explain(code: FindingCode) -> &'static str {
     match code {
-        FindingCode::Pr001 => "\
+        FindingCode::Pr001 => {
+            "\
 PR001 — Unmodeled XML element or attribute.
 
 The migrator encountered an XML element or attribute it doesn't model. \
@@ -173,9 +174,11 @@ about; a deprecated XML element still present in legacy files; a \
 typo in the source XML.
 
 What to do: inspect the named element/attribute in the source file. \
-If it's load-bearing, file an issue against onmsctl with the example.",
+If it's load-bearing, file an issue against onmsctl with the example."
+        }
 
-        FindingCode::Pr002 => "\
+        FindingCode::Pr002 => {
+            "\
 PR002 — Orphan foreign-source XML.
 
 A foreign-source XML file was supplied (or auto-discovered in \
@@ -185,9 +188,11 @@ has no apply target.
 
 What to do: rename the foreign-source XML to match its requisition's \
 `foreign-source` attribute, OR delete the orphan if it's no longer in \
-use, OR pass the matching requisition XML alongside.",
+use, OR pass the matching requisition XML alongside."
+        }
 
-        FindingCode::Pr003 => "\
+        FindingCode::Pr003 => {
+            "\
 PR003 — Policy parameter type mismatch.
 
 A `<parameter>` under a `<policy>` declares a type that doesn't match \
@@ -197,9 +202,11 @@ differently than the operator expects.
 
 What to do: cross-check the policy class's documentation for the \
 expected parameter key/value shape. Either correct the source XML \
-before conversion, or correct the YAML after conversion and re-apply.",
+before conversion, or correct the YAML after conversion and re-apply."
+        }
 
-        FindingCode::Pr005 => "\
+        FindingCode::Pr005 => {
+            "\
 PR005 — Unrecognized snmp-primary value.
 
 An `<interface>` declared an `@snmp-primary` attribute whose value \
@@ -210,9 +217,11 @@ through would only fail the apply step downstream.
 
 What to do: inspect the source XML for the named interface. Most \
 likely a typo. If the source value was intentional, file an issue \
-against onmsctl with the example so we can extend the catalog.",
+against onmsctl with the example so we can extend the catalog."
+        }
 
-        FindingCode::Pr004 => "\
+        FindingCode::Pr004 => {
+            "\
 PR004 — No foreign-source XML for this requisition.
 
 A requisition XML was converted with no matching foreign-source XML \
@@ -225,7 +234,8 @@ This is INFORMATIONAL — it's exactly what operators using the \
 have a foreign-source XML and forgot to include it notice the omission.
 
 What to do: nothing if intentional. Otherwise, locate the matching \
-foreign-source XML and re-run convert with `--foreign-sources-dir`.",
+foreign-source XML and re-run convert with `--foreign-sources-dir`."
+        }
     }
 }
 
@@ -294,6 +304,9 @@ mod tests {
     #[test]
     fn finding_with_source_attaches_path() {
         let f = Finding::new(FindingCode::Pr001, "x").with_source("/tmp/r.xml".into());
-        assert_eq!(f.source_path.as_deref(), Some(std::path::Path::new("/tmp/r.xml")));
+        assert_eq!(
+            f.source_path.as_deref(),
+            Some(std::path::Path::new("/tmp/r.xml"))
+        );
     }
 }

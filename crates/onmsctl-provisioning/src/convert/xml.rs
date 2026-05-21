@@ -291,10 +291,7 @@ mod tests {
         assert_eq!(web.interfaces[0].snmp_primary.as_deref(), Some("P"));
         assert_eq!(web.interfaces[0].status.as_deref(), Some("1"));
         assert_eq!(web.interfaces[0].monitored_services.len(), 2);
-        assert_eq!(
-            web.interfaces[0].monitored_services[0].service_name,
-            "HTTP"
-        );
+        assert_eq!(web.interfaces[0].monitored_services[0].service_name, "HTTP");
     }
 
     #[test]

@@ -18,8 +18,7 @@ use onmsctl_provisioning::model::RequisitionLocal;
 
 const CLEAN_REQ: &str = include_str!("fixtures/convert/clean-requisition.xml");
 const CLEAN_FS: &str = include_str!("fixtures/convert/clean-foreign-source.xml");
-const CLEAN_EXPECTED_YAML: &str =
-    include_str!("fixtures/convert/clean-requisition.expected.yaml");
+const CLEAN_EXPECTED_YAML: &str = include_str!("fixtures/convert/clean-requisition.expected.yaml");
 const UNMODELED_REQ: &str = include_str!("fixtures/convert/unmodeled-elements-requisition.xml");
 const UNKNOWN_ELEMENT_REQ: &str =
     include_str!("fixtures/convert/truly-unknown-element-requisition.xml");
@@ -57,8 +56,7 @@ fn clean_fixture_matches_golden_yaml() {
     let r = convert_requisition_xml(CLEAN_REQ, Some(CLEAN_FS), None).unwrap();
     let actual = r.yaml.as_ref().expect("yaml emitted");
     assert_eq!(
-        actual,
-        CLEAN_EXPECTED_YAML,
+        actual, CLEAN_EXPECTED_YAML,
         "golden YAML drift — output diverges from clean-requisition.expected.yaml. \
          Re-run the dump_clean_golden example and commit the updated fixture if the \
          change is intentional."
@@ -232,7 +230,11 @@ fn convert_directory_clean_pair_with_fs_subdir() {
     assert_eq!(results.len(), 1);
     let r = &results[0];
     assert_eq!(r.foreign_source, "acme-prod");
-    assert!(r.findings.is_empty(), "expected zero findings: {:#?}", r.findings);
+    assert!(
+        r.findings.is_empty(),
+        "expected zero findings: {:#?}",
+        r.findings
+    );
     assert_eq!(r.exit_code(), 0);
     assert!(r.yaml.is_some());
 }
@@ -286,6 +288,32 @@ fn convert_directory_without_fs_dir_pr004_per_requisition() {
         );
         assert_eq!(r.exit_code(), 0);
     }
+}
+
+// ---------------------------------------------------------------------------
+// README example — validate the YAML file we tell operators to use is
+// actually parseable by RequisitionLocal. Catches divergence between
+// the README example and the local model on every test run.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn readme_example_acme_prod_parses_through_local_model() {
+    const EXAMPLE: &str = include_str!("../../../examples/requisition-acme-prod.yaml");
+    let local: RequisitionLocal =
+        serde_norway::from_str(EXAMPLE).expect("examples/requisition-acme-prod.yaml parses");
+    assert_eq!(local.metadata.name, "acme-prod");
+    assert!(
+        local.spec.foreign_source.is_some(),
+        "example demonstrates the pinned-style YAML (has spec.foreignSource)"
+    );
+    // Exactly 3 nodes (web/db/cache) — pinned so a regression that
+    // silently deletes one of them breaks the test rather than
+    // passing as "multiple nodes".
+    assert_eq!(
+        local.spec.nodes.len(),
+        3,
+        "the README example must keep exactly 3 nodes (web/db/cache)"
+    );
 }
 
 #[test]

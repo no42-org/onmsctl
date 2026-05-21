@@ -24,8 +24,8 @@ const CLEAN_REQ: &str = include_str!("../tests/fixtures/convert/clean-requisitio
 const CLEAN_FS: &str = include_str!("../tests/fixtures/convert/clean-foreign-source.xml");
 
 fn main() {
-    let outcome = convert_requisition_xml(CLEAN_REQ, Some(CLEAN_FS), None)
-        .expect("clean fixture converts");
+    let outcome =
+        convert_requisition_xml(CLEAN_REQ, Some(CLEAN_FS), None).expect("clean fixture converts");
     let yaml = outcome.yaml.expect("YAML emitted");
     print!("{yaml}");
 }
