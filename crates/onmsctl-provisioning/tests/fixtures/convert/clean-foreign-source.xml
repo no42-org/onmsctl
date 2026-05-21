@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Matches clean-requisition.xml. Exercises every modeled FS field:
+    - root: name, date-stamp attrs
+    - scan-interval
+    - detectors[]: name, class, parameters[]
+    - policies[]: name, class, parameters[]
+-->
+<foreign-source xmlns="http://xmlns.opennms.org/xsd/config/foreign-source"
+                name="acme-prod"
+                date-stamp="2024-01-15T10:30:00Z">
+  <scan-interval>1d</scan-interval>
+  <detectors>
+    <detector name="ICMP"
+              class="org.opennms.netmgt.provision.detector.icmp.IcmpDetector">
+      <parameter key="timeout" value="2000"/>
+      <parameter key="retries" value="1"/>
+    </detector>
+    <detector name="SNMP"
+              class="org.opennms.netmgt.provision.detector.snmp.SnmpDetector">
+      <parameter key="port" value="161"/>
+      <parameter key="timeout" value="2000"/>
+    </detector>
+  </detectors>
+  <policies>
+    <policy name="Production tag"
+            class="org.opennms.netmgt.provision.persist.policies.NodeCategorySettingPolicy">
+      <parameter key="category" value="Production"/>
+      <parameter key="matchBehavior" value="ALL_PARAMETERS"/>
+    </policy>
+  </policies>
+</foreign-source>

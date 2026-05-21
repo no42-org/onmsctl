@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Edge-case fixture (task 8.7): an element name the migrator's
+  catalog does not know about (`<future-extension>`). Documents
+  the FORWARD-COMPAT LIMITATION:
+
+    quick_xml's serde deserializer silently drops unknown elements.
+    The flag_unmodeled pass only checks a hand-rolled catalog of
+    known-unmodeled fields, so this element passes through with no
+    finding.
+
+  The integration test asserts the silent-drop behavior as a
+  contract — future work to add proper "unknown elements as
+  PR001" detection (parse into Value first, walk against DTO
+  field names) will flip this assertion.
+-->
+<model-import foreign-source="future-fs">
+  <node foreign-id="web01" node-label="web01">
+    <interface ip-addr="10.0.0.1" snmp-primary="P"/>
+    <category name="Production"/>
+    <future-extension key="hypothetical" value="some-value"/>
+  </node>
+</model-import>

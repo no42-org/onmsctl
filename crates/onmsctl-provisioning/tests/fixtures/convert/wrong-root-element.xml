@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Edge-case fixture (task 8.7): structurally valid XML with the
+  wrong root element. Common source of operator confusion when an
+  events XML or a foreign-source XML is accidentally fed to the
+  requisition reader.
+-->
+<events>
+  <event>
+    <uei>uei.opennms.org/test</uei>
+  </event>
+</events>
