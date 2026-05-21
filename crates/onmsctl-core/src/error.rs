@@ -319,6 +319,23 @@ mod tests {
             Error::UnsupportedAuthScheme("Negotiate".into()).exit_code(),
             9
         );
+        // Async wait outcomes — cli-core spec scenarios for exit 10/11.
+        assert_eq!(
+            Error::WaitTimeout {
+                handle: "acme-prod".into(),
+                timeout: "30s".into(),
+            }
+            .exit_code(),
+            10
+        );
+        assert_eq!(
+            Error::AsyncOpFailed {
+                handle: "acme-prod".into(),
+                reason: "vanished".into(),
+            }
+            .exit_code(),
+            11
+        );
         assert_eq!(Error::PartialSuccess { failed: 3 }.exit_code(), 1);
         assert_eq!(Error::Config("x".into()).exit_code(), 2);
         assert_eq!(Error::NoContext.exit_code(), 2);
