@@ -26,7 +26,7 @@
 use crate::api::ProvisioningApi;
 use crate::diff::{RequisitionDelta, aggregate_rescan_decision, diff_requisition};
 use crate::model::{
-    ApiVersion, Kind, Metadata, RequisitionLocal, Spec, requisition_from_wire, requisition_to_wire,
+    RequisitionLocal, requisition_from_wire, requisition_to_wire,
     server::{ForeignSourceServer, RequisitionServer},
 };
 use onmsctl_core::Result;
@@ -76,6 +76,12 @@ pub struct ApplyOutcome {
     /// What the driver did to `/foreignSources/{fs}` — created,
     /// updated, deleted, or untouched.
     pub foreign_source_action: ForeignSourceAction,
+    /// The server's custom foreign-source content at the moment the
+    /// apply started, before any writes. `None` when the server had
+    /// no custom FS (default-FS in effect). Carried through so the
+    /// `--diff` renderer (task 5.9) can show what was deleted or
+    /// replaced.
+    pub original_remote_fs: Option<ForeignSourceServer>,
 }
 
 /// Top-level apply outcome.
@@ -118,19 +124,22 @@ pub enum ForeignSourceAction {
 ///
 /// Sequence:
 ///   1. Pull deployed requisition (`GET /requisitions/{fs}`) + FS
-///      (`GET /foreignSources/{fs}`) — both may return 404.
+///      (`GET /foreignSources/{fs}`) concurrently — both may return
+///      404.
 ///   2. Build the diff baseline. If the local YAML omits
-///      `spec.foreignSource` AND the server has no custom FS, GET
-///      `/foreignSources/default` and use it as the baseline so
-///      out-of-band changes to Horizon's default surface in the
-///      diff (per design D1).
+///      `spec.foreignSource` OR the server has no custom FS, GET
+///      `/foreignSources/default` and substitute it symmetrically
+///      into either side's composite so the diff is apples-to-apples
+///      (per design D1).
 ///   3. Convert remote state → local form via
 ///      [`requisition_from_wire`], canonicalize both sides, and
-///      compute the [`RequisitionDelta`]. Early-exit Unchanged if
-///      the delta is empty.
+///      compute the [`RequisitionDelta`]. Early-exit Unchanged only
+///      when the diff is empty, the server already has the
+///      requisition, AND no FS-side action is required.
 ///   4. Choose `rescanExisting` from
-///      [`aggregate_rescan_decision`] over the delta's leaves (or
-///      from `opts.rescan_existing` override).
+///      [`aggregate_rescan_decision`] over the delta's leaves — any
+///      single scan-relevant leaf (OR semantics) flips the decision
+///      to `true`. `opts.rescan_existing` overrides.
 ///   5. With `--dry-run`, stop here and return the decisions.
 ///   6. Execute writes in order (per design D7): foreign-source
 ///      first (upsert OR delete OR no-op), then requisition POST,
@@ -142,9 +151,11 @@ pub async fn apply_requisition(
 ) -> Result<ApplyOutcome> {
     let fs_name = local.metadata.name.as_str();
 
-    // ---- 1. Pull deployed state ----
-    let remote_req = api.get_requisition(fs_name).await?;
-    let remote_fs = api.get_foreign_source(fs_name).await?;
+    // ---- 1. Pull deployed state (concurrent — independent reads) ----
+    let (remote_req, remote_fs) = tokio::try_join!(
+        api.get_requisition(fs_name),
+        api.get_foreign_source(fs_name),
+    )?;
 
     // ---- 2. Resolve default-FS once if either side needs it ----
     // Per design D1, when EITHER local omits foreignSource OR remote
@@ -168,20 +179,27 @@ pub async fn apply_requisition(
         default_fs.as_ref(),
     );
 
-    // ---- 3. Diff + L1 short-circuit ----
+    // ---- 3. Diff + FS-action classification + L1 short-circuit ----
     // The short-circuit only fires when the server already has the
-    // requisition AND the composite content matches. When the server
-    // has no requisition at all, we MUST POST it even if the content
-    // would coincidentally match Horizon's default-FS baseline —
-    // "Unchanged" implies the server is already in the desired state,
-    // which it isn't when the requisition doesn't yet exist.
+    // requisition, the composite diff is empty, AND no FS-side action
+    // is required. Without the fs_action check, a custom FS that
+    // canonicalizes equal to default-FS substitution would short-
+    // circuit "Unchanged" while still owing a DELETE to bring the
+    // server back to default — leaving the server in the wrong state.
     let delta = diff_requisition(&local_composite, &remote_composite);
-    if delta.is_empty() && remote_req.is_some() {
+    let foreign_source_action =
+        classify_fs_action(remote_fs.is_some(), local.spec.foreign_source.is_some());
+
+    if delta.is_empty()
+        && remote_req.is_some()
+        && matches!(foreign_source_action, ForeignSourceAction::NoChange)
+    {
         return Ok(ApplyOutcome {
             state: ApplyState::Unchanged,
             delta,
             rescan_existing: false,
-            foreign_source_action: ForeignSourceAction::NoChange,
+            foreign_source_action,
+            original_remote_fs: remote_fs,
         });
     }
 
@@ -191,21 +209,19 @@ pub async fn apply_requisition(
         RescanChoice::Auto => aggregate_rescan_decision(delta.iter_paths()),
     };
 
-    // ---- 5. Foreign-source action classification ----
-    let foreign_source_action =
-        classify_fs_action(remote_fs.is_some(), local.spec.foreign_source.is_some());
-
-    // ---- 6. Dry-run: stop here, return decisions ----
+    // ---- 5. Dry-run: stop here, return decisions ----
     if opts.dry_run {
         return Ok(ApplyOutcome {
             state: ApplyState::DryRun,
             delta,
             rescan_existing,
             foreign_source_action,
+            original_remote_fs: remote_fs,
         });
     }
 
-    // ---- 7. Execute writes per design D7 ----
+    // ---- 6. Execute writes per design D7 ----
+    let was_created = remote_req.is_none();
     let (wire_req, wire_fs) = requisition_to_wire(local);
 
     match foreign_source_action {
@@ -224,14 +240,15 @@ pub async fn apply_requisition(
     api.trigger_import(fs_name, rescan_existing).await?;
 
     Ok(ApplyOutcome {
-        state: if remote_req.is_some() {
-            ApplyState::Updated
-        } else {
+        state: if was_created {
             ApplyState::Created
+        } else {
+            ApplyState::Updated
         },
         delta,
         rescan_existing,
         foreign_source_action,
+        original_remote_fs: remote_fs,
     })
 }
 
@@ -300,21 +317,7 @@ fn build_remote_composite(
                 last_import: None,
                 node: vec![],
             };
-            let mut converted = requisition_from_wire(&empty, fs_for_composite);
-            // Belt-and-suspenders: ensure metadata.name is set even
-            // if the wire field was weird.
-            if converted.metadata.name.is_empty() {
-                converted.metadata = Metadata {
-                    name: fs_name.to_string(),
-                };
-                converted.api_version = ApiVersion;
-                converted.kind = Kind;
-                converted.spec = Spec {
-                    foreign_source: converted.spec.foreign_source,
-                    nodes: vec![],
-                };
-            }
-            converted
+            requisition_from_wire(&empty, fs_for_composite)
         }
     }
 }
@@ -473,7 +476,37 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(empty_default_fs_response()))
             .mount(&server)
             .await;
-        // NO mutating mocks — wiremock would reject any POST/PUT.
+        // Explicit .expect(0) on every mutating endpoint — wiremock
+        // panics on drop if any of these saw a request. Stronger
+        // than "no mock defined" because it asserts intent rather
+        // than relying on the default-404 path. Mocks return 200
+        // (not 500) so a regression that issues a write during dry-
+        // run fails the `outcome.state == DryRun` assertion first
+        // rather than masking it behind an HTTP error in `unwrap()`.
+        Mock::given(method("POST"))
+            .and(path("/rest/requisitions/acme-prod"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+            .expect(0)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/rest/foreignSources/acme-prod"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+            .expect(0)
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path("/rest/foreignSources/acme-prod"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/rest/requisitions/acme-prod/import"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
 
         let local = parse_local(
             "apiVersion: provisioning.opennms.org/v1\n\
@@ -716,7 +749,197 @@ mod tests {
         assert!(!outcome.rescan_existing, "label-only change is irrelevant");
     }
 
-    // -- Path 8: classify_fs_action matrix --------------------------------
+    // -- Path 8: FS-POST failure aborts before requisition write --------
+
+    #[tokio::test]
+    async fn fs_post_failure_aborts_before_requisition_or_import() {
+        let (server, client) = mock_with_client().await;
+        let api = ProvisioningApi::new(&client);
+
+        Mock::given(method("GET"))
+            .and(path("/rest/requisitions/acme-prod"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/rest/foreignSources/acme-prod"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/rest/foreignSources/default"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(empty_default_fs_response()))
+            .mount(&server)
+            .await;
+        // FS POST returns 500 — design D7 requires we abort here.
+        Mock::given(method("POST"))
+            .and(path("/rest/foreignSources/acme-prod"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+        // Requisition POST and import must NOT be issued — assert
+        // via .expect(0) so wiremock panics on drop if they fire.
+        Mock::given(method("POST"))
+            .and(path("/rest/requisitions/acme-prod"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+            .expect(0)
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/rest/requisitions/acme-prod/import"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let local = parse_local(
+            "apiVersion: provisioning.opennms.org/v1\n\
+             kind: Requisition\n\
+             metadata:\n  name: acme-prod\n\
+             spec:\n  foreignSource:\n    scanInterval: 1d\n  nodes: []\n",
+        );
+        let result = apply_requisition(&local, &api, &ApplyOptions::default()).await;
+        assert!(result.is_err(), "FS POST 500 must propagate as Err");
+    }
+
+    // -- Path 9: category-only change picks rescanExisting=false --------
+
+    #[tokio::test]
+    async fn category_only_change_picks_no_rescan() {
+        let (server, client) = mock_with_client().await;
+        let api = ProvisioningApi::new(&client);
+
+        Mock::given(method("GET"))
+            .and(path("/rest/requisitions/acme-prod"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "foreign-source": "acme-prod",
+                "node": [{
+                    "foreign-id": "web01",
+                    "node-label": "web01",
+                    "interface": [],
+                    "category": [{"name": "Production"}],
+                    "asset": [],
+                    "meta-data": []
+                }]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/rest/foreignSources/acme-prod"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/rest/foreignSources/default"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(empty_default_fs_response()))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/rest/requisitions/acme-prod"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+            .mount(&server)
+            .await;
+        // Categories are scan-IRRELEVANT — classifier must pick false.
+        Mock::given(method("PUT"))
+            .and(path("/rest/requisitions/acme-prod/import"))
+            .and(query_param("rescanExisting", "false"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let local = parse_local(
+            "apiVersion: provisioning.opennms.org/v1\n\
+             kind: Requisition\n\
+             metadata:\n  name: acme-prod\n\
+             spec:\n  nodes:\n\
+             \x20   - foreignId: web01\n\
+             \x20     label: web01\n\
+             \x20     categories: [Production, Critical]\n",
+        );
+        let outcome = apply_requisition(&local, &api, &ApplyOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(outcome.state, ApplyState::Updated);
+        assert!(
+            !outcome.rescan_existing,
+            "category-only diff must not trigger rescan"
+        );
+    }
+
+    // -- Path 10: snmpPrimary change picks rescanExisting=true ----------
+
+    #[tokio::test]
+    async fn snmp_primary_change_picks_rescan_true() {
+        let (server, client) = mock_with_client().await;
+        let api = ProvisioningApi::new(&client);
+
+        Mock::given(method("GET"))
+            .and(path("/rest/requisitions/acme-prod"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "foreign-source": "acme-prod",
+                "node": [{
+                    "foreign-id": "web01",
+                    "node-label": "web01",
+                    "interface": [{
+                        "ip-addr": "10.0.0.1",
+                        "snmp-primary": "S",
+                        "status": 1,
+                        "monitored-service": [],
+                        "meta-data": []
+                    }],
+                    "category": [],
+                    "asset": [],
+                    "meta-data": []
+                }]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/rest/foreignSources/acme-prod"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/rest/foreignSources/default"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(empty_default_fs_response()))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/rest/requisitions/acme-prod"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+            .mount(&server)
+            .await;
+        // snmpPrimary is scan-RELEVANT — classifier must pick true.
+        Mock::given(method("PUT"))
+            .and(path("/rest/requisitions/acme-prod/import"))
+            .and(query_param("rescanExisting", "true"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        // Promote 10.0.0.1 from secondary (S) to primary (P).
+        let local = parse_local(
+            "apiVersion: provisioning.opennms.org/v1\n\
+             kind: Requisition\n\
+             metadata:\n  name: acme-prod\n\
+             spec:\n  nodes:\n\
+             \x20   - foreignId: web01\n\
+             \x20     label: web01\n\
+             \x20     interfaces:\n\
+             \x20       - ip: 10.0.0.1\n\
+             \x20         snmpPrimary: P\n",
+        );
+        let outcome = apply_requisition(&local, &api, &ApplyOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(outcome.state, ApplyState::Updated);
+        assert!(
+            outcome.rescan_existing,
+            "snmpPrimary change must trigger rescan"
+        );
+    }
+
+    // -- Path 11: classify_fs_action matrix ------------------------------
 
     #[test]
     fn fs_action_classification_matches_design_d1() {

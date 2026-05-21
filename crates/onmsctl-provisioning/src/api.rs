@@ -30,9 +30,14 @@ use crate::model::server::{ForeignSourceServer, RequisitionServer};
 
 /// Characters that must be percent-encoded inside a path segment.
 /// Anything beyond RFC 3986's "unreserved" set (`A-Z`, `a-z`, `0-9`,
-/// `-`, `_`, `.`, `~`) plus a few sub-delims that are safe in path
-/// segments. We intentionally encode `/` so it can't escape the
-/// foreign-source path component into a subpath.
+/// `-`, `_`, `.`, `~`) plus the reserved/sub-delim characters that
+/// have semantic meaning in URLs. We intentionally encode `/` so it
+/// can't escape the foreign-source path component into a subpath,
+/// `%` so a literal `%` in the input doesn't get confused with an
+/// encoded triplet on the wire (callers must pass raw, unencoded
+/// names), and `[` / `]` because some routers and proxies reject
+/// unencoded brackets in path segments even though RFC 3986 allows
+/// them only in the authority component.
 const PATH_SEGMENT: &AsciiSet = &CONTROLS
     .add(b' ')
     .add(b'"')
@@ -46,7 +51,15 @@ const PATH_SEGMENT: &AsciiSet = &CONTROLS
     .add(b'}')
     .add(b'/')
     .add(b'?')
-    .add(b'#');
+    .add(b'#')
+    .add(b'%')
+    .add(b'&')
+    .add(b'=')
+    .add(b'+')
+    .add(b';')
+    .add(b'@')
+    .add(b'[')
+    .add(b']');
 
 /// Base path under the OnmsClient root URL. Horizon's legacy
 /// provisioning endpoints live under `/opennms/rest/...`; the
