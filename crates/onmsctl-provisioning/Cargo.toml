@@ -18,6 +18,7 @@ serde_norway = { workspace = true }
 schemars = { workspace = true }
 async-trait = { workspace = true }
 percent-encoding = { workspace = true }
+tokio = { workspace = true, features = ["macros"] }
 # Further dependencies (quick-xml for the XML migrator, thiserror /
 # anyhow for capability-local errors) are added when those features
 # land — kept minimal here to surface dep review only when each is
