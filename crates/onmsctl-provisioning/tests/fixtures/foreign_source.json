@@ -1,0 +1,54 @@
+{
+  "name": "acme-prod",
+  "date-stamp": 1779349454959,
+  "scan-interval": "1d",
+  "detectors": [
+    { "name": "DNS",   "class": "org.opennms.netmgt.provision.detector.datagram.DnsDetector", "parameter": [] },
+    { "name": "FTP",   "class": "org.opennms.netmgt.provision.detector.simple.FtpDetector",   "parameter": [] },
+    { "name": "HTTP",  "class": "org.opennms.netmgt.provision.detector.simple.HttpDetector",  "parameter": [] },
+    { "name": "HTTPS", "class": "org.opennms.netmgt.provision.detector.simple.HttpsDetector", "parameter": [] },
+    { "name": "ICMP",  "class": "org.opennms.netmgt.provision.detector.icmp.IcmpDetector",    "parameter": [] },
+    { "name": "IMAP",  "class": "org.opennms.netmgt.provision.detector.simple.ImapDetector",  "parameter": [] },
+    { "name": "LDAP",  "class": "org.opennms.netmgt.provision.detector.simple.LdapDetector",  "parameter": [] },
+    { "name": "NRPE",  "class": "org.opennms.netmgt.provision.detector.simple.NrpeDetector",  "parameter": [] },
+    { "name": "POP3",  "class": "org.opennms.netmgt.provision.detector.simple.Pop3Detector",  "parameter": [] },
+    { "name": "SMTP",  "class": "org.opennms.netmgt.provision.detector.simple.SmtpDetector",  "parameter": [] },
+    { "name": "SNMP",  "class": "org.opennms.netmgt.provision.detector.snmp.SnmpDetector",    "parameter": [] },
+    { "name": "SSH",   "class": "org.opennms.netmgt.provision.detector.ssh.SshDetector",      "parameter": [] },
+    { "name": "WS-Man","class": "org.opennms.netmgt.provision.detector.wsman.WsManDetector",  "parameter": [] },
+    {
+      "name": "OpenNMS-JVM",
+      "class": "org.opennms.netmgt.provision.detector.jmx.Jsr160Detector",
+      "parameter": [
+        { "key": "username", "value": "admin" },
+        { "key": "ipMatch",  "value": "127.0.0.1" },
+        { "key": "port",     "value": "18980" },
+        { "key": "password", "value": "admin" },
+        { "key": "urlPath",  "value": "/jmxrmi" },
+        { "key": "factory",  "value": "PASSWORD_CLEAR" },
+        { "key": "retries",  "value": "2" },
+        { "key": "type",     "value": "default" },
+        { "key": "protocol", "value": "rmi" },
+        { "key": "timeout",  "value": "3000" }
+      ]
+    },
+    {
+      "name": "MS-RDP",
+      "class": "org.opennms.netmgt.provision.detector.simple.TcpDetector",
+      "parameter": [
+        { "key": "port", "value": "3389" }
+      ]
+    }
+  ],
+  "policies": [
+    {
+      "name": "enable-interface-collection",
+      "class": "org.opennms.netmgt.provision.persist.policies.MatchingSnmpInterfacePolicy",
+      "parameter": [
+        { "key": "action",        "value": "ENABLE_COLLECTION" },
+        { "key": "ifDescr",       "value": "~./uplink" },
+        { "key": "matchBehavior", "value": "ANY_PARAMETER" }
+      ]
+    }
+  ]
+}

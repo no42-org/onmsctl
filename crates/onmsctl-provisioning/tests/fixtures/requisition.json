@@ -1,0 +1,78 @@
+{
+  "node": [
+    {
+      "interface": [
+        {
+          "monitored-service": [
+            {
+              "category": [],
+              "meta-data": [],
+              "service-name": "ICMP"
+            },
+            {
+              "category": [],
+              "meta-data": [],
+              "service-name": "SNMP"
+            }
+          ],
+          "category": [],
+          "meta-data": [],
+          "descr": null,
+          "ip-addr": "127.0.23.23",
+          "managed": null,
+          "status": 1,
+          "snmp-primary": "P"
+        },
+        {
+          "monitored-service": [],
+          "category": [],
+          "meta-data": [],
+          "descr": null,
+          "ip-addr": "127.0.23.24",
+          "managed": null,
+          "status": 1,
+          "snmp-primary": "S"
+        },
+        {
+          "monitored-service": [],
+          "category": [],
+          "meta-data": [],
+          "descr": null,
+          "ip-addr": "172.0.23.25",
+          "managed": null,
+          "status": 1,
+          "snmp-primary": "N"
+        }
+      ],
+      "category": [
+        {
+          "name": "Routers"
+        }
+      ],
+      "asset": [
+        {
+          "name": "city",
+          "value": "Heilbronn"
+        }
+      ],
+      "meta-data": [
+        {
+          "context": "requisition",
+          "key": "zone",
+          "value": "us-central-1"
+        }
+      ],
+      "location": null,
+      "building": null,
+      "city": null,
+      "foreign-id": "1779349515116",
+      "node-label": "my-blinky-node",
+      "parent-foreign-source": null,
+      "parent-foreign-id": null,
+      "parent-node-label": null
+    }
+  ],
+  "date-stamp": 1779349670036,
+  "foreign-source": "acme-prod",
+  "last-import": 1779349676778
+}
