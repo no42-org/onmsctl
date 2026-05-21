@@ -16,6 +16,7 @@ path = "src/main.rs"
 [dependencies]
 onmsctl-core = { workspace = true }
 onmsctl-eventconf = { workspace = true }
+onmsctl-provisioning = { workspace = true }
 clap = { workspace = true }
 clap_complete = { workspace = true }
 tokio = { workspace = true }

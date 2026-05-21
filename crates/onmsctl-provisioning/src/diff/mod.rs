@@ -41,6 +41,7 @@
 //! ordered list (detector order) produce different canonical output —
 //! provisiond's order-sensitive evaluation requires this.
 
+use serde::Serialize;
 use serde_json::{Map, Value};
 
 use crate::model::RequisitionLocal;
@@ -100,7 +101,7 @@ pub fn canonical_value(req: &RequisitionLocal) -> Value {
 /// per-leaf detail attached to each modified node. Foreign-source
 /// changes are surfaced as a separate leaf list since the foreignSource
 /// half lives outside the node array.
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Default, Serialize)]
 pub struct RequisitionDelta {
     /// Leaf changes within `spec.foreignSource` (or whole-block
     /// add/remove when one side omits the field). Paths are rooted at
@@ -148,7 +149,7 @@ impl RequisitionDelta {
 /// L2's add/remove buckets. The canonical-form JSON value is attached
 /// so consumers that need richer detail (e.g. `-o json` output) can
 /// render the whole node without re-fetching.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct NodeRef {
     pub foreign_id: String,
     pub value: Value,
@@ -158,7 +159,7 @@ pub struct NodeRef {
 /// differences. `leaves` is the L3 per-leaf delta computed for the
 /// node's body; paths are rooted at `spec.nodes[*]` so they feed the
 /// rescan classifier directly.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct NodeModification {
     pub foreign_id: String,
     pub leaves: Vec<LeafChange>,
@@ -167,7 +168,7 @@ pub struct NodeModification {
 /// A single leaf-path change. `from` is the remote (server) side;
 /// `to` is the local (YAML) side. Either side may be `Value::Null`
 /// when the leaf was added or removed.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct LeafChange {
     /// Dotted path from the document root, with `[N]` for array
     /// indices. Example: `spec.nodes[*].interfaces[0].snmpPrimary`.

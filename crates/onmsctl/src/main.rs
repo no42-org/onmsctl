@@ -97,6 +97,9 @@ enum TopCmd {
     /// Manage eventconf events.
     #[command(subcommand, visible_alias = "evt")]
     Event(onmsctl_eventconf::cmd::EventCmd),
+    /// Manage provisioning requisitions (GitOps + lifecycle verbs).
+    #[command(subcommand, visible_alias = "req")]
+    Requisition(onmsctl_provisioning::RequisitionCmd),
     /// Print the binary version and linked capability list.
     Version,
     /// Inspect or switch the active configuration.
@@ -232,6 +235,12 @@ async fn run(cli: Cli) -> Result<()> {
             cmd.run(&ctx).await?;
             Ok(())
         }
+        TopCmd::Requisition(cmd) => {
+            let ctx = resolve_context(&merged)?;
+            refuse_if_read_only(&ctx, cmd.kind())?;
+            cmd.run(&ctx).await?;
+            Ok(())
+        }
     }
 }
 
@@ -258,10 +267,12 @@ fn config_path_from(merged: &Overrides) -> Result<PathBuf> {
 /// pin a specific binary build.
 fn print_version() -> Result<()> {
     let s = format!(
-        "onmsctl {}\ncapabilities:\n  - {} {}\n",
+        "onmsctl {}\ncapabilities:\n  - {} {}\n  - {} {}\n",
         env!("CARGO_PKG_VERSION"),
         onmsctl_eventconf::CAPABILITY_NAME,
         onmsctl_eventconf::VERSION,
+        onmsctl_provisioning::CAPABILITY_NAME,
+        onmsctl_provisioning::VERSION,
     );
     write_stdout(s.as_bytes())
 }

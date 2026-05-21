@@ -30,6 +30,7 @@ use crate::model::{
     server::{ForeignSourceServer, RequisitionServer},
 };
 use onmsctl_core::Result;
+use serde::Serialize;
 
 // ---------------------------------------------------------------------------
 // Options and outcomes
@@ -63,7 +64,7 @@ pub enum RescanChoice {
 
 /// What the apply driver did. Returned even on success so CLI output
 /// (and tests) can describe the result.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ApplyOutcome {
     pub state: ApplyState,
     /// The computed L2/L3 delta between local and the composite
@@ -85,7 +86,8 @@ pub struct ApplyOutcome {
 }
 
 /// Top-level apply outcome.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum ApplyState {
     /// L1 short-circuit: local and remote canonicalize identically.
     /// No HTTP writes issued.
@@ -101,7 +103,8 @@ pub enum ApplyState {
 }
 
 /// What the driver did to the `/foreignSources/{fs}` endpoint.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum ForeignSourceAction {
     /// No POST or DELETE issued — neither local nor remote has a
     /// custom FS, or `state == Unchanged`.
