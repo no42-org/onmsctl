@@ -253,7 +253,10 @@ mod tests {
             None,
         );
         let rendered = render_apply_diff(&local, &o);
-        assert_eq!(rendered, "Requisition/acme-prod (unchanged)\n  (no changes)\n");
+        assert_eq!(
+            rendered,
+            "Requisition/acme-prod (unchanged)\n  (no changes)\n"
+        );
     }
 
     #[test]
@@ -344,12 +347,14 @@ mod tests {
         let rendered = render_apply_diff(&local, &o);
         assert!(rendered.contains("  - foreignSource: deleting custom"));
         assert!(rendered.contains("    displaced detectors:"));
-        assert!(rendered.contains(
-            "      - SNMP (org.opennms.netmgt.provision.detector.snmp.SnmpDetector)"
-        ));
-        assert!(rendered.contains(
-            "      - ICMP (org.opennms.netmgt.provision.detector.icmp.IcmpDetector)"
-        ));
+        assert!(
+            rendered
+                .contains("      - SNMP (org.opennms.netmgt.provision.detector.snmp.SnmpDetector)")
+        );
+        assert!(
+            rendered
+                .contains("      - ICMP (org.opennms.netmgt.provision.detector.icmp.IcmpDetector)")
+        );
         assert!(rendered.contains("    displaced policies:"));
         assert!(rendered.contains(
             "      - Production tag (org.opennms.netmgt.provision.persist.policies.NodeCategorySettingPolicy)"

@@ -1,0 +1,88 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/no42-org/onmsctl/main/schemas/requisition.schema.json
+#
+# Composite kind: Requisition example covering every modeled field
+# (per task 10.4 of the add-provisioning-capability change).
+#
+# Pair with `onmsctl requisition apply -f examples/requisition-acme-prod.yaml
+# --dry-run --diff` to see the structured diff against a live Horizon.
+apiVersion: provisioning.opennms.org/v1
+kind: Requisition
+metadata:
+  name: acme-prod
+spec:
+  # Pinned-style YAML: the requisition carries its own foreign-source
+  # definition. Operators who want portable YAML can drop this entire
+  # block; on apply, Horizon's default foreign-source is inherited
+  # (see design D1 + the portable-vs-pinned section in the README).
+  foreignSource:
+    scanInterval: 1d
+    detectors:
+      - name: ICMP
+        class: org.opennms.netmgt.provision.detector.icmp.IcmpDetector
+        parameters:
+          - key: timeout
+            value: "2000"
+          - key: retries
+            value: "1"
+      - name: SNMP
+        class: org.opennms.netmgt.provision.detector.snmp.SnmpDetector
+        parameters:
+          - key: port
+            value: "161"
+          - key: timeout
+            value: "2000"
+    policies:
+      - name: Production tag
+        class: org.opennms.netmgt.provision.persist.policies.NodeCategorySettingPolicy
+        parameters:
+          - key: category
+            value: Production
+          - key: matchBehavior
+            value: ALL_PARAMETERS
+  nodes:
+    - foreignId: web01
+      label: web01.acme.com
+      interfaces:
+        - ip: 10.0.0.1
+          snmpPrimary: P
+          services:
+            - HTTP
+            - HTTPS
+            - SNMP
+        - ip: 10.0.0.2
+          snmpPrimary: S
+          services:
+            - ICMP
+      categories:
+        - Production
+        - Web
+      # Asset keys are stored verbatim by Horizon but only the
+       # canonical column names (`city`, `state`, `serialNumber`,
+       # `rack`, `country`, …) render in the inventory UI. Stick to
+       # canonical names unless you're using assets purely as
+       # operator-private metadata.
+      assets:
+        city: NYC
+        rack: R3
+        serialNumber: SN-12345
+    - foreignId: db01
+      label: db01.acme.com
+      interfaces:
+        - ip: 10.0.1.1
+          snmpPrimary: P
+          services:
+            - PostgreSQL
+            - SNMP
+      categories:
+        - Production
+        - Database
+      assets:
+        city: NYC
+    - foreignId: cache01
+      label: cache01.acme.com
+      interfaces:
+        - ip: 10.0.2.1
+          snmpPrimary: N
+      categories:
+        - Production
+        - Cache

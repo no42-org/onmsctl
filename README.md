@@ -1,8 +1,10 @@
 # onmsctl
 
 A `kubectl`-style command-line interface for [OpenNMS Horizon][horizon] —
-declarative `apply -f`, an XML→YAML migrator for legacy eventconf, and
-imperative verbs for source / event management.
+declarative `apply -f` for event configuration and provisioning
+requisitions, XML→YAML migrators for both legacy eventconf and
+`provision.pl`-shape requisition files, and imperative verbs for
+source / event / requisition management.
 
 [horizon]: https://www.opennms.com/horizon/
 
@@ -84,6 +86,26 @@ cargo install --path crates/onmsctl   # → ~/.cargo/bin
 ```
 
 Verify with `onmsctl version`.
+
+### About this binary
+
+`onmsctl` is one binary that statically links every capability crate
+in the workspace. Run `onmsctl version` to see the binary version
+alongside each linked capability:
+
+```
+$ onmsctl version
+onmsctl 0.0.1
+capabilities:
+  - eventconf 0.0.1
+  - provisioning 0.0.1
+```
+
+Each capability owns its own subcommand tree (`source` / `event`,
+`requisition`, etc.) and ships its own JSON Schemas, validators, and
+HTTP client wrappers. New capabilities are added as workspace
+members; this list grows verbatim from `onmsctl_<cap>::{CAPABILITY_NAME,
+VERSION}`.
 
 ---
 
@@ -220,6 +242,172 @@ tooling distinguishes ordered sequences (`detectors`, `policies` —
 order is semantically meaningful in provisiond) from sets
 (`categories`, `services` — order is ignored). Editors that don't
 understand the extension ignore it harmlessly.
+
+---
+
+## GitOps for OpenNMS provisioning
+
+Manage Horizon requisitions (the `provision.pl`-shape data) declaratively
+from git. Three verbs carry the loop — `requisition convert` brings
+existing XML in, `requisition apply` ships edits out, `requisition
+status` / `import` cover the lifecycle.
+
+### Step 1 — Convert existing XML → YAML
+
+Pure local file transform; no Horizon contact required.
+
+```sh
+# Single pair: requisition XML + matching foreign-source XML
+onmsctl requisition convert \
+    --from /opt/opennms/etc/imports/ \
+    --foreign-sources-dir /opt/opennms/etc/foreign-sources/ \
+    --out yaml/
+
+# Stream to stdout (one document per requisition, separated by `---`)
+onmsctl requisition convert --from /opt/opennms/etc/imports/
+```
+
+Rule violations emit `PR###`-coded findings on stderr. Run
+`onmsctl requisition convert --explain PR001` to see the rationale
+for any code. PR001 / PR002 / PR003 are Warnings (exit 1), PR004 is
+Info (exit 0), and parse failures exit 2.
+
+### Step 2 — Apply YAML to Horizon
+
+```sh
+# Preview without writing — diff goes to stderr, structured outcome
+# to stdout. Safe against any context.
+onmsctl requisition apply -f acme-prod.yaml --dry-run --diff
+
+# Real apply. With --wait, blocks until import completes (or
+# --timeout fires for exit 10).
+onmsctl requisition apply -f acme-prod.yaml --wait --timeout 5m
+```
+
+The apply path computes a three-level diff (canonical-bytes / per-node
+/ per-leaf) and auto-decides `rescanExisting` from the scan-relevance
+of what changed. Override with `--rescan-existing true|false`.
+
+### Step 3 — Iterate
+
+Edit YAML in git, push through review, run `requisition apply -f`
+again. `--dry-run` is safe for any branch; `--diff` prints the diff to
+stderr so `-o json`/`-o yaml` consumers on stdout stay clean.
+
+### Pinned vs portable YAML
+
+The composite `kind: Requisition` document carries `spec.foreignSource`
+optionally. Two operator styles:
+
+- **Pinned style** — include `spec.foreignSource` with detectors and
+  policies. The YAML is the source of truth for both the requisition
+  and its foreign-source. `apply` creates / updates the custom
+  foreign-source alongside the requisition.
+- **Portable style** — omit `spec.foreignSource` entirely. On apply,
+  Horizon's default foreign-source is inherited (no custom detectors,
+  no custom policies). Useful for stamping out cookie-cutter
+  requisitions that all share the site-wide default scan settings. If
+  the server previously had a custom foreign-source for this name,
+  `apply` will **delete it** and the `--diff` output enumerates the
+  displaced detectors and policies so the operator sees the blast
+  radius.
+
+The [`examples/requisition-acme-prod.yaml`](examples/requisition-acme-prod.yaml)
+fixture demonstrates the pinned style with every modeled field.
+
+### Migration map: `provision.pl <verb>` → `onmsctl`
+
+| `provision.pl` | `onmsctl` |
+|---|---|
+| `provision.pl requisition add <fs>` | `onmsctl requisition apply -f <fs>.yaml` (with an empty `nodes: []` payload) |
+| `provision.pl requisition remove <fs>` | _imperative — coming in Group 7_ (currently: `curl -X DELETE /opennms/rest/requisitions/<fs>` AND `curl -X DELETE /opennms/rest/requisitions/deployed/<fs>` — pending and deployed state must both be purged; remove the local YAML) |
+| `provision.pl requisition import <fs>` | `onmsctl requisition import <fs>` (PUT-only, no re-POST; add `--wait` to block until completion) |
+| `provision.pl requisition list` | _imperative — coming in Group 7_ (currently: `curl /opennms/rest/requisitions` and inspect) |
+| `provision.pl node add <fs> <foreign-id> <node-label>` | Edit YAML; `onmsctl requisition apply -f <fs>.yaml` |
+| `provision.pl interface add <fs> <foreign-id> <ip>` | Edit YAML; `onmsctl requisition apply -f <fs>.yaml` |
+| `provision.pl service add <fs> <foreign-id> <ip> <svc>` | Edit YAML; `onmsctl requisition apply -f <fs>.yaml` |
+| `provision.pl category add <fs> <foreign-id> <cat>` | Edit YAML; `onmsctl requisition apply -f <fs>.yaml` |
+| `provision.pl asset add <fs> <foreign-id> <name> <value>` | Edit YAML's `spec.nodes[].assets`; `onmsctl requisition apply -f <fs>.yaml`. **Note:** assets in the YAML are *requisition-time* (applied at next import); the imperative `provision.pl asset` legacy verb modifies imported nodes by database ID — a different surface that comes with `onmsctl requisition asset` (Group 7) |
+
+The migration philosophy reverses `provision.pl`'s shell-automation
+model. Where `provision.pl` ran one mutation per invocation,
+`onmsctl requisition apply` ships the desired state and lets the
+three-level diff figure out what to mutate.
+
+### Migrating off `provision.pl` shell automation
+
+Recommended once-per-site recipe (per design D11):
+
+1. **Convert** existing XML to YAML with `onmsctl requisition convert
+   --from /opt/opennms/etc/imports/ --foreign-sources-dir
+   /opt/opennms/etc/foreign-sources/ --out repo/yaml/`. Review the
+   stderr findings; resolve PR001 / PR002 by editing the source XML
+   (rare) or accepting the documented data-loss (most common — see
+   the per-code `--explain` text).
+2. **Commit** the YAML directory to git as the new source of truth.
+3. **Rewrite** the existing `provision.pl` shell scripts as `onmsctl
+   requisition apply -f <fs>.yaml` invocations. The YAML carries
+   desired state; the legacy "step-by-step mutation" pattern
+   collapses to one apply per requisition.
+4. **Schedule** the apply via CI / cron. `--dry-run --diff` is the
+   review gate; the actual apply runs only after review.
+
+`requisition export` (planned, deferred to a follow-up) will close the
+round-trip by reading server state back into YAML for ongoing sync.
+Until then, the convert step is one-shot.
+
+### Editor integration
+
+See the [editor integration](#editor-integration) section above for
+the `yaml-language-server` directive for `kind: Requisition` — the
+schema lives at `schemas/requisition.schema.json` and ships with the
+same `x-onmsctl-list-kind` annotations the diff engine uses to
+distinguish ordered lists (detectors / policies) from sets
+(categories / services).
+
+---
+
+## Aliases and read-only contexts
+
+### Top-level verb aliases
+
+Every capability registers a short alias so the most common verbs
+stay terse:
+
+| Long form | Alias | Notes |
+|---|---|---|
+| `onmsctl source ...` | `onmsctl src ...` | eventconf source verbs |
+| `onmsctl event ...` | `onmsctl evt ...` | eventconf event verbs |
+| `onmsctl requisition ...` | `onmsctl req ...` | provisioning verbs |
+| `onmsctl config ...` | `onmsctl cfg ...` | local config management |
+
+Both forms appear in `--help` output so the alias is discoverable.
+
+### Read-only contexts
+
+Mark a context `read-only: true` to refuse every write verb locally
+before any HTTP call. This is defense-in-depth on top of the server's
+role checks — useful for "look but don't touch" credentials.
+
+```yaml
+contexts:
+  - name: prod-readonly
+    server:
+      url: https://horizon.prod.example/opennms
+    auth:
+      basic:
+        username: viewer
+        keyring: prod-readonly
+    read-only: true
+```
+
+Verbs classified `WriteCmd` at compile time (`source create / delete /
+apply`, `event add / update / delete`, `requisition apply / import`)
+refuse with exit code 12 against a read-only context. Reads pass
+through. The `--read-only` flag and `$ONMSCTL_READ_ONLY` env var
+force the flag on regardless of context — precedence is **flag > env >
+context > default false**, and the flag is one-way (no `--no-read-only`
+escape hatch — context can never un-set it).
 
 ---
 

@@ -78,7 +78,8 @@ pub fn convert_requisition_xml(
     fs_xml: Option<&str>,
     source_path: Option<PathBuf>,
 ) -> Result<ConversionResult, String> {
-    let req = parse_requisition(req_xml).map_err(|e| format!("requisition XML parse error: {e}"))?;
+    let req =
+        parse_requisition(req_xml).map_err(|e| format!("requisition XML parse error: {e}"))?;
     let fs_dto = match fs_xml {
         Some(s) => Some(
             parse_foreign_source(s).map_err(|e| format!("foreign-source XML parse error: {e}"))?,
@@ -104,8 +105,8 @@ pub fn convert_requisition_xml(
         );
     }
 
-    let yaml = serde_norway::to_string(&local)
-        .map_err(|e| format!("YAML serialization error: {e}"))?;
+    let yaml =
+        serde_norway::to_string(&local).map_err(|e| format!("YAML serialization error: {e}"))?;
 
     Ok(ConversionResult {
         foreign_source: req.foreign_source.clone(),
@@ -415,8 +416,7 @@ impl OptSource for Finding {
 }
 
 fn list_xml_files(dir: &Path) -> Result<Vec<PathBuf>, String> {
-    let entries = std::fs::read_dir(dir)
-        .map_err(|e| format!("read_dir {}: {e}", dir.display()))?;
+    let entries = std::fs::read_dir(dir).map_err(|e| format!("read_dir {}: {e}", dir.display()))?;
     let mut out: Vec<PathBuf> = entries
         .filter_map(|e| e.ok())
         .map(|e| e.path())
@@ -573,12 +573,18 @@ mod tests {
         assert_eq!(results.len(), 2);
 
         // The acme-prod result has YAML + no orphan finding.
-        let acme = results.iter().find(|r| r.foreign_source == "acme-prod").unwrap();
+        let acme = results
+            .iter()
+            .find(|r| r.foreign_source == "acme-prod")
+            .unwrap();
         assert!(acme.yaml.is_some());
         assert!(!acme.findings.iter().any(|f| f.code == FindingCode::Pr002));
 
         // The ghost result has no YAML + PR002.
-        let ghost = results.iter().find(|r| r.foreign_source == "ghost").unwrap();
+        let ghost = results
+            .iter()
+            .find(|r| r.foreign_source == "ghost")
+            .unwrap();
         assert!(ghost.yaml.is_none());
         assert!(ghost.findings.iter().any(|f| f.code == FindingCode::Pr002));
     }
@@ -590,10 +596,12 @@ mod tests {
         let results = convert_directory(dir.path(), None).unwrap();
         assert_eq!(results.len(), 1);
         // PR004 fires for every requisition in this mode.
-        assert!(results[0]
-            .findings
-            .iter()
-            .any(|f| f.code == FindingCode::Pr004));
+        assert!(
+            results[0]
+                .findings
+                .iter()
+                .any(|f| f.code == FindingCode::Pr004)
+        );
     }
 
     #[test]

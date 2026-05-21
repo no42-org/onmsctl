@@ -337,9 +337,7 @@ async fn run_import(
     // work; with --wait, this is the baseline the poller watches
     // advance past.
     let pre_trigger_last_import_ms = if wait_flags.wait {
-        api.get_requisition(&fs)
-            .await?
-            .and_then(|r| r.last_import)
+        api.get_requisition(&fs).await?.and_then(|r| r.last_import)
     } else {
         None
     };
@@ -375,9 +373,8 @@ async fn run_import(
             write_stdout(yaml.as_bytes())?;
         }
         OutputFormat::Table => {
-            let line = format!(
-                "Requisition/{fs}: import triggered (rescanExisting={rescan_existing})\n"
-            );
+            let line =
+                format!("Requisition/{fs}: import triggered (rescanExisting={rescan_existing})\n");
             write_stdout(line.as_bytes())?;
         }
     }
@@ -417,8 +414,8 @@ struct StatusOutcome {
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
 #[allow(dead_code)] // Variants are reserved for task 6.3; the type is in
-                   // the public-ish API surface today so consumers can
-                   // discover the enum shape before 6.3 populates it.
+// the public-ish API surface today so consumers can
+// discover the enum shape before 6.3 populates it.
 enum ImportOutcome {
     Success,
     Failure,
@@ -510,9 +507,8 @@ async fn run_convert(
                 .into(),
         )
     })?;
-    let meta = std::fs::metadata(&xml_dir).map_err(|e| {
-        Error::Config(format!("failed to stat {}: {e}", xml_dir.display()))
-    })?;
+    let meta = std::fs::metadata(&xml_dir)
+        .map_err(|e| Error::Config(format!("failed to stat {}: {e}", xml_dir.display())))?;
     if !meta.is_dir() {
         return Err(Error::Config(format!(
             "{} is not a directory",
@@ -520,8 +516,8 @@ async fn run_convert(
         )));
     }
 
-    let results = convert_directory(&xml_dir, foreign_sources_dir.as_deref())
-        .map_err(Error::Config)?;
+    let results =
+        convert_directory(&xml_dir, foreign_sources_dir.as_deref()).map_err(Error::Config)?;
 
     // Emit YAML — stdout when --out is None (one document per
     // requisition, separated by `---` so the user can pipe through
