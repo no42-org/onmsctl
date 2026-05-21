@@ -71,6 +71,41 @@ pub enum RequisitionCmd {
         #[arg(long)]
         rescan_existing: Option<bool>,
     },
+    /// Trigger an import for an already-deployed requisition without
+    /// re-POSTing its content.
+    ///
+    /// Equivalent to `PUT /rest/requisitions/{fs}/import?rescanExisting=...`
+    /// on Horizon. Useful when the server's requisition is up to date
+    /// (e.g. just edited via the UI) but a fresh scan is required —
+    /// `apply` would re-POST the same content and only then trigger
+    /// import; `import` skips the POST.
+    ///
+    /// `--wait` and scan-report identifier surface land with task 6.3.
+    Import {
+        /// Foreign-source name to import.
+        #[arg(value_parser = nonempty_fs)]
+        fs: String,
+        /// Pass `rescanExisting=true` so the import re-evaluates
+        /// already-imported nodes (services, asset fields). Absence
+        /// matches Horizon's `provision.pl` convention (no rescan).
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        rescan_existing: bool,
+    },
+    /// Report the deployed state of a requisition.
+    ///
+    /// Issues `GET /rest/requisitions/{fs}` and surfaces the
+    /// server-managed fields: requisition `date-stamp` (last edit),
+    /// `last-import` timestamp, and node count.
+    ///
+    /// Per-import outcome (success/failure) lives in scan-reports and
+    /// is wired by task 6.3. Today this verb tells the operator "what
+    /// state does the server believe the requisition is in?" without
+    /// editorializing on the most recent import's result.
+    Status {
+        /// Foreign-source name to inspect.
+        #[arg(value_parser = nonempty_fs)]
+        fs: String,
+    },
 }
 
 impl Classify for RequisitionCmd {
@@ -81,6 +116,10 @@ impl Classify for RequisitionCmd {
             // accidentally drops --dry-run on a real-mutation flow
             // can't bypass the safety net.
             RequisitionCmd::Apply { .. } => CmdKind::Write,
+            // Import issues PUT /import — Write.
+            RequisitionCmd::Import { .. } => CmdKind::Write,
+            // Status is read-only.
+            RequisitionCmd::Status { .. } => CmdKind::Read,
         }
     }
 }
@@ -95,6 +134,11 @@ impl RequisitionCmd {
                 diff,
                 rescan_existing,
             } => run_apply(file, dry_run, diff, rescan_existing, ctx).await,
+            RequisitionCmd::Import {
+                fs,
+                rescan_existing,
+            } => run_import(fs, rescan_existing, ctx).await,
+            RequisitionCmd::Status { fs } => run_status(fs, ctx).await,
         }
     }
 }
@@ -194,6 +238,149 @@ async fn run_apply(
     Ok(())
 }
 
+async fn run_import(fs: String, rescan_existing: bool, ctx: &Context) -> Result<()> {
+    let client = OnmsClient::from_context(ctx)?;
+    let api = ProvisioningApi::new(&client);
+    api.trigger_import(&fs, rescan_existing).await?;
+
+    // Single-line confirmation. Scan-report id surfacing is task 6.3
+    // / 5.7 territory — for now the trigger is fire-and-forget at the
+    // HTTP layer too. Build the structured payload once; the JSON
+    // and YAML arms serialize it via different encoders so the wire
+    // shape stays in lockstep.
+    let payload = serde_json::json!({
+        "foreign_source": fs,
+        "rescan_existing": rescan_existing,
+        "triggered": true,
+    });
+    match ctx.output_format {
+        OutputFormat::Json => {
+            let json = serde_json::to_string_pretty(&payload)
+                .map_err(|e| Error::Config(format!("serializing import outcome to JSON: {e}")))?;
+            write_stdout_line(json.as_bytes())?;
+        }
+        OutputFormat::Yaml => {
+            let yaml = serde_norway::to_string(&payload)
+                .map_err(|e| Error::Config(format!("serializing import outcome to YAML: {e}")))?;
+            write_stdout(yaml.as_bytes())?;
+        }
+        OutputFormat::Table => {
+            let line = format!(
+                "Requisition/{fs}: import triggered (rescanExisting={rescan_existing})\n"
+            );
+            write_stdout(line.as_bytes())?;
+        }
+    }
+
+    Ok(())
+}
+
+/// `requisition status` outcome. Timestamps are surfaced as raw epoch
+/// milliseconds (matching the wire shape) plus the node count.
+/// Human-friendly formatting (`-d @<epoch>` / `jq | fromdateiso8601`)
+/// is left to the caller — adding a calendar dep for one verb's table
+/// view doesn't earn its weight.
+#[derive(Debug, Clone, serde::Serialize)]
+struct StatusOutcome {
+    foreign_source: String,
+    /// Server-side last-modified epoch ms. `None` when Horizon has the
+    /// requisition cached but hasn't stamped it (rare; preserves the
+    /// wire field's optionality).
+    date_stamp_ms: Option<i64>,
+    /// Last successful import epoch ms. `None` if the requisition has
+    /// never been imported.
+    last_import_ms: Option<i64>,
+    /// Number of nodes in the deployed requisition.
+    node_count: usize,
+    /// Per-import outcome (success / failure / partial-success). Today
+    /// always `None` — surfaces with task 6.3 once the scan-reports
+    /// endpoint is wired. Reserved as a struct field now so the JSON
+    /// / YAML wire shape stays stable across the 6.2 → 6.3 transition
+    /// (no consumer breakage when the field starts populating).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_import_outcome: Option<ImportOutcome>,
+}
+
+/// Result of the most recent import as reported by Horizon's scan-
+/// reports endpoint. Wired by task 6.3; today always synthesized as
+/// `None` on `StatusOutcome`.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+#[allow(dead_code)] // Variants are reserved for task 6.3; the type is in
+                   // the public-ish API surface today so consumers can
+                   // discover the enum shape before 6.3 populates it.
+enum ImportOutcome {
+    Success,
+    Failure,
+    PartialSuccess,
+}
+
+async fn run_status(fs: String, ctx: &Context) -> Result<()> {
+    let client = OnmsClient::from_context(ctx)?;
+    let api = ProvisioningApi::new(&client);
+
+    let req = api.get_requisition(&fs).await?.ok_or_else(|| {
+        Error::Config(format!(
+            "no requisition '{fs}' on the server (GET /rest/requisitions/{fs} returned 404)"
+        ))
+    })?;
+
+    let outcome = StatusOutcome {
+        foreign_source: req.foreign_source.clone(),
+        date_stamp_ms: req.date_stamp,
+        last_import_ms: req.last_import,
+        node_count: req.node.len(),
+        last_import_outcome: None, // Populated by task 6.3
+    };
+
+    match ctx.output_format {
+        OutputFormat::Json => {
+            let json = serde_json::to_string_pretty(&outcome)
+                .map_err(|e| Error::Config(format!("serializing status to JSON: {e}")))?;
+            write_stdout_line(json.as_bytes())?;
+        }
+        OutputFormat::Yaml => {
+            let yaml = serde_norway::to_string(&outcome)
+                .map_err(|e| Error::Config(format!("serializing status to YAML: {e}")))?;
+            write_stdout(yaml.as_bytes())?;
+        }
+        OutputFormat::Table => {
+            let line = format!(
+                "Requisition/{}: nodes={}, date-stamp-ms={}, last-import-ms={}\n",
+                outcome.foreign_source,
+                outcome.node_count,
+                opt_ms(outcome.date_stamp_ms),
+                opt_ms(outcome.last_import_ms),
+            );
+            write_stdout(line.as_bytes())?;
+        }
+    }
+
+    Ok(())
+}
+
+fn opt_ms(ms: Option<i64>) -> String {
+    match ms {
+        Some(v) => v.to_string(),
+        None => "<absent>".into(),
+    }
+}
+
+/// clap value parser for foreign-source CLI arguments. Rejects empty
+/// and whitespace-only inputs at parse time so the user sees a clean
+/// usage error instead of a confusing 404 against a URL like
+/// `/rest/requisitions//import`.
+fn nonempty_fs(s: &str) -> std::result::Result<String, String> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return Err("foreign-source name must not be empty or whitespace-only".into());
+    }
+    // Preserve the original (un-trimmed) form — operators who deliberately
+    // pass leading/trailing spaces deserve the round-trip — but we've at
+    // least caught the all-whitespace case.
+    Ok(s.to_string())
+}
+
 /// Write `bytes` to stdout, treating `BrokenPipe` as a clean exit
 /// (e.g. when the user pipes our output into `head -c N`). Other I/O
 /// errors propagate as `Error::Io` so the exit-code mapping picks them
@@ -219,8 +406,8 @@ fn write_stdout_line(bytes: &[u8]) -> Result<()> {
 /// a single error without telling us how far the write sequence got
 /// (FS write → requisition POST → import). We can't tell which step
 /// failed from the error alone, but we can warn the operator that
-/// partial state is possible and point at the introspection verb that
-/// will help them check (once `requisition status` lands in Group 6).
+/// partial state is possible and point at the introspection verb to
+/// check.
 ///
 /// Emitted as a separate stderr line BEFORE the error propagates so
 /// the underlying error's exit-code class (HTTP / auth / dns / tls)
@@ -229,9 +416,8 @@ fn eprint_recovery_hint(local: &RequisitionLocal) {
     let name = &local.metadata.name;
     eprintln!(
         "note: partial writes are possible for Requisition/{name} — the foreign-source \
-         POST, requisition POST, and import trigger run as separate calls. Re-fetch with \
-         `onmsctl requisition status {name}` (when available) or `curl /rest/requisitions/{name}` \
-         to verify server state before retrying."
+         POST, requisition POST, and import trigger run as separate calls. Run \
+         `onmsctl requisition status {name}` to verify server state before retrying."
     );
 }
 
