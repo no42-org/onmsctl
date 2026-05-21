@@ -21,6 +21,7 @@ pub mod diff;
 pub mod model;
 pub mod render;
 pub mod schema;
+pub mod wait;
 
 /// Capability crate version. Surfaced by the binary's `version` subcommand
 /// so `onmsctl version` can list each linked capability and its release.

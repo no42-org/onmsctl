@@ -13,12 +13,15 @@ use std::io::{ErrorKind, Write};
 use std::path::PathBuf;
 
 use clap::Subcommand;
-use onmsctl_core::{Classify, CmdKind, Context, Error, OnmsClient, OutputFormat, Result};
+use onmsctl_core::{
+    AsyncFlags, Classify, CmdKind, Context, Error, OnmsClient, OutputFormat, Result,
+};
 
 use crate::api::ProvisioningApi;
 use crate::apply::{ApplyOptions, RescanChoice, apply_requisition};
 use crate::model::RequisitionLocal;
 use crate::render::render_apply_diff;
+use crate::wait::wait_for_import_completion;
 
 /// Hard cap on the size of a single `-f <file>` input. Matches the
 /// `onmsctl source apply` convention (16 MiB) — requisition documents
@@ -70,6 +73,13 @@ pub enum RequisitionCmd {
         /// Default: auto-decided from the diff's scan-relevance.
         #[arg(long)]
         rescan_existing: Option<bool>,
+        /// Block until the triggered import completes (--wait), with
+        /// timeout (--timeout) and polling cadence (--poll-interval).
+        /// Without --wait, the verb returns as soon as the server
+        /// accepts the trigger. Exit code 10 on timeout, 11 on
+        /// observed async failure (mid-poll requisition deletion).
+        #[command(flatten)]
+        wait_flags: AsyncFlags,
     },
     /// Trigger an import for an already-deployed requisition without
     /// re-POSTing its content.
@@ -90,6 +100,12 @@ pub enum RequisitionCmd {
         /// matches Horizon's `provision.pl` convention (no rescan).
         #[arg(long, action = clap::ArgAction::SetTrue)]
         rescan_existing: bool,
+        /// Block until the triggered import completes (--wait), with
+        /// timeout (--timeout) and polling cadence (--poll-interval).
+        /// Exit code 10 on timeout, 11 on observed async failure
+        /// (mid-poll requisition deletion).
+        #[command(flatten)]
+        wait_flags: AsyncFlags,
     },
     /// Report the deployed state of a requisition.
     ///
@@ -133,11 +149,13 @@ impl RequisitionCmd {
                 dry_run,
                 diff,
                 rescan_existing,
-            } => run_apply(file, dry_run, diff, rescan_existing, ctx).await,
+                wait_flags,
+            } => run_apply(file, dry_run, diff, rescan_existing, wait_flags, ctx).await,
             RequisitionCmd::Import {
                 fs,
                 rescan_existing,
-            } => run_import(fs, rescan_existing, ctx).await,
+                wait_flags,
+            } => run_import(fs, rescan_existing, wait_flags, ctx).await,
             RequisitionCmd::Status { fs } => run_status(fs, ctx).await,
         }
     }
@@ -148,6 +166,7 @@ async fn run_apply(
     dry_run: bool,
     diff: bool,
     rescan_existing: Option<bool>,
+    wait_flags: AsyncFlags,
     ctx: &Context,
 ) -> Result<()> {
     // ---- 1. Validate + read input file ----
@@ -200,6 +219,28 @@ async fn run_apply(
         }
     };
 
+    // ---- 4. Optional --wait phase ----
+    // Only meaningful when apply actually triggered an import. Unchanged
+    // and DryRun paths skip the trigger and therefore skip the wait.
+    if wait_flags.wait
+        && matches!(
+            outcome.state,
+            crate::apply::ApplyState::Created | crate::apply::ApplyState::Updated
+        )
+    {
+        let new_ts = wait_for_import_completion(
+            &api,
+            &local.metadata.name,
+            outcome.pre_trigger_last_import_ms,
+            &wait_flags,
+        )
+        .await?;
+        eprintln!(
+            "Requisition/{}: import completed (last-import-ms={new_ts})",
+            local.metadata.name
+        );
+    }
+
     // ---- 4. Format + print ----
     if diff {
         // Stderr so the text diff doesn't pollute stdout when the
@@ -238,10 +279,34 @@ async fn run_apply(
     Ok(())
 }
 
-async fn run_import(fs: String, rescan_existing: bool, ctx: &Context) -> Result<()> {
+async fn run_import(
+    fs: String,
+    rescan_existing: bool,
+    wait_flags: AsyncFlags,
+    ctx: &Context,
+) -> Result<()> {
     let client = OnmsClient::from_context(ctx)?;
     let api = ProvisioningApi::new(&client);
+
+    // Capture the pre-trigger last-import snapshot ONLY when the
+    // operator asked to wait. Without --wait, the extra GET is dead
+    // work; with --wait, this is the baseline the poller watches
+    // advance past.
+    let pre_trigger_last_import_ms = if wait_flags.wait {
+        api.get_requisition(&fs)
+            .await?
+            .and_then(|r| r.last_import)
+    } else {
+        None
+    };
+
     api.trigger_import(&fs, rescan_existing).await?;
+
+    if wait_flags.wait {
+        let new_ts =
+            wait_for_import_completion(&api, &fs, pre_trigger_last_import_ms, &wait_flags).await?;
+        eprintln!("Requisition/{fs}: import completed (last-import-ms={new_ts})");
+    }
 
     // Single-line confirmation. Scan-report id surfacing is task 6.3
     // / 5.7 territory — for now the trigger is fire-and-forget at the
@@ -252,6 +317,7 @@ async fn run_import(fs: String, rescan_existing: bool, ctx: &Context) -> Result<
         "foreign_source": fs,
         "rescan_existing": rescan_existing,
         "triggered": true,
+        "waited": wait_flags.wait,
     });
     match ctx.output_format {
         OutputFormat::Json => {

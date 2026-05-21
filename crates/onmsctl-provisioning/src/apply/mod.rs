@@ -83,6 +83,12 @@ pub struct ApplyOutcome {
     /// `--diff` renderer (task 5.9) can show what was deleted or
     /// replaced.
     pub original_remote_fs: Option<ForeignSourceServer>,
+    /// The server's `last-import` timestamp on the requisition at the
+    /// moment the apply read deployed state, before the import was
+    /// triggered. `None` when the requisition didn't exist remotely
+    /// (Created path) or when the field was absent. Used by the
+    /// `--wait` poller (task 6.3) as the snapshot to watch advance.
+    pub pre_trigger_last_import_ms: Option<i64>,
 }
 
 /// Top-level apply outcome.
@@ -159,6 +165,10 @@ pub async fn apply_requisition(
         api.get_requisition(fs_name),
         api.get_foreign_source(fs_name),
     )?;
+    // Snapshot the pre-trigger last-import timestamp for the `--wait`
+    // poller (task 6.3). Captured before any writes so a CLI wait
+    // observes only the import we triggered, not any prior import.
+    let pre_trigger_last_import_ms = remote_req.as_ref().and_then(|r| r.last_import);
 
     // ---- 2. Resolve default-FS once if either side needs it ----
     // Per design D1, when EITHER local omits foreignSource OR remote
@@ -203,6 +213,7 @@ pub async fn apply_requisition(
             rescan_existing: false,
             foreign_source_action,
             original_remote_fs: remote_fs,
+            pre_trigger_last_import_ms,
         });
     }
 
@@ -220,6 +231,7 @@ pub async fn apply_requisition(
             rescan_existing,
             foreign_source_action,
             original_remote_fs: remote_fs,
+            pre_trigger_last_import_ms,
         });
     }
 
@@ -252,6 +264,7 @@ pub async fn apply_requisition(
         rescan_existing,
         foreign_source_action,
         original_remote_fs: remote_fs,
+        pre_trigger_last_import_ms,
     })
 }
 
