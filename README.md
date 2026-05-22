@@ -337,7 +337,7 @@ fixture demonstrates the pinned style with every modeled field.
 | `provision.pl requisition remove <fs>` | _imperative — coming in Group 7_ (currently: `curl -X DELETE /opennms/rest/requisitions/<fs>` AND `curl -X DELETE /opennms/rest/requisitions/deployed/<fs>` — pending and deployed state must both be purged; remove the local YAML) |
 | `provision.pl requisition import <fs>` | `onmsctl requisition import <fs>` (PUT-only, no re-POST; add `--wait` to block until completion) |
 | `provision.pl requisition list` | _imperative — coming in Group 7_ (currently: `curl /opennms/rest/requisitions` and inspect) |
-| `provision.pl node add <fs> <foreign-id> <node-label>` | Edit YAML; `onmsctl requisition apply -f <fs>.yaml` |
+| `provision.pl node add <fs> <foreign-id> <node-label>` | Recommended: edit YAML, `onmsctl requisition apply -f <fs>.yaml`. Imperative escape-hatch: `onmsctl requisition node add <fs> <foreign-id> --label <node-label>` (the imperative path stages the change in the pending requisition; run `requisition import <fs>` to take effect, or `apply -f` to also resync the rest of the YAML) |
 | `provision.pl interface add <fs> <foreign-id> <ip>` | Edit YAML; `onmsctl requisition apply -f <fs>.yaml` |
 | `provision.pl service add <fs> <foreign-id> <ip> <svc>` | Edit YAML; `onmsctl requisition apply -f <fs>.yaml` |
 | `provision.pl category add <fs> <foreign-id> <cat>` | Edit YAML; `onmsctl requisition apply -f <fs>.yaml` |
