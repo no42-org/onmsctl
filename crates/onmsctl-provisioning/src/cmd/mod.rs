@@ -18,7 +18,11 @@ use onmsctl_core::{
 };
 
 use crate::api::ProvisioningApi;
-use crate::apply::{ApplyOptions, RescanChoice, apply_requisition};
+use crate::apply::{
+    ApplyOptions, MultiApplyOptions, MultiApplyOutcome, MultiApplyState, RescanChoice,
+    apply_directory, apply_requisition,
+};
+use crate::apply::multi::CollisionCode;
 use crate::convert::{ConversionResult, FindingCode, Severity, convert_directory, explain};
 use crate::model::RequisitionLocal;
 use crate::render::render_apply_diff;
@@ -58,7 +62,11 @@ pub enum RequisitionCmd {
     /// `rescanExisting` is auto-decided from the diff's scan-relevance
     /// (per design D3); override with `--rescan-existing true|false`.
     Apply {
-        /// Path to the requisition YAML document.
+        /// Path to the requisition YAML document OR a directory of
+        /// requisition YAML documents. With a directory, every
+        /// `*.yaml` / `*.yml` file is applied in alphabetical order
+        /// (single-pass) — see the multi-file orchestration semantics
+        /// in tasks 5.10–5.12.
         #[arg(short = 'f', long)]
         file: PathBuf,
         /// Compute the diff + decisions but issue no mutating HTTP.
@@ -68,17 +76,27 @@ pub enum RequisitionCmd {
         /// to the outcome summary. Stderr (not stdout) so the diff text
         /// doesn't corrupt `-o json` / `-o yaml` output downstream of a
         /// pipe (matching the eventconf precedent in `source apply`).
+        /// Single-file only — directory mode emits per-file summaries
+        /// without the full diff body (use `--dry-run` per-file for
+        /// review).
         #[arg(long)]
         diff: bool,
         /// Force the `rescanExisting` query parameter on import.
         /// Default: auto-decided from the diff's scan-relevance.
         #[arg(long)]
         rescan_existing: Option<bool>,
+        /// Directory mode: halt phase 2 after the first per-file
+        /// error instead of continuing. kubectl-style fail-fast.
+        /// Has no effect in single-file mode.
+        #[arg(long)]
+        stop_on_error: bool,
         /// Block until the triggered import completes (--wait), with
         /// timeout (--timeout) and polling cadence (--poll-interval).
         /// Without --wait, the verb returns as soon as the server
         /// accepts the trigger. Exit code 10 on timeout, 11 on
         /// observed async failure (mid-poll requisition deletion).
+        /// In directory mode, `--wait` polls AFTER each per-file
+        /// apply (not after the whole batch).
         #[command(flatten)]
         wait_flags: AsyncFlags,
     },
@@ -187,8 +205,20 @@ impl RequisitionCmd {
                 dry_run,
                 diff,
                 rescan_existing,
+                stop_on_error,
                 wait_flags,
-            } => run_apply(file, dry_run, diff, rescan_existing, wait_flags, ctx).await,
+            } => {
+                run_apply(
+                    file,
+                    dry_run,
+                    diff,
+                    rescan_existing,
+                    stop_on_error,
+                    wait_flags,
+                    ctx,
+                )
+                .await
+            }
             RequisitionCmd::Import {
                 fs,
                 rescan_existing,
@@ -210,18 +240,35 @@ async fn run_apply(
     dry_run: bool,
     diff: bool,
     rescan_existing: Option<bool>,
+    stop_on_error: bool,
     wait_flags: AsyncFlags,
     ctx: &Context,
 ) -> Result<()> {
-    // ---- 1. Validate + read input file ----
+    // ---- 1. Validate + dispatch on file vs directory ----
     let meta = std::fs::metadata(&file)
         .map_err(|e| Error::Config(format!("failed to stat {}: {e}", file.display())))?;
+
+    if meta.is_dir() {
+        if diff {
+            eprintln!(
+                "note: --diff has no effect in directory mode (use --dry-run + -o yaml for a per-file preview)"
+            );
+        }
+        return run_apply_directory(file, dry_run, rescan_existing, stop_on_error, wait_flags, ctx)
+            .await;
+    }
+
     if !meta.is_file() {
         return Err(Error::Config(format!(
-            "{} is not a regular file (got {:?})",
+            "{} is not a regular file or directory (got {:?})",
             file.display(),
             meta.file_type()
         )));
+    }
+    if stop_on_error {
+        eprintln!(
+            "note: --stop-on-error has no effect in single-file mode (use it with --file <dir>)"
+        );
     }
     if meta.len() > MAX_INPUT_BYTES {
         return Err(Error::Config(format!(
@@ -649,6 +696,184 @@ fn write_stdout(bytes: &[u8]) -> Result<()> {
 fn write_stdout_line(bytes: &[u8]) -> Result<()> {
     write_stdout(bytes)?;
     write_stdout(b"\n")
+}
+
+/// Run `apply` over a directory of requisition YAML documents.
+/// Two-phase orchestration lives in `apply::multi::apply_directory`;
+/// this function handles input discovery, output rendering, and
+/// exit-code semantics.
+async fn run_apply_directory(
+    dir: PathBuf,
+    dry_run: bool,
+    rescan_existing: Option<bool>,
+    stop_on_error: bool,
+    wait_flags: AsyncFlags,
+    ctx: &Context,
+) -> Result<()> {
+    let files = list_yaml_files(&dir)?;
+    if files.is_empty() {
+        return Err(Error::Config(format!(
+            "{} contains no *.yaml / *.yml files",
+            dir.display()
+        )));
+    }
+
+    let client = OnmsClient::from_context(ctx)?;
+    let api = ProvisioningApi::new(&client);
+
+    let opts = MultiApplyOptions {
+        dry_run,
+        rescan_existing: match rescan_existing {
+            Some(b) => RescanChoice::Force(b),
+            None => RescanChoice::Auto,
+        },
+        stop_on_error,
+    };
+
+    let outcome = apply_directory(&files, &api, &opts).await?;
+    render_multi_outcome(&outcome, ctx)?;
+
+    // ---- --wait phase ----
+    // Honor --wait by polling per-file in the order results were
+    // produced (alphabetical path). Only Created/Updated successes
+    // are waited on; parse errors and apply errors skip naturally.
+    // Wait errors abort the whole sequence (the Horizon-side import
+    // is already done; what failed is the polling, which is a real
+    // problem the operator wants to surface).
+    if wait_flags.wait {
+        for r in &outcome.results {
+            if let (Some(fs), Ok(apply)) = (&r.foreign_source, &r.outcome) {
+                use crate::apply::ApplyState;
+                if matches!(apply.state, ApplyState::Created | ApplyState::Updated) {
+                    let new_ts = wait_for_import_completion(
+                        &api,
+                        fs,
+                        apply.pre_trigger_last_import_ms,
+                        &wait_flags,
+                    )
+                    .await?;
+                    eprintln!(
+                        "Requisition/{fs}: import completed (last-import-ms={new_ts})"
+                    );
+                }
+            }
+        }
+    }
+
+    // Exit-code policy: AbortedPhase1 / StoppedEarly / any per-file
+    // Err → non-zero. Use Error::PartialSuccess (exit 1) as the
+    // umbrella class; the structured outcome (rendered above) tells
+    // the operator which files failed.
+    let failed = count_failures(&outcome);
+    if outcome.state == MultiApplyState::AbortedPhase1 {
+        let hard_collisions: Vec<&str> = outcome
+            .collision_findings
+            .iter()
+            .filter(|f| matches!(f.code, CollisionCode::DuplicateMetadataName))
+            .map(|f| f.key.as_str())
+            .collect();
+        let first = hard_collisions.first().copied().unwrap_or("?");
+        return Err(Error::Config(format!(
+            "phase-1 abort: {} hard collision(s) detected (first: '{first}'); \
+             see stderr for the full list",
+            hard_collisions.len()
+        )));
+    }
+    if failed > 0 {
+        return Err(Error::PartialSuccess { failed });
+    }
+    Ok(())
+}
+
+/// Walk `dir` for `*.yaml` / `*.yml` regular files (case-sensitive,
+/// non-recursive — matches the eventconf precedent). Sorted output.
+fn list_yaml_files(dir: &std::path::Path) -> Result<Vec<PathBuf>> {
+    let entries = std::fs::read_dir(dir)
+        .map_err(|e| Error::Config(format!("read_dir {}: {e}", dir.display())))?;
+    let mut out: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            matches!(
+                p.extension().and_then(|s| s.to_str()),
+                Some("yaml") | Some("yml")
+            )
+        })
+        .collect();
+    out.sort();
+    Ok(out)
+}
+
+fn count_failures(outcome: &MultiApplyOutcome) -> usize {
+    outcome
+        .results
+        .iter()
+        .filter(|r| r.outcome.is_err())
+        .count()
+}
+
+/// Render the multi-apply outcome by the global output-format flag.
+fn render_multi_outcome(outcome: &MultiApplyOutcome, ctx: &Context) -> Result<()> {
+    // Collision findings always go to stderr (matches the convert
+    // verb pattern). Hard errors get tagged "error", warnings "warn".
+    for f in &outcome.collision_findings {
+        let sev = if matches!(f.code, CollisionCode::DuplicateMetadataName) {
+            "error"
+        } else {
+            "warn"
+        };
+        eprintln!("collision {sev}: {}", f.message);
+    }
+
+    match ctx.output_format {
+        OutputFormat::Json => {
+            let json = serde_json::to_string_pretty(outcome)
+                .map_err(|e| Error::Config(format!("serializing multi outcome to JSON: {e}")))?;
+            write_stdout_line(json.as_bytes())?;
+        }
+        OutputFormat::Yaml => {
+            let yaml = serde_norway::to_string(outcome)
+                .map_err(|e| Error::Config(format!("serializing multi outcome to YAML: {e}")))?;
+            write_stdout(yaml.as_bytes())?;
+        }
+        OutputFormat::Table => {
+            for r in &outcome.results {
+                let line = match &r.outcome {
+                    Ok(o) => format!(
+                        "  ✓ {} -> Requisition/{}: {} (rescanExisting={}, foreignSource={})\n",
+                        r.path.display(),
+                        r.foreign_source.as_deref().unwrap_or("?"),
+                        state_word(o.state),
+                        o.rescan_existing,
+                        fs_word(o.foreign_source_action),
+                    ),
+                    Err(e) => format!(
+                        "  ✗ {} -> {}: {e}\n",
+                        r.path.display(),
+                        r.foreign_source.as_deref().unwrap_or("(parse error)"),
+                    ),
+                };
+                write_stdout(line.as_bytes())?;
+            }
+            let summary = format!(
+                "Multi-apply {}: {} ok, {} failed, {} collision finding(s)\n",
+                multi_state_word(outcome.state),
+                outcome.results.iter().filter(|r| r.outcome.is_ok()).count(),
+                count_failures(outcome),
+                outcome.collision_findings.len(),
+            );
+            write_stdout(summary.as_bytes())?;
+        }
+    }
+    Ok(())
+}
+
+fn multi_state_word(s: MultiApplyState) -> &'static str {
+    match s {
+        MultiApplyState::AbortedPhase1 => "aborted (phase 1)",
+        MultiApplyState::Completed => "completed",
+        MultiApplyState::StoppedEarly => "stopped early",
+    }
 }
 
 /// Emit the partial-write recovery hint to stderr. The library returns

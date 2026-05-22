@@ -275,18 +275,32 @@ Info (exit 0), and parse failures exit 2.
 ### Step 2 — Apply YAML to Horizon
 
 ```sh
-# Preview without writing — diff goes to stderr, structured outcome
-# to stdout. Safe against any context.
+# Single file — preview without writing. --diff goes to stderr,
+# structured outcome to stdout. Safe against any context.
 onmsctl requisition apply -f acme-prod.yaml --dry-run --diff
 
-# Real apply. With --wait, blocks until import completes (or
-# --timeout fires for exit 10).
+# Single file — real apply. With --wait, blocks until import
+# completes (or --timeout fires for exit 10).
 onmsctl requisition apply -f acme-prod.yaml --wait --timeout 5m
+
+# Directory mode — every *.yaml / *.yml under the path is applied
+# in alphabetical order. Phase 1 cross-file collision check runs
+# first (duplicate metadata.name aborts before any writes;
+# duplicate foreignId warns and continues). --stop-on-error
+# (kubectl-style) halts phase 2 after the first per-file failure;
+# default is continue-on-error.
+onmsctl requisition apply -f ./requisitions/ --dry-run
+onmsctl requisition apply -f ./requisitions/ --stop-on-error --wait
 ```
 
 The apply path computes a three-level diff (canonical-bytes / per-node
 / per-leaf) and auto-decides `rescanExisting` from the scan-relevance
 of what changed. Override with `--rescan-existing true|false`.
+
+In directory mode, `--wait` polls per-file after each successful
+apply (not as one batch wait). `--diff` is single-file only — for
+directory previews use `--dry-run -o yaml` to see the structured
+outcomes per file.
 
 ### Step 3 — Iterate
 
