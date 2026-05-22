@@ -11,6 +11,7 @@
 
 pub mod interface;
 pub mod node;
+pub mod service;
 
 use std::io::{ErrorKind, Write};
 use std::path::PathBuf;
@@ -237,6 +238,17 @@ pub enum RequisitionCmd {
     /// functionality the declarative path doesn't.
     #[command(subcommand)]
     Interface(interface::InterfaceCmd),
+    /// Imperative sub-resource verbs for an interface's monitored
+    /// services.
+    ///
+    /// Services are scoped within an interface
+    /// (`<fs> <foreign-id> <ip> <service>`). Coverage is `list / add /
+    /// remove` only — services on the wire carry just a name and
+    /// category / meta-data arrays; `set` adds no value beyond
+    /// delete-and-re-add, and `get` adds no information `list`
+    /// doesn't.
+    #[command(subcommand)]
+    Service(service::ServiceCmd),
 }
 
 impl Classify for RequisitionCmd {
@@ -260,6 +272,7 @@ impl Classify for RequisitionCmd {
             // command (list/get = Read, add/set/remove = Write).
             RequisitionCmd::Node(cmd) => cmd.kind(),
             RequisitionCmd::Interface(cmd) => cmd.kind(),
+            RequisitionCmd::Service(cmd) => cmd.kind(),
         }
     }
 }
@@ -306,6 +319,7 @@ impl RequisitionCmd {
             } => run_convert(from, foreign_sources_dir, out, explain).await,
             RequisitionCmd::Node(cmd) => cmd.run(ctx).await,
             RequisitionCmd::Interface(cmd) => cmd.run(ctx).await,
+            RequisitionCmd::Service(cmd) => cmd.run(ctx).await,
         }
     }
 }
@@ -834,6 +848,19 @@ pub(super) fn nonempty_string(s: &str) -> std::result::Result<String, String> {
     }
 }
 
+/// clap value parser for IP-address positionals. Accepts IPv4 and IPv6
+/// literals (no brackets). Rejects typos and surrounding whitespace at
+/// parse time so the user sees a clean usage error instead of a 400/404
+/// against a malformed URL. Shared by `cmd/interface.rs` and
+/// `cmd/service.rs`.
+pub(super) fn ip_addr(s: &str) -> std::result::Result<String, String> {
+    use std::net::IpAddr;
+    use std::str::FromStr;
+    IpAddr::from_str(s)
+        .map(|ip| ip.to_string())
+        .map_err(|_| format!("invalid IP address {s:?} (expected IPv4 or IPv6 literal)"))
+}
+
 /// Write `bytes` to stdout, treating `BrokenPipe` as a clean exit
 /// (e.g. when the user pipes our output into `head -c N`). Other I/O
 /// errors propagate as `Error::Io` so the exit-code mapping picks them
@@ -1069,5 +1096,30 @@ fn fs_word(a: crate::apply::ForeignSourceAction) -> &'static str {
         Created => "created",
         Updated => "updated",
         Deleted => "deleted",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ip_addr_accepts_ipv4_and_ipv6() {
+        assert_eq!(ip_addr("10.0.0.1").unwrap(), "10.0.0.1");
+        assert_eq!(ip_addr("2001:db8::1").unwrap(), "2001:db8::1");
+    }
+
+    #[test]
+    fn ip_addr_rejects_garbage() {
+        assert!(ip_addr("not-an-ip").is_err());
+        assert!(ip_addr("10.0.0.1.2").is_err());
+        assert!(ip_addr(" 10.0.0.1 ").is_err());
+    }
+
+    #[test]
+    fn nonempty_string_rejects_whitespace_only() {
+        assert!(nonempty_string("").is_err());
+        assert!(nonempty_string("   ").is_err());
+        assert_eq!(nonempty_string("foo").unwrap(), "foo");
     }
 }

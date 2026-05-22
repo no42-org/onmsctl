@@ -27,7 +27,7 @@ use onmsctl_core::{Error, OnmsClient, Result};
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 
 use crate::model::server::{
-    ForeignSourceServer, InterfaceServer, NodeServer, RequisitionServer,
+    ForeignSourceServer, InterfaceServer, MonitoredServiceServer, NodeServer, RequisitionServer,
 };
 
 /// Characters that must be percent-encoded inside a path segment.
@@ -274,6 +274,48 @@ impl<'c> ProvisioningApi<'c> {
             encode(fs),
             encode(foreign_id),
             encode(ip),
+        );
+        self.client.delete::<serde_json::Value>(&path, None).await
+    }
+
+    // ---------------- Requisition services (sub-resource) ----------------
+
+    /// `POST /rest/requisitions/{fs}/nodes/{foreign-id}/interfaces/{ip}/services`.
+    /// Create-or-replace by the body's `service-name`. Same overwrite
+    /// hazard as the node / interface POST: an existing service-name
+    /// silently has its `category` and `meta-data` arrays replaced
+    /// with whatever this call sends.
+    pub async fn post_requisition_service(
+        &self,
+        fs: &str,
+        foreign_id: &str,
+        ip: &str,
+        svc: &MonitoredServiceServer,
+    ) -> Result<()> {
+        let path = format!(
+            "{BASE}/requisitions/{}/nodes/{}/interfaces/{}/services",
+            encode(fs),
+            encode(foreign_id),
+            encode(ip),
+        );
+        self.client.post::<_, serde_json::Value>(&path, svc).await?;
+        Ok(())
+    }
+
+    /// `DELETE /rest/requisitions/{fs}/nodes/{foreign-id}/interfaces/{ip}/services/{name}`.
+    pub async fn delete_requisition_service(
+        &self,
+        fs: &str,
+        foreign_id: &str,
+        ip: &str,
+        service_name: &str,
+    ) -> Result<()> {
+        let path = format!(
+            "{BASE}/requisitions/{}/nodes/{}/interfaces/{}/services/{}",
+            encode(fs),
+            encode(foreign_id),
+            encode(ip),
+            encode(service_name),
         );
         self.client.delete::<serde_json::Value>(&path, None).await
     }
@@ -746,6 +788,147 @@ mod tests {
             .await;
         let api = ProvisioningApi::new(&client);
         api.delete_requisition_interface("acme", "web01", "10.0.0.1")
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn post_requisition_service_targets_services_collection() {
+        use crate::model::server::MonitoredServiceServer;
+        let (mock, client) = mock_with_client().await;
+        Mock::given(method("POST"))
+            .and(path(
+                "/rest/requisitions/acme/nodes/web01/interfaces/10.0.0.1/services",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&mock)
+            .await;
+        let api = ProvisioningApi::new(&client);
+        api.post_requisition_service(
+            "acme",
+            "web01",
+            "10.0.0.1",
+            &MonitoredServiceServer {
+                service_name: "HTTP".into(),
+                category: vec![],
+                meta_data: vec![],
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    /// Locks the create-or-replace hazard: when an operator adds a
+    /// service whose name already exists, the body we POST carries
+    /// empty `category` and `meta-data` arrays — so the server's
+    /// existing values for those collections are wiped.
+    #[tokio::test]
+    async fn post_requisition_service_body_overwrites_collections() {
+        use crate::model::server::MonitoredServiceServer;
+        use wiremock::matchers::body_json;
+        let (mock, client) = mock_with_client().await;
+        Mock::given(method("POST"))
+            .and(path(
+                "/rest/requisitions/acme/nodes/web01/interfaces/10.0.0.1/services",
+            ))
+            .and(body_json(serde_json::json!({
+                "service-name": "HTTP",
+                "category": [],
+                "meta-data": [],
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&mock)
+            .await;
+        let api = ProvisioningApi::new(&client);
+        api.post_requisition_service(
+            "acme",
+            "web01",
+            "10.0.0.1",
+            &MonitoredServiceServer {
+                service_name: "HTTP".into(),
+                category: vec![],
+                meta_data: vec![],
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn delete_requisition_service_targets_specific_service() {
+        let (mock, client) = mock_with_client().await;
+        Mock::given(method("DELETE"))
+            .and(path(
+                "/rest/requisitions/acme/nodes/web01/interfaces/10.0.0.1/services/HTTP",
+            ))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&mock)
+            .await;
+        let api = ProvisioningApi::new(&client);
+        api.delete_requisition_service("acme", "web01", "10.0.0.1", "HTTP")
+            .await
+            .unwrap();
+    }
+
+    /// Locks the contract: a 404 from `DELETE /services/{name}` does
+    /// NOT surface as `Ok(())`. The operator-visible verb (`service
+    /// remove`) propagates the error and exits non-zero, so the
+    /// outcome line never falsely claims "removed" on a missing
+    /// service.
+    #[tokio::test]
+    async fn delete_requisition_service_returns_error_on_404() {
+        let (mock, client) = mock_with_client().await;
+        Mock::given(method("DELETE"))
+            .and(path(
+                "/rest/requisitions/acme/nodes/web01/interfaces/10.0.0.1/services/MISSING",
+            ))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&mock)
+            .await;
+        let api = ProvisioningApi::new(&client);
+        assert!(
+            api.delete_requisition_service("acme", "web01", "10.0.0.1", "MISSING")
+                .await
+                .is_err()
+        );
+    }
+
+    /// Pins the IPv6 round-trip on the service endpoints — the
+    /// IP segment is percent-encoded literally (no bracket-stripping,
+    /// no normalization). If `PATH_SEGMENT` ever shrinks (e.g.
+    /// dropping the colon-encoder), this test surfaces it.
+    #[tokio::test]
+    async fn requisition_service_endpoints_accept_ipv6() {
+        use crate::model::server::MonitoredServiceServer;
+        let (mock, client) = mock_with_client().await;
+        Mock::given(method("POST"))
+            .and(path(
+                "/rest/requisitions/acme/nodes/web01/interfaces/2001:db8::1/services",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&mock)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path(
+                "/rest/requisitions/acme/nodes/web01/interfaces/2001:db8::1/services/HTTP",
+            ))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&mock)
+            .await;
+        let api = ProvisioningApi::new(&client);
+        api.post_requisition_service(
+            "acme",
+            "web01",
+            "2001:db8::1",
+            &MonitoredServiceServer {
+                service_name: "HTTP".into(),
+                category: vec![],
+                meta_data: vec![],
+            },
+        )
+        .await
+        .unwrap();
+        api.delete_requisition_service("acme", "web01", "2001:db8::1", "HTTP")
             .await
             .unwrap();
     }

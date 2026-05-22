@@ -20,9 +20,6 @@
 //! YAML — so this is the one place imperative verbs offer functionality
 //! the declarative path doesn't.
 
-use std::net::IpAddr;
-use std::str::FromStr;
-
 use clap::Subcommand;
 use onmsctl_core::{Classify, CmdKind, Context, Error, OnmsClient, OutputFormat, Result};
 use serde::Serialize;
@@ -60,7 +57,7 @@ pub enum InterfaceCmd {
         #[arg(value_parser = super::nonempty_string)]
         foreign_id: String,
         /// IP address to fetch (IPv4 or IPv6 literal, no brackets).
-        #[arg(value_parser = ip_addr)]
+        #[arg(value_parser = super::ip_addr)]
         ip: String,
     },
     /// Add an interface to an existing node.
@@ -86,7 +83,7 @@ pub enum InterfaceCmd {
         #[arg(value_parser = super::nonempty_string)]
         foreign_id: String,
         /// IP address (IPv4 or IPv6 literal, no brackets).
-        #[arg(value_parser = ip_addr)]
+        #[arg(value_parser = super::ip_addr)]
         ip: String,
         /// SNMP primary marker — required. `P` (primary), `S`
         /// (secondary), or `N` (not eligible). Case-insensitive.
@@ -119,7 +116,7 @@ pub enum InterfaceCmd {
         #[arg(value_parser = super::nonempty_string)]
         foreign_id: String,
         /// IP address (IPv4 or IPv6 literal, no brackets).
-        #[arg(value_parser = ip_addr)]
+        #[arg(value_parser = super::ip_addr)]
         ip: String,
         /// New SNMP primary marker (`P`/`S`/`N`, case-insensitive).
         #[arg(long, value_parser = snmp_primary)]
@@ -144,7 +141,7 @@ pub enum InterfaceCmd {
         #[arg(value_parser = super::nonempty_string)]
         foreign_id: String,
         /// IP address to remove (IPv4 or IPv6 literal, no brackets).
-        #[arg(value_parser = ip_addr)]
+        #[arg(value_parser = super::ip_addr)]
         ip: String,
     },
 }
@@ -457,16 +454,6 @@ fn status_code(s: &str) -> std::result::Result<i32, String> {
     }
 }
 
-/// clap value parser for IP-address positionals. Accepts IPv4 and
-/// IPv6 literals (no brackets). Rejects typos and surrounding
-/// whitespace at parse time so the user sees a clean usage error
-/// instead of a 400/404 against a malformed URL.
-fn ip_addr(s: &str) -> std::result::Result<String, String> {
-    IpAddr::from_str(s)
-        .map(|ip| ip.to_string())
-        .map_err(|_| format!("invalid IP address {s:?} (expected IPv4 or IPv6 literal)"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -548,16 +535,4 @@ mod tests {
         assert!(status_code("abc").is_err());
     }
 
-    #[test]
-    fn ip_addr_accepts_ipv4_and_ipv6() {
-        assert_eq!(ip_addr("10.0.0.1").unwrap(), "10.0.0.1");
-        assert_eq!(ip_addr("2001:db8::1").unwrap(), "2001:db8::1");
-    }
-
-    #[test]
-    fn ip_addr_rejects_garbage() {
-        assert!(ip_addr("not-an-ip").is_err());
-        assert!(ip_addr("10.0.0.1.2").is_err());
-        assert!(ip_addr(" 10.0.0.1 ").is_err());
-    }
 }
