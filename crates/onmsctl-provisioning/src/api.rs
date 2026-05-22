@@ -26,7 +26,7 @@
 use onmsctl_core::{Error, OnmsClient, Result};
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 
-use crate::model::server::{ForeignSourceServer, RequisitionServer};
+use crate::model::server::{ForeignSourceServer, NodeServer, RequisitionServer};
 
 /// Characters that must be percent-encoded inside a path segment.
 /// Anything beyond RFC 3986's "unreserved" set (`A-Z`, `a-z`, `0-9`,
@@ -137,6 +137,66 @@ impl<'c> ProvisioningApi<'c> {
         );
         // Empty PUT body — the query parameter carries the only input.
         self.client.put_drain(&path, &serde_json::Value::Null).await
+    }
+
+    // ---------------- Requisition nodes (sub-resource) ----------------
+
+    /// `GET /rest/requisitions/{fs}/nodes/{foreign-id}`. Returns
+    /// `Ok(None)` if the server responds 404 — i.e. the node does
+    /// not exist within the named requisition.
+    pub async fn get_requisition_node(
+        &self,
+        fs: &str,
+        foreign_id: &str,
+    ) -> Result<Option<NodeServer>> {
+        let path = format!(
+            "{BASE}/requisitions/{}/nodes/{}",
+            encode(fs),
+            encode(foreign_id),
+        );
+        match self.client.get::<NodeServer>(&path, &[]).await {
+            Ok(n) => Ok(Some(n)),
+            Err(e) if is_not_found(&e) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// `POST /rest/requisitions/{fs}/nodes`. Adds a new node to the
+    /// named requisition. The server treats this as create-or-replace
+    /// keyed by the body's `foreign-id`.
+    pub async fn post_requisition_node(&self, fs: &str, node: &NodeServer) -> Result<()> {
+        let path = format!("{BASE}/requisitions/{}/nodes", encode(fs));
+        self.client.post::<_, serde_json::Value>(&path, node).await?;
+        Ok(())
+    }
+
+    /// `PUT /rest/requisitions/{fs}/nodes/{foreign-id}`. Replaces the
+    /// node's full content. The path's `foreign-id` is authoritative;
+    /// the body's `foreign-id` should agree.
+    pub async fn put_requisition_node(
+        &self,
+        fs: &str,
+        foreign_id: &str,
+        node: &NodeServer,
+    ) -> Result<()> {
+        let path = format!(
+            "{BASE}/requisitions/{}/nodes/{}",
+            encode(fs),
+            encode(foreign_id),
+        );
+        self.client.put_drain(&path, node).await
+    }
+
+    /// `DELETE /rest/requisitions/{fs}/nodes/{foreign-id}`. Removes
+    /// the node from the requisition's pending state. The change
+    /// takes effect on the next import.
+    pub async fn delete_requisition_node(&self, fs: &str, foreign_id: &str) -> Result<()> {
+        let path = format!(
+            "{BASE}/requisitions/{}/nodes/{}",
+            encode(fs),
+            encode(foreign_id),
+        );
+        self.client.delete::<serde_json::Value>(&path, None).await
     }
 
     // ---------------- Foreign sources ----------------
@@ -341,6 +401,120 @@ mod tests {
             .await;
         let api = ProvisioningApi::new(&client);
         api.trigger_import("acme-prod", false).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn get_requisition_node_returns_some_on_200() {
+        let (mock, client) = mock_with_client().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/requisitions/acme/nodes/web01"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "foreign-id": "web01",
+                "node-label": "web01.acme",
+                "interface": [],
+                "category": [],
+                "asset": [],
+                "meta-data": []
+            })))
+            .mount(&mock)
+            .await;
+        let api = ProvisioningApi::new(&client);
+        let got = api.get_requisition_node("acme", "web01").await.unwrap();
+        let node = got.expect("node exists");
+        assert_eq!(node.foreign_id, "web01");
+        assert_eq!(node.node_label, "web01.acme");
+    }
+
+    #[tokio::test]
+    async fn get_requisition_node_returns_none_on_404() {
+        let (mock, client) = mock_with_client().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/requisitions/acme/nodes/missing"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&mock)
+            .await;
+        let api = ProvisioningApi::new(&client);
+        assert!(
+            api.get_requisition_node("acme", "missing")
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn post_requisition_node_targets_nodes_collection() {
+        use crate::model::server::NodeServer;
+        let (mock, client) = mock_with_client().await;
+        Mock::given(method("POST"))
+            .and(path("/rest/requisitions/acme/nodes"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&mock)
+            .await;
+        let api = ProvisioningApi::new(&client);
+        api.post_requisition_node(
+            "acme",
+            &NodeServer {
+                foreign_id: "web01".into(),
+                node_label: "web01.acme".into(),
+                location: None,
+                building: None,
+                city: None,
+                parent_foreign_source: None,
+                parent_foreign_id: None,
+                parent_node_label: None,
+                interface: vec![],
+                category: vec![],
+                asset: vec![],
+                meta_data: vec![],
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn put_requisition_node_targets_specific_node() {
+        use crate::model::server::NodeServer;
+        let (mock, client) = mock_with_client().await;
+        Mock::given(method("PUT"))
+            .and(path("/rest/requisitions/acme/nodes/web01"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&mock)
+            .await;
+        let api = ProvisioningApi::new(&client);
+        api.put_requisition_node(
+            "acme",
+            "web01",
+            &NodeServer {
+                foreign_id: "web01".into(),
+                node_label: "web01.renamed".into(),
+                location: None,
+                building: None,
+                city: None,
+                parent_foreign_source: None,
+                parent_foreign_id: None,
+                parent_node_label: None,
+                interface: vec![],
+                category: vec![],
+                asset: vec![],
+                meta_data: vec![],
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn delete_requisition_node_targets_specific_node() {
+        let (mock, client) = mock_with_client().await;
+        Mock::given(method("DELETE"))
+            .and(path("/rest/requisitions/acme/nodes/web01"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&mock)
+            .await;
+        let api = ProvisioningApi::new(&client);
+        api.delete_requisition_node("acme", "web01").await.unwrap();
     }
 
     #[tokio::test]

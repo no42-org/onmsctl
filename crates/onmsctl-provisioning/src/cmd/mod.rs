@@ -9,6 +9,8 @@
 //! composes it into the top-level command tree at `onmsctl requisition`
 //! (with `req` as the visible alias).
 
+pub mod node;
+
 use std::io::{ErrorKind, Write};
 use std::path::PathBuf;
 
@@ -37,16 +39,19 @@ const MAX_INPUT_BYTES: u64 = 16 * 1024 * 1024;
 
 /// `onmsctl requisition ...` subcommands.
 ///
-/// Three grouped families (per design.md §D8) will eventually live here:
+/// Variants are ordered to reflect three grouped families (per
+/// design.md §D8). clap 4 doesn't surface `help_heading` on Subcommand
+/// enum variants, so the grouping appears in declaration order rather
+/// than as named sections in `--help`:
 ///
-/// - **GitOps**: `apply`, `convert`, `export`
-/// - **Lifecycle**: `list`, `get`, `delete`, `import`, `status`
-/// - **Sub-resources**: `node`, `interface`, `service`, `category`, `asset`
-///
-/// Today only `apply` is implemented; the others land in subsequent
-/// tasks of the `add-provisioning-capability` change.
+/// - **GitOps**: `apply`, `export` — declarative reconcile loop
+/// - **Lifecycle**: `import`, `status` — async operations + introspection
+/// - **Migration**: `convert` — one-shot XML→YAML migrator
+/// - **Sub-resources**: `node` (and future `interface`, `service`,
+///   `category`, `asset`) — imperative escape-hatch verbs
 #[derive(Subcommand, Debug, Clone)]
 pub enum RequisitionCmd {
+    // ---- GitOps verbs (declarative workflow) ----
     /// Apply a `kind: Requisition` YAML document declaratively.
     ///
     /// Reads the file, validates it locally, fetches the server's
@@ -213,6 +218,15 @@ pub enum RequisitionCmd {
         #[arg(long)]
         explain: Option<String>,
     },
+    /// Imperative sub-resource verbs for the requisition's nodes.
+    ///
+    /// Use these for ad-hoc operator work (quick add / remove / set
+    /// of a single node) instead of editing YAML and re-applying.
+    /// Each sub-verb's help text cross-references the declarative
+    /// alternative. The GitOps path (`apply -f`) remains the
+    /// recommended workflow — these are escape-hatches.
+    #[command(subcommand)]
+    Node(node::NodeCmd),
 }
 
 impl Classify for RequisitionCmd {
@@ -232,6 +246,9 @@ impl Classify for RequisitionCmd {
             // Convert is pure local file transform — no HTTP at all.
             // Classified Read so --read-only contexts still allow it.
             RequisitionCmd::Convert { .. } => CmdKind::Read,
+            // Delegate sub-resource classification to the nested
+            // command (list/get = Read, add/set/remove = Write).
+            RequisitionCmd::Node(cmd) => cmd.kind(),
         }
     }
 }
@@ -276,6 +293,7 @@ impl RequisitionCmd {
                 out,
                 explain,
             } => run_convert(from, foreign_sources_dir, out, explain).await,
+            RequisitionCmd::Node(cmd) => cmd.run(ctx).await,
         }
     }
 }
@@ -780,7 +798,7 @@ fn is_safe_filename(s: &str) -> bool {
 /// and whitespace-only inputs at parse time so the user sees a clean
 /// usage error instead of a confusing 404 against a URL like
 /// `/rest/requisitions//import`.
-fn nonempty_fs(s: &str) -> std::result::Result<String, String> {
+pub(super) fn nonempty_fs(s: &str) -> std::result::Result<String, String> {
     let trimmed = s.trim();
     if trimmed.is_empty() {
         return Err("foreign-source name must not be empty or whitespace-only".into());
@@ -795,7 +813,7 @@ fn nonempty_fs(s: &str) -> std::result::Result<String, String> {
 /// (e.g. when the user pipes our output into `head -c N`). Other I/O
 /// errors propagate as `Error::Io` so the exit-code mapping picks them
 /// up. Mirrors the binary's `write_stdout` helper.
-fn write_stdout(bytes: &[u8]) -> Result<()> {
+pub(super) fn write_stdout(bytes: &[u8]) -> Result<()> {
     let mut stdout = std::io::stdout().lock();
     match stdout.write_all(bytes) {
         Ok(()) => Ok(()),
@@ -807,7 +825,7 @@ fn write_stdout(bytes: &[u8]) -> Result<()> {
 /// Convenience wrapper that appends a trailing newline. JSON output
 /// uses this (the serializer doesn't add one); YAML / table paths
 /// already include the newline in their byte slices.
-fn write_stdout_line(bytes: &[u8]) -> Result<()> {
+pub(super) fn write_stdout_line(bytes: &[u8]) -> Result<()> {
     write_stdout(bytes)?;
     write_stdout(b"\n")
 }
