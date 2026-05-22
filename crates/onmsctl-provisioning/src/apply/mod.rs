@@ -22,6 +22,18 @@
 //! Test strategy: wiremock against a synthetic Horizon, exercising
 //! every (remote-state, local-state, decision) tuple in the design
 //! D1 + D7 + D9 matrix.
+//!
+//! Multi-file orchestration (`apply -f <dir>`) lives in [`multi`]:
+//! two-phase semantics (parse + collision-check, then apply
+//! alphabetically) with continue-on-error default and an opt-in
+//! `--stop-on-error` flip.
+
+pub mod multi;
+
+pub use multi::{
+    CollisionCode, CollisionFinding, MultiApplyFileResult, MultiApplyOptions, MultiApplyOutcome,
+    MultiApplyState, apply_directory,
+};
 
 use crate::api::ProvisioningApi;
 use crate::diff::{RequisitionDelta, aggregate_rescan_decision, diff_requisition};
