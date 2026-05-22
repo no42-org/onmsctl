@@ -79,6 +79,26 @@ impl<'c> ProvisioningApi<'c> {
 
     // ---------------- Requisitions ----------------
 
+    /// `GET /rest/requisitionNames`. Returns the names of every
+    /// deployed requisition on the server, sorted ascending. Used by
+    /// `requisition export` with no `<foreign-source>` argument to
+    /// enumerate everything for bulk export.
+    ///
+    /// The wire shape is `{"count": N, "foreign-source": [...]}` —
+    /// we surface just the name list.
+    pub async fn list_requisition_names(&self) -> Result<Vec<String>> {
+        #[derive(serde::Deserialize)]
+        struct Wire {
+            #[serde(default, rename = "foreign-source")]
+            foreign_source: Vec<String>,
+        }
+        let path = format!("{BASE}/requisitionNames");
+        let wire: Wire = self.client.get(&path, &[]).await?;
+        let mut names = wire.foreign_source;
+        names.sort();
+        Ok(names)
+    }
+
     /// `GET /rest/requisitions/{fs}`. Returns `Ok(None)` if the server
     /// responds 404 — i.e. the requisition does not yet exist on this
     /// Horizon (we're about to create it via POST).
@@ -321,6 +341,37 @@ mod tests {
             .await;
         let api = ProvisioningApi::new(&client);
         api.trigger_import("acme-prod", false).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn list_requisition_names_returns_sorted_list() {
+        let (mock, client) = mock_with_client().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/requisitionNames"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "count": 3,
+                "foreign-source": ["zebra", "alpha", "mango"]
+            })))
+            .mount(&mock)
+            .await;
+        let api = ProvisioningApi::new(&client);
+        let names = api.list_requisition_names().await.unwrap();
+        assert_eq!(names, vec!["alpha", "mango", "zebra"]);
+    }
+
+    #[tokio::test]
+    async fn list_requisition_names_handles_empty_response() {
+        let (mock, client) = mock_with_client().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/requisitionNames"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "count": 0
+            })))
+            .mount(&mock)
+            .await;
+        let api = ProvisioningApi::new(&client);
+        let names = api.list_requisition_names().await.unwrap();
+        assert!(names.is_empty());
     }
 
     #[tokio::test]

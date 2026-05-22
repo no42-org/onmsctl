@@ -23,6 +23,7 @@ use crate::apply::{
     apply_directory, apply_requisition,
 };
 use crate::apply::multi::CollisionCode;
+use crate::export::{export_all_requisitions, export_requisition};
 use crate::convert::{ConversionResult, FindingCode, Severity, convert_directory, explain};
 use crate::model::RequisitionLocal;
 use crate::render::render_apply_diff;
@@ -141,6 +142,43 @@ pub enum RequisitionCmd {
         #[arg(value_parser = nonempty_fs)]
         fs: String,
     },
+    /// Export server requisitions to declarative `kind: Requisition`
+    /// YAML — the reverse of `apply`.
+    ///
+    /// With a `<foreign-source>` argument, exports that single
+    /// requisition. With no argument, exports every requisition
+    /// listed by `GET /rest/requisitionNames` (sorted alphabetically).
+    ///
+    /// Default output:
+    ///   - YAML stream to stdout (one doc per requisition, separated
+    ///     by `---`).
+    ///   - With `--out <dir>`, per-requisition `<fs>.yaml` files
+    ///     into the directory.
+    ///
+    /// `--include-defaults` opts in to inlining Horizon's default
+    /// foreign-source when the requisition has no custom FS. Without
+    /// the flag, the YAML stays in portable style (omits
+    /// `spec.foreignSource`); with the flag, the YAML inlines the
+    /// default-FS with a snapshot-timestamp comment so the operator
+    /// sees what the requisition would inherit at apply time.
+    ///
+    /// Classified `Read` — only `GET` endpoints are issued.
+    Export {
+        /// Foreign-source name to export. Omit to export every
+        /// requisition on the server.
+        #[arg(value_parser = nonempty_fs)]
+        fs: Option<String>,
+        /// Write per-requisition YAML files to this directory
+        /// instead of stdout. Filenames are `<fs>.yaml` (rejected if
+        /// the foreign-source name contains path-unsafe characters).
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Inline Horizon's default foreign-source into the exported
+        /// YAML when the requisition has no custom FS. Adds a
+        /// snapshot-timestamp comment naming the inlining.
+        #[arg(long, action = clap::ArgAction::SetTrue)]
+        include_defaults: bool,
+    },
     /// Convert provision.pl-shape XML to declarative `kind: Requisition`
     /// YAML for git-managed apply workflows.
     ///
@@ -189,6 +227,8 @@ impl Classify for RequisitionCmd {
             RequisitionCmd::Import { .. } => CmdKind::Write,
             // Status is read-only.
             RequisitionCmd::Status { .. } => CmdKind::Read,
+            // Export only issues GETs.
+            RequisitionCmd::Export { .. } => CmdKind::Read,
             // Convert is pure local file transform — no HTTP at all.
             // Classified Read so --read-only contexts still allow it.
             RequisitionCmd::Convert { .. } => CmdKind::Read,
@@ -225,6 +265,11 @@ impl RequisitionCmd {
                 wait_flags,
             } => run_import(fs, rescan_existing, wait_flags, ctx).await,
             RequisitionCmd::Status { fs } => run_status(fs, ctx).await,
+            RequisitionCmd::Export {
+                fs,
+                out,
+                include_defaults,
+            } => run_export(fs, out, include_defaults, ctx).await,
             RequisitionCmd::Convert {
                 from,
                 foreign_sources_dir,
@@ -518,6 +563,75 @@ fn opt_ms(ms: Option<i64>) -> String {
         Some(v) => v.to_string(),
         None => "<absent>".into(),
     }
+}
+
+async fn run_export(
+    fs: Option<String>,
+    out: Option<PathBuf>,
+    include_defaults: bool,
+    ctx: &Context,
+) -> Result<()> {
+    let client = OnmsClient::from_context(ctx)?;
+    let api = ProvisioningApi::new(&client);
+
+    let results = match fs {
+        Some(name) => vec![export_requisition(&api, &name, include_defaults).await?],
+        None => export_all_requisitions(&api, include_defaults).await?,
+    };
+
+    if let Some(out_dir) = &out {
+        std::fs::create_dir_all(out_dir)
+            .map_err(|e| Error::Config(format!("creating {}: {e}", out_dir.display())))?;
+        for r in &results {
+            // Same safe-filename whitelist as convert's --out (P1
+            // from the eleventh-pass review) — `r.foreign_source`
+            // flows from the server's response body and could carry
+            // path-unsafe characters if Horizon ever allowed them.
+            if !is_safe_filename(&r.foreign_source) {
+                return Err(Error::Config(format!(
+                    "refusing to write to '{out_dir}/{name}.yaml': foreign-source name \
+                     contains path-unsafe characters (allowed: alphanumeric, '-', '_', '.')",
+                    out_dir = out_dir.display(),
+                    name = r.foreign_source,
+                )));
+            }
+            let path = out_dir.join(format!("{}.yaml", r.foreign_source));
+            std::fs::write(&path, &r.yaml)
+                .map_err(|e| Error::Config(format!("write {}: {e}", path.display())))?;
+        }
+        eprintln!(
+            "Exported {} requisition(s) to {}",
+            results.len(),
+            out_dir.display()
+        );
+        return Ok(());
+    }
+
+    // No --out: stream to stdout per global -o flag.
+    match ctx.output_format {
+        OutputFormat::Json => {
+            let json = serde_json::to_string_pretty(&results)
+                .map_err(|e| Error::Config(format!("serializing export to JSON: {e}")))?;
+            write_stdout_line(json.as_bytes())?;
+        }
+        OutputFormat::Yaml | OutputFormat::Table => {
+            // Both yaml and table modes stream raw YAML documents
+            // separated by `---`. The yaml output is itself yaml so
+            // table mode just shares it; a true tabular summary of
+            // an export doesn't carry the actual payload, which is
+            // the whole point of the verb.
+            let mut first = true;
+            for r in &results {
+                if !first {
+                    write_stdout(b"---\n")?;
+                }
+                first = false;
+                write_stdout(r.yaml.as_bytes())?;
+            }
+        }
+    }
+
+    Ok(())
 }
 
 async fn run_convert(
