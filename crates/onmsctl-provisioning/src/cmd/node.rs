@@ -53,7 +53,7 @@ pub enum NodeCmd {
         #[arg(value_parser = super::nonempty_fs)]
         fs: String,
         /// Foreign-id of the node to fetch.
-        #[arg(value_parser = nonempty_string)]
+        #[arg(value_parser = super::nonempty_string)]
         foreign_id: String,
     },
     /// Add a node to an existing requisition.
@@ -76,10 +76,10 @@ pub enum NodeCmd {
         #[arg(value_parser = super::nonempty_fs)]
         fs: String,
         /// New node's foreign-id.
-        #[arg(value_parser = nonempty_string)]
+        #[arg(value_parser = super::nonempty_string)]
         foreign_id: String,
         /// Node label (display name in Horizon).
-        #[arg(long, value_parser = nonempty_string)]
+        #[arg(long, value_parser = super::nonempty_string)]
         label: String,
         /// Optional Minion / geographic location.
         #[arg(long)]
@@ -97,7 +97,7 @@ pub enum NodeCmd {
         #[arg(value_parser = super::nonempty_fs)]
         fs: String,
         /// Foreign-id of the node to mutate.
-        #[arg(value_parser = nonempty_string)]
+        #[arg(value_parser = super::nonempty_string)]
         foreign_id: String,
         /// New node label.
         #[arg(long)]
@@ -116,7 +116,7 @@ pub enum NodeCmd {
         #[arg(value_parser = super::nonempty_fs)]
         fs: String,
         /// Foreign-id of the node to remove.
-        #[arg(value_parser = nonempty_string)]
+        #[arg(value_parser = super::nonempty_string)]
         foreign_id: String,
     },
 }
@@ -337,14 +337,3 @@ fn emit_action_outcome(fs: &str, foreign_id: &str, action: &str, ctx: &Context) 
     Ok(())
 }
 
-/// clap value parser for "non-empty after trim" arguments.
-/// Mirrors `super::nonempty_fs` but doesn't require the
-/// foreign-source-specific error wording. clap's `value_parser`
-/// requires a `fn` (not `impl Fn`) for derive-mode usage.
-fn nonempty_string(s: &str) -> std::result::Result<String, String> {
-    if s.trim().is_empty() {
-        Err("value must not be empty or whitespace-only".into())
-    } else {
-        Ok(s.to_string())
-    }
-}

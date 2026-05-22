@@ -26,7 +26,9 @@
 use onmsctl_core::{Error, OnmsClient, Result};
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 
-use crate::model::server::{ForeignSourceServer, NodeServer, RequisitionServer};
+use crate::model::server::{
+    ForeignSourceServer, InterfaceServer, NodeServer, RequisitionServer,
+};
 
 /// Characters that must be percent-encoded inside a path segment.
 /// Anything beyond RFC 3986's "unreserved" set (`A-Z`, `a-z`, `0-9`,
@@ -195,6 +197,83 @@ impl<'c> ProvisioningApi<'c> {
             "{BASE}/requisitions/{}/nodes/{}",
             encode(fs),
             encode(foreign_id),
+        );
+        self.client.delete::<serde_json::Value>(&path, None).await
+    }
+
+    // ---------------- Requisition interfaces (sub-resource) ----------------
+
+    /// `GET /rest/requisitions/{fs}/nodes/{foreign-id}/interfaces/{ip}`.
+    /// Returns `Ok(None)` if the server responds 404 — i.e. the
+    /// interface doesn't exist on the named node.
+    pub async fn get_requisition_interface(
+        &self,
+        fs: &str,
+        foreign_id: &str,
+        ip: &str,
+    ) -> Result<Option<InterfaceServer>> {
+        let path = format!(
+            "{BASE}/requisitions/{}/nodes/{}/interfaces/{}",
+            encode(fs),
+            encode(foreign_id),
+            encode(ip),
+        );
+        match self.client.get::<InterfaceServer>(&path, &[]).await {
+            Ok(i) => Ok(Some(i)),
+            Err(e) if is_not_found(&e) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// `POST /rest/requisitions/{fs}/nodes/{foreign-id}/interfaces`.
+    /// Same create-or-replace semantic as the node POST — keyed by
+    /// the body's `ip-addr`.
+    pub async fn post_requisition_interface(
+        &self,
+        fs: &str,
+        foreign_id: &str,
+        iface: &InterfaceServer,
+    ) -> Result<()> {
+        let path = format!(
+            "{BASE}/requisitions/{}/nodes/{}/interfaces",
+            encode(fs),
+            encode(foreign_id),
+        );
+        self.client.post::<_, serde_json::Value>(&path, iface).await?;
+        Ok(())
+    }
+
+    /// `PUT /rest/requisitions/{fs}/nodes/{foreign-id}/interfaces/{ip}`.
+    /// Replaces the interface's full body. Path's `ip` is
+    /// authoritative.
+    pub async fn put_requisition_interface(
+        &self,
+        fs: &str,
+        foreign_id: &str,
+        ip: &str,
+        iface: &InterfaceServer,
+    ) -> Result<()> {
+        let path = format!(
+            "{BASE}/requisitions/{}/nodes/{}/interfaces/{}",
+            encode(fs),
+            encode(foreign_id),
+            encode(ip),
+        );
+        self.client.put_drain(&path, iface).await
+    }
+
+    /// `DELETE /rest/requisitions/{fs}/nodes/{foreign-id}/interfaces/{ip}`.
+    pub async fn delete_requisition_interface(
+        &self,
+        fs: &str,
+        foreign_id: &str,
+        ip: &str,
+    ) -> Result<()> {
+        let path = format!(
+            "{BASE}/requisitions/{}/nodes/{}/interfaces/{}",
+            encode(fs),
+            encode(foreign_id),
+            encode(ip),
         );
         self.client.delete::<serde_json::Value>(&path, None).await
     }
@@ -515,6 +594,160 @@ mod tests {
             .await;
         let api = ProvisioningApi::new(&client);
         api.delete_requisition_node("acme", "web01").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn get_requisition_interface_returns_some_on_200() {
+        let (mock, client) = mock_with_client().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/requisitions/acme/nodes/web01/interfaces/10.0.0.1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ip-addr": "10.0.0.1",
+                "snmp-primary": "P",
+                "status": 1,
+                "monitored-service": [],
+                "meta-data": []
+            })))
+            .mount(&mock)
+            .await;
+        let api = ProvisioningApi::new(&client);
+        let got = api
+            .get_requisition_interface("acme", "web01", "10.0.0.1")
+            .await
+            .unwrap();
+        let iface = got.expect("interface exists");
+        assert_eq!(iface.ip_addr, "10.0.0.1");
+        assert_eq!(iface.snmp_primary, "P");
+    }
+
+    #[tokio::test]
+    async fn get_requisition_interface_returns_none_on_404() {
+        let (mock, client) = mock_with_client().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/requisitions/acme/nodes/web01/interfaces/10.0.0.99"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&mock)
+            .await;
+        let api = ProvisioningApi::new(&client);
+        assert!(
+            api.get_requisition_interface("acme", "web01", "10.0.0.99")
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn post_requisition_interface_targets_interfaces_collection() {
+        use crate::model::server::InterfaceServer;
+        let (mock, client) = mock_with_client().await;
+        Mock::given(method("POST"))
+            .and(path("/rest/requisitions/acme/nodes/web01/interfaces"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&mock)
+            .await;
+        let api = ProvisioningApi::new(&client);
+        api.post_requisition_interface(
+            "acme",
+            "web01",
+            &InterfaceServer {
+                ip_addr: "10.0.0.1".into(),
+                snmp_primary: "P".into(),
+                status: None,
+                managed: None,
+                descr: None,
+                monitored_service: vec![],
+                category: vec![],
+                meta_data: vec![],
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    /// Locks the documented `add` create-or-replace hazard: when an
+    /// operator adds an interface whose IP already exists, the body we
+    /// POST carries only the new payload — empty `monitored-service`,
+    /// `category`, and `meta-data` arrays — so the server's existing
+    /// values for those collections are wiped. Asserting this contract
+    /// pins the warning text in `InterfaceCmd::Add`.
+    #[tokio::test]
+    async fn post_requisition_interface_body_overwrites_collections() {
+        use crate::model::server::InterfaceServer;
+        use wiremock::matchers::body_json;
+        let (mock, client) = mock_with_client().await;
+        Mock::given(method("POST"))
+            .and(path("/rest/requisitions/acme/nodes/web01/interfaces"))
+            .and(body_json(serde_json::json!({
+                "ip-addr": "10.0.0.1",
+                "snmp-primary": "P",
+                "monitored-service": [],
+                "category": [],
+                "meta-data": [],
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&mock)
+            .await;
+        let api = ProvisioningApi::new(&client);
+        api.post_requisition_interface(
+            "acme",
+            "web01",
+            &InterfaceServer {
+                ip_addr: "10.0.0.1".into(),
+                snmp_primary: "P".into(),
+                status: None,
+                managed: None,
+                descr: None,
+                monitored_service: vec![],
+                category: vec![],
+                meta_data: vec![],
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn put_requisition_interface_targets_specific_ip() {
+        use crate::model::server::InterfaceServer;
+        let (mock, client) = mock_with_client().await;
+        Mock::given(method("PUT"))
+            .and(path("/rest/requisitions/acme/nodes/web01/interfaces/10.0.0.1"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&mock)
+            .await;
+        let api = ProvisioningApi::new(&client);
+        api.put_requisition_interface(
+            "acme",
+            "web01",
+            "10.0.0.1",
+            &InterfaceServer {
+                ip_addr: "10.0.0.1".into(),
+                snmp_primary: "S".into(),
+                status: None,
+                managed: None,
+                descr: Some("renamed".into()),
+                monitored_service: vec![],
+                category: vec![],
+                meta_data: vec![],
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn delete_requisition_interface_targets_specific_ip() {
+        let (mock, client) = mock_with_client().await;
+        Mock::given(method("DELETE"))
+            .and(path("/rest/requisitions/acme/nodes/web01/interfaces/10.0.0.1"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&mock)
+            .await;
+        let api = ProvisioningApi::new(&client);
+        api.delete_requisition_interface("acme", "web01", "10.0.0.1")
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
