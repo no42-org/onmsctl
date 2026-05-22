@@ -18,6 +18,7 @@ pub mod apply;
 pub mod cmd;
 pub mod convert;
 pub mod diff;
+pub mod export;
 pub mod model;
 pub mod render;
 pub mod schema;

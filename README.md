@@ -366,9 +366,29 @@ Recommended once-per-site recipe (per design D11):
 4. **Schedule** the apply via CI / cron. `--dry-run --diff` is the
    review gate; the actual apply runs only after review.
 
-`requisition export` (planned, deferred to a follow-up) will close the
-round-trip by reading server state back into YAML for ongoing sync.
-Until then, the convert step is one-shot.
+For ongoing sync after the initial migration — operators that edit
+requisitions in Horizon's UI and want to pull the changes back into
+git — use `requisition export`:
+
+```sh
+# Export every requisition on the server, per-file into a directory.
+onmsctl requisition export --out repo/yaml/
+
+# Export a single requisition to stdout.
+onmsctl requisition export acme-prod
+
+# Inline Horizon's default-FS into the YAML when the requisition has
+# no custom one. Adds a snapshot-timestamp comment so the operator
+# sees what defaults were in effect at export time.
+onmsctl requisition export --include-defaults --out repo/yaml/
+```
+
+Without `--include-defaults`, the exported YAML omits
+`spec.foreignSource` when the server has no custom FS — i.e. produces
+the portable style described above. With `--include-defaults`, the
+default-FS is inlined alongside a snapshot comment; the inlined block
+is a point-in-time copy that does NOT stay in sync with Horizon's
+default after export.
 
 ### Editor integration
 
