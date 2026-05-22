@@ -9,6 +9,7 @@
 //! composes it into the top-level command tree at `onmsctl requisition`
 //! (with `req` as the visible alias).
 
+pub mod interface;
 pub mod node;
 
 use std::io::{ErrorKind, Write};
@@ -227,6 +228,15 @@ pub enum RequisitionCmd {
     /// recommended workflow — these are escape-hatches.
     #[command(subcommand)]
     Node(node::NodeCmd),
+    /// Imperative sub-resource verbs for a node's interfaces.
+    ///
+    /// Interfaces are scoped within a node (`<fs> <foreign-id> <ip>`).
+    /// `set` here can mutate three wire-only fields (`--snmp-primary`,
+    /// `--status`, `--descr`) — the latter two are NOT modeled in the
+    /// local YAML, so this is the one place imperative verbs offer
+    /// functionality the declarative path doesn't.
+    #[command(subcommand)]
+    Interface(interface::InterfaceCmd),
 }
 
 impl Classify for RequisitionCmd {
@@ -249,6 +259,7 @@ impl Classify for RequisitionCmd {
             // Delegate sub-resource classification to the nested
             // command (list/get = Read, add/set/remove = Write).
             RequisitionCmd::Node(cmd) => cmd.kind(),
+            RequisitionCmd::Interface(cmd) => cmd.kind(),
         }
     }
 }
@@ -294,6 +305,7 @@ impl RequisitionCmd {
                 explain,
             } => run_convert(from, foreign_sources_dir, out, explain).await,
             RequisitionCmd::Node(cmd) => cmd.run(ctx).await,
+            RequisitionCmd::Interface(cmd) => cmd.run(ctx).await,
         }
     }
 }
@@ -807,6 +819,19 @@ pub(super) fn nonempty_fs(s: &str) -> std::result::Result<String, String> {
     // pass leading/trailing spaces deserve the round-trip — but we've at
     // least caught the all-whitespace case.
     Ok(s.to_string())
+}
+
+/// clap value parser for generic "non-empty after trim" arguments
+/// (used by foreign-id and other string positionals in the sub-resource
+/// verb files). Mirrors `nonempty_fs` but without the FS-specific error
+/// wording. Lives here so `cmd/node.rs` and `cmd/interface.rs` share a
+/// single definition.
+pub(super) fn nonempty_string(s: &str) -> std::result::Result<String, String> {
+    if s.trim().is_empty() {
+        Err("value must not be empty or whitespace-only".into())
+    } else {
+        Ok(s.to_string())
+    }
 }
 
 /// Write `bytes` to stdout, treating `BrokenPipe` as a clean exit
