@@ -359,6 +359,46 @@ impl<'c> ProvisioningApi<'c> {
         self.client.delete::<serde_json::Value>(&path, None).await
     }
 
+    // ---------------- Imported-node asset records (sub-resource) ----------------
+    //
+    // Distinct REST root from the rest of the provisioning surface:
+    // these endpoints operate on POST-IMPORT nodes keyed by database
+    // node ID, not on requisition entries keyed by foreign-id. The
+    // path lives under `/rest/nodes/...`, not `/rest/requisitions/...`.
+
+    /// `GET /rest/nodes/{db-id}/assetRecord`. Returns the imported
+    /// node's asset record as an untyped JSON object. The record's
+    /// schema is fixed server-side (50+ named fields like `city`,
+    /// `serialNumber`, `building`, etc.); the client surfaces it
+    /// untyped so a Horizon schema bump doesn't require a CLI
+    /// release.
+    pub async fn get_node_asset_record(&self, db_id: i64) -> Result<serde_json::Value> {
+        let path = format!("{BASE}/nodes/{db_id}/assetRecord");
+        self.client.get(&path, &[]).await
+    }
+
+    /// `PUT /rest/nodes/{db-id}/assetRecord` with the full asset
+    /// record as the body. The CLI's `asset set` flow is
+    /// GET-mutate-PUT (mirroring `node set` and `interface set`) so
+    /// every other field on the record stays at its pre-PUT value
+    /// regardless of whether Horizon's PUT semantic is full-replace
+    /// or partial-update — both behave identically when the body
+    /// equals the record-with-one-field-changed.
+    ///
+    /// The wire content-type is `application/json` (set by
+    /// `OnmsClient::put_drain`). Horizon 36+ accepts JSON on this
+    /// endpoint; older versions historically required
+    /// `application/x-www-form-urlencoded`. Live-Horizon integration
+    /// testing of this endpoint is tracked in §9.
+    pub async fn put_node_asset_record(
+        &self,
+        db_id: i64,
+        record: &serde_json::Value,
+    ) -> Result<()> {
+        let path = format!("{BASE}/nodes/{db_id}/assetRecord");
+        self.client.put_drain(&path, record).await
+    }
+
     // ---------------- Foreign sources ----------------
 
     /// `GET /rest/foreignSources/{fs}`. Returns `Ok(None)` if the
@@ -1095,6 +1135,69 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn get_node_asset_record_returns_json_object() {
+        let (mock, client) = mock_with_client().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/nodes/42/assetRecord"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": 7,
+                "city": "NYC",
+                "serialNumber": "SN-12345",
+                "rack": "R3"
+            })))
+            .mount(&mock)
+            .await;
+        let api = ProvisioningApi::new(&client);
+        let got = api.get_node_asset_record(42).await.unwrap();
+        assert_eq!(got["city"], "NYC");
+        assert_eq!(got["serialNumber"], "SN-12345");
+    }
+
+    /// Locks the wire-shape contract: PUT sends the full asset
+    /// record body. The cmd-layer's GET-mutate-PUT flow ensures
+    /// untouched fields stay put regardless of whether Horizon's PUT
+    /// semantic is full-replace or partial-update.
+    #[tokio::test]
+    async fn put_node_asset_record_sends_full_body() {
+        use wiremock::matchers::body_json;
+        let (mock, client) = mock_with_client().await;
+        Mock::given(method("PUT"))
+            .and(path("/rest/nodes/42/assetRecord"))
+            .and(body_json(serde_json::json!({
+                "id": 7,
+                "city": "Brooklyn",
+                "serialNumber": "SN-12345",
+                "rack": "R3"
+            })))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&mock)
+            .await;
+        let api = ProvisioningApi::new(&client);
+        let record = serde_json::json!({
+            "id": 7,
+            "city": "Brooklyn",
+            "serialNumber": "SN-12345",
+            "rack": "R3"
+        });
+        api.put_node_asset_record(42, &record).await.unwrap();
+    }
+
+    /// 404 on the asset GET (node not yet imported, or DB ID invalid)
+    /// must propagate as an error so the cmd-layer never prints
+    /// stale state as if it had loaded the record.
+    #[tokio::test]
+    async fn get_node_asset_record_propagates_404() {
+        let (mock, client) = mock_with_client().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/nodes/9999/assetRecord"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&mock)
+            .await;
+        let api = ProvisioningApi::new(&client);
+        assert!(api.get_node_asset_record(9999).await.is_err());
     }
 
     #[tokio::test]

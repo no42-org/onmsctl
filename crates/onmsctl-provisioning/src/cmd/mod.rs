@@ -9,6 +9,7 @@
 //! composes it into the top-level command tree at `onmsctl requisition`
 //! (with `req` as the visible alias).
 
+pub mod asset;
 pub mod category;
 pub mod interface;
 pub mod node;
@@ -258,6 +259,18 @@ pub enum RequisitionCmd {
     /// `set` and `get` add no value.
     #[command(subcommand)]
     Category(category::CategoryCmd),
+    /// Imperative sub-resource verbs for a post-import node's asset
+    /// record. The misfit of the sub-resource family.
+    ///
+    /// Asset records live under `/rest/nodes/{db-id}/assetRecord`
+    /// (NOT `/rest/requisitions/...`) and operate on IMPORTED nodes
+    /// keyed by database node ID, not requisition entries keyed by
+    /// foreign-id. Mutations take effect immediately; there is no
+    /// `requisition import` follow-up needed. Coverage is `list /
+    /// get / set` only — the asset record has a fixed schema, so
+    /// `add` and `remove` don't apply.
+    #[command(subcommand)]
+    Asset(asset::AssetCmd),
 }
 
 impl Classify for RequisitionCmd {
@@ -283,6 +296,7 @@ impl Classify for RequisitionCmd {
             RequisitionCmd::Interface(cmd) => cmd.kind(),
             RequisitionCmd::Service(cmd) => cmd.kind(),
             RequisitionCmd::Category(cmd) => cmd.kind(),
+            RequisitionCmd::Asset(cmd) => cmd.kind(),
         }
     }
 }
@@ -331,6 +345,7 @@ impl RequisitionCmd {
             RequisitionCmd::Interface(cmd) => cmd.run(ctx).await,
             RequisitionCmd::Service(cmd) => cmd.run(ctx).await,
             RequisitionCmd::Category(cmd) => cmd.run(ctx).await,
+            RequisitionCmd::Asset(cmd) => cmd.run(ctx).await,
         }
     }
 }
