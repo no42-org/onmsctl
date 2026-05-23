@@ -27,7 +27,8 @@ use onmsctl_core::{Error, OnmsClient, Result};
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 
 use crate::model::server::{
-    ForeignSourceServer, InterfaceServer, MonitoredServiceServer, NodeServer, RequisitionServer,
+    CategoryRef, ForeignSourceServer, InterfaceServer, MonitoredServiceServer, NodeServer,
+    RequisitionServer,
 };
 
 /// Characters that must be percent-encoded inside a path segment.
@@ -316,6 +317,44 @@ impl<'c> ProvisioningApi<'c> {
             encode(foreign_id),
             encode(ip),
             encode(service_name),
+        );
+        self.client.delete::<serde_json::Value>(&path, None).await
+    }
+
+    // ---------------- Requisition categories (sub-resource) ----------------
+
+    /// `POST /rest/requisitions/{fs}/nodes/{foreign-id}/categories`.
+    /// Create-or-replace by the body's `name`. The blast radius here
+    /// is the smallest of any sub-resource: `CategoryRef` carries only
+    /// `name`, so an existing category being re-POSTed is a no-op
+    /// (the body equals the existing state by definition).
+    pub async fn post_requisition_category(
+        &self,
+        fs: &str,
+        foreign_id: &str,
+        cat: &CategoryRef,
+    ) -> Result<()> {
+        let path = format!(
+            "{BASE}/requisitions/{}/nodes/{}/categories",
+            encode(fs),
+            encode(foreign_id),
+        );
+        self.client.post::<_, serde_json::Value>(&path, cat).await?;
+        Ok(())
+    }
+
+    /// `DELETE /rest/requisitions/{fs}/nodes/{foreign-id}/categories/{name}`.
+    pub async fn delete_requisition_category(
+        &self,
+        fs: &str,
+        foreign_id: &str,
+        category_name: &str,
+    ) -> Result<()> {
+        let path = format!(
+            "{BASE}/requisitions/{}/nodes/{}/categories/{}",
+            encode(fs),
+            encode(foreign_id),
+            encode(category_name),
         );
         self.client.delete::<serde_json::Value>(&path, None).await
     }
@@ -931,6 +970,131 @@ mod tests {
         api.delete_requisition_service("acme", "web01", "2001:db8::1", "HTTP")
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn post_requisition_category_targets_categories_collection() {
+        use crate::model::server::CategoryRef;
+        let (mock, client) = mock_with_client().await;
+        Mock::given(method("POST"))
+            .and(path("/rest/requisitions/acme/nodes/web01/categories"))
+            .and(wiremock::matchers::body_json(serde_json::json!({
+                "name": "Production",
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&mock)
+            .await;
+        let api = ProvisioningApi::new(&client);
+        api.post_requisition_category(
+            "acme",
+            "web01",
+            &CategoryRef {
+                name: "Production".into(),
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn delete_requisition_category_targets_specific_category() {
+        let (mock, client) = mock_with_client().await;
+        Mock::given(method("DELETE"))
+            .and(path(
+                "/rest/requisitions/acme/nodes/web01/categories/Production",
+            ))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&mock)
+            .await;
+        let api = ProvisioningApi::new(&client);
+        api.delete_requisition_category("acme", "web01", "Production")
+            .await
+            .unwrap();
+    }
+
+    /// Locks the wire-shape contract: the POST body is exactly
+    /// `{"name": "..."}` — `CategoryRef` carries no other fields, so
+    /// the "no-op on re-POST" idempotency claim holds. If the model
+    /// ever grows a second field, this test fails and forces the
+    /// idempotency doc-comment to be revisited.
+    #[tokio::test]
+    async fn post_requisition_category_body_is_name_only() {
+        use crate::model::server::CategoryRef;
+        let (mock, client) = mock_with_client().await;
+        Mock::given(method("POST"))
+            .and(path("/rest/requisitions/acme/nodes/web01/categories"))
+            .and(wiremock::matchers::body_json(serde_json::json!({
+                "name": "Production",
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&mock)
+            .await;
+        let api = ProvisioningApi::new(&client);
+        api.post_requisition_category(
+            "acme",
+            "web01",
+            &CategoryRef {
+                name: "Production".into(),
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    /// Pins percent-encoding of a multi-word category name through
+    /// both POST (body) and DELETE (path). Multi-word categories like
+    /// `Production Servers` are canonical in Horizon, so the round-
+    /// trip must survive the `PATH_SEGMENT` encoder.
+    #[tokio::test]
+    async fn requisition_category_endpoints_accept_multiword_name() {
+        use crate::model::server::CategoryRef;
+        let (mock, client) = mock_with_client().await;
+        Mock::given(method("POST"))
+            .and(path("/rest/requisitions/acme/nodes/web01/categories"))
+            .and(wiremock::matchers::body_json(serde_json::json!({
+                "name": "Production Servers",
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&mock)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path(
+                "/rest/requisitions/acme/nodes/web01/categories/Production%20Servers",
+            ))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&mock)
+            .await;
+        let api = ProvisioningApi::new(&client);
+        api.post_requisition_category(
+            "acme",
+            "web01",
+            &CategoryRef {
+                name: "Production Servers".into(),
+            },
+        )
+        .await
+        .unwrap();
+        api.delete_requisition_category("acme", "web01", "Production Servers")
+            .await
+            .unwrap();
+    }
+
+    /// 404 on DELETE must surface as an error — the cmd-layer relies
+    /// on this to avoid printing "removed" for a missing category.
+    #[tokio::test]
+    async fn delete_requisition_category_returns_error_on_404() {
+        let (mock, client) = mock_with_client().await;
+        Mock::given(method("DELETE"))
+            .and(path("/rest/requisitions/acme/nodes/web01/categories/MISSING"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&mock)
+            .await;
+        let api = ProvisioningApi::new(&client);
+        assert!(
+            api.delete_requisition_category("acme", "web01", "MISSING")
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]

@@ -9,6 +9,7 @@
 //! composes it into the top-level command tree at `onmsctl requisition`
 //! (with `req` as the visible alias).
 
+pub mod category;
 pub mod interface;
 pub mod node;
 pub mod service;
@@ -249,6 +250,14 @@ pub enum RequisitionCmd {
     /// doesn't.
     #[command(subcommand)]
     Service(service::ServiceCmd),
+    /// Imperative sub-resource verbs for a node's categories.
+    ///
+    /// Categories are scoped within a node
+    /// (`<fs> <foreign-id> <category>`). Coverage is `list / add /
+    /// remove` only — categories are tag-like (just a name), so
+    /// `set` and `get` add no value.
+    #[command(subcommand)]
+    Category(category::CategoryCmd),
 }
 
 impl Classify for RequisitionCmd {
@@ -273,6 +282,7 @@ impl Classify for RequisitionCmd {
             RequisitionCmd::Node(cmd) => cmd.kind(),
             RequisitionCmd::Interface(cmd) => cmd.kind(),
             RequisitionCmd::Service(cmd) => cmd.kind(),
+            RequisitionCmd::Category(cmd) => cmd.kind(),
         }
     }
 }
@@ -320,6 +330,7 @@ impl RequisitionCmd {
             RequisitionCmd::Node(cmd) => cmd.run(ctx).await,
             RequisitionCmd::Interface(cmd) => cmd.run(ctx).await,
             RequisitionCmd::Service(cmd) => cmd.run(ctx).await,
+            RequisitionCmd::Category(cmd) => cmd.run(ctx).await,
         }
     }
 }
