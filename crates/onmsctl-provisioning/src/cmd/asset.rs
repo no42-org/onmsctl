@@ -75,12 +75,22 @@ pub enum AssetCmd {
     },
     /// Set a single asset field's value.
     ///
-    /// Issues `PUT /rest/nodes/{db-id}/assetRecord` with a JSON body
-    /// containing only the named field, relying on Horizon's
-    /// partial-update semantic: every other asset field stays put.
+    /// Issues a GET-mutate-PUT cycle: read the current record,
+    /// change the target field in memory, and PUT the full record
+    /// back. The wire type of the target field is preserved — an
+    /// integer field stays integer, a bool field stays bool — so
+    /// `set 42 id "7"` against an integer field writes the number
+    /// `7`, not the string `"7"`. Type-incompatible input (e.g.
+    /// setting a numeric field to a non-numeric string) is rejected
+    /// at the cmd layer with a clear error and no PUT.
     ///
-    /// Pass an empty string to clear an existing value:
-    /// `onmsctl requisition asset set 42 city ""`.
+    /// **Clear semantics vary by type:**
+    /// - String field: empty `""` writes an empty string (clear).
+    /// - Numeric or bool field: empty `""` writes `null` (clear).
+    /// - Field currently `null`: type can't be inferred from the
+    ///   wire — the verb defaults to string and emits a stderr
+    ///   warning. To establish a non-string type for a null field,
+    ///   use `requisition apply -f` first.
     ///
     /// **Declarative alternative for requisition-time assets:** edit
     /// `spec.nodes[].assets` in the YAML and `requisition apply -f`.
@@ -201,14 +211,11 @@ async fn run_get(
             super::write_stdout(yaml.as_bytes())?;
         }
         OutputFormat::Table => {
-            // Bare value, no key prefix — when the user asks for one
-            // field by name, the key is already known.
-            let s = match value {
-                serde_json::Value::Null => String::from("<null>"),
-                serde_json::Value::String(s) => s.clone(),
-                other => other.to_string(),
-            };
-            let line = format!("{s}\n");
+            // Bare value, no key prefix — when the operator asks for
+            // one field by name, the key is already known. Shares
+            // `format_field_value` with `run_list` so structured
+            // values render with the `(json) ` prefix consistently.
+            let line = format!("{}\n", format_field_value(value));
             super::write_stdout(line.as_bytes())?;
         }
     }
@@ -235,10 +242,22 @@ async fn run_set(
                 .into(),
         )
     })?;
+    // Surface the null-current ambiguity: we can't infer wire type
+    // from a null field, so we default to string and the operator
+    // may be silently downgrading a numeric/bool column. Warn loudly
+    // rather than block — the operator may genuinely want a string
+    // (most asset fields are).
+    if matches!(map.get(field), Some(serde_json::Value::Null)) {
+        eprintln!(
+            "warning: field {field:?} is currently null on the server — type cannot be \
+             inferred from the wire; defaulting to string. To establish a non-string type, \
+             set the field via `requisition apply -f` first."
+        );
+    }
     let new_value = coerce_value_to_field_type(map.get(field), value)?;
-    map.insert(field.to_string(), new_value);
+    map.insert(field.to_string(), new_value.clone());
     api.put_node_asset_record(db_id, &record).await?;
-    emit_action_outcome(db_id, field, value, ctx)
+    emit_action_outcome(db_id, field, &new_value, ctx)
 }
 
 /// Coerce a CLI string value to match the type the field currently
@@ -254,24 +273,40 @@ fn coerce_value_to_field_type(
     raw: &str,
 ) -> Result<serde_json::Value> {
     match current {
-        Some(serde_json::Value::Number(_)) => {
+        Some(serde_json::Value::Number(n)) => {
             if raw.is_empty() {
-                Ok(serde_json::Value::Null)
-            } else if let Ok(i) = raw.parse::<i64>() {
-                Ok(serde_json::Value::Number(i.into()))
-            } else if let Ok(f) = raw.parse::<f64>() {
+                return Ok(serde_json::Value::Null);
+            }
+            // Preserve the integer-vs-float flavor of the current
+            // value. If the field is currently i64, require integer
+            // input — a float would silently truncate and change
+            // the wire flavor. If the field is currently f64, accept
+            // any finite float (integer-shaped input like "7" → 7.0
+            // is fine, no precision lost).
+            if n.is_i64() {
+                raw.parse::<i64>()
+                    .map(|i| serde_json::Value::Number(i.into()))
+                    .map_err(|_| {
+                        Error::Config(format!(
+                            "field is integer on the server; cannot set to {raw:?} \
+                             (provide an integer, or change the field type via \
+                             `requisition apply -f`)"
+                        ))
+                    })
+            } else {
+                let f: f64 = raw.parse().map_err(|_| {
+                    Error::Config(format!(
+                        "field is float on the server; cannot set to {raw:?}"
+                    ))
+                })?;
                 serde_json::Number::from_f64(f)
                     .map(serde_json::Value::Number)
                     .ok_or_else(|| {
                         Error::Config(format!(
-                            "field is numeric on the server but value {raw:?} is not \
+                            "field is float on the server but value {raw:?} is not \
                              a finite number"
                         ))
                     })
-            } else {
-                Err(Error::Config(format!(
-                    "field is numeric on the server; cannot set to non-numeric value {raw:?}"
-                )))
             }
         }
         Some(serde_json::Value::Bool(_)) => {
@@ -289,14 +324,26 @@ fn coerce_value_to_field_type(
             }
         }
         // String, Null, Array, Object, or field absent: default to
-        // string. Arrays / objects are rare on asset records; if
-        // operators need structured edits they can use the YAML
-        // declarative path.
+        // string. The Null case is also flagged by a stderr warning
+        // in `run_set` since type inference is impossible there.
+        // Arrays / objects are rare on asset records; if operators
+        // need structured edits they should use the YAML declarative
+        // path.
         _ => Ok(serde_json::Value::String(raw.to_string())),
     }
 }
 
-fn emit_action_outcome(db_id: i64, field: &str, value: &str, ctx: &Context) -> Result<()> {
+fn emit_action_outcome(
+    db_id: i64,
+    field: &str,
+    value: &serde_json::Value,
+    ctx: &Context,
+) -> Result<()> {
+    // The outcome payload carries the coerced JSON value (not the
+    // raw `&str` the operator typed) so JSON/YAML consumers can see
+    // the wire type that actually landed — e.g. `value: 42` (number)
+    // vs `value: "42"` (string) tells the operator which flavor went
+    // out.
     let payload = serde_json::json!({
         "db_id": db_id,
         "field": field,
@@ -317,29 +364,47 @@ fn emit_action_outcome(db_id: i64, field: &str, value: &str, ctx: &Context) -> R
             super::write_stdout(yaml.as_bytes())?;
         }
         OutputFormat::Table => {
-            let line = format!("Node/{db_id} asset/{field}: updated (value={value:?})\n");
+            let line = format!(
+                "Node/{db_id} asset/{field}: updated (value={})\n",
+                format_field_value(value)
+            );
             super::write_stdout(line.as_bytes())?;
         }
     }
     Ok(())
 }
 
+/// Render a JSON value as a single-line string for table output.
+/// Scalars render naturally (`NYC` / `42` / `true` / `42.5`); arrays
+/// and objects render as a `(json) ...` prefixed JSON literal so the
+/// operator can tell at a glance the value is structured. `Value::Null`
+/// renders as `<null>` — used by `asset get -o table` when the
+/// operator explicitly asked for a single field and that field is null.
+fn format_field_value(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::Null => "<null>".to_string(),
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::Array(_) | serde_json::Value::Object(_) => format!(
+            "(json) {}",
+            serde_json::to_string(v).unwrap_or_default()
+        ),
+    }
+}
+
 /// Format a JSON value for the `asset list -o table` view. Returns
-/// `None` for fields that should be skipped (null, empty string).
-/// Scalars render naturally (`true` / `42` / `42.5`); arrays and
-/// objects render as a `(json) ...` prefixed JSON literal so the
-/// operator can tell at a glance the value is structured.
+/// `None` for fields that should be skipped — `null`, empty strings,
+/// and empty arrays/objects — so they don't add noise to the listing.
+/// Populated fields delegate to [`format_field_value`] so list and
+/// get table output render consistently.
 fn format_field_for_table(v: &serde_json::Value) -> Option<String> {
     match v {
         serde_json::Value::Null => None,
         serde_json::Value::String(s) if s.is_empty() => None,
-        serde_json::Value::String(s) => Some(s.clone()),
-        serde_json::Value::Bool(b) => Some(b.to_string()),
-        serde_json::Value::Number(n) => Some(n.to_string()),
-        serde_json::Value::Array(_) | serde_json::Value::Object(_) => Some(format!(
-            "(json) {}",
-            serde_json::to_string(v).unwrap_or_default()
-        )),
+        serde_json::Value::Array(a) if a.is_empty() => None,
+        serde_json::Value::Object(o) if o.is_empty() => None,
+        _ => Some(format_field_value(v)),
     }
 }
 
@@ -433,6 +498,7 @@ mod tests {
         assert!(db_id("-1").is_err());
         assert!(db_id("abc").is_err());
         assert!(db_id("42.5").is_err());
+        assert!(db_id("1.5").is_err());
         assert!(db_id("").is_err());
         assert!(db_id(" 42 ").is_err());
         // Above i32::MAX (= 2_147_483_647) — Horizon stores node ID
@@ -457,17 +523,38 @@ mod tests {
     // ---- coerce_value_to_field_type (C3 type-coercion fix) ----
 
     #[test]
-    fn coerce_numeric_field_accepts_integer_value() {
+    fn coerce_integer_field_accepts_integer_value() {
         let current = serde_json::json!(7);
         let got = coerce_value_to_field_type(Some(&current), "42").unwrap();
         assert_eq!(got, serde_json::json!(42));
+        assert!(got.as_i64().is_some());
     }
 
     #[test]
-    fn coerce_numeric_field_accepts_float_value() {
+    fn coerce_integer_field_rejects_float_value() {
+        // Flavor preservation: integer field + float input would
+        // silently truncate; reject instead.
+        let current = serde_json::json!(7);
+        assert!(coerce_value_to_field_type(Some(&current), "42.5").is_err());
+    }
+
+    #[test]
+    fn coerce_float_field_accepts_float_value() {
         let current = serde_json::json!(42.5);
         let got = coerce_value_to_field_type(Some(&current), "40.7128").unwrap();
         assert_eq!(got.as_f64(), Some(40.7128));
+        // Confirm float flavor preserved (not coerced to i64).
+        assert!(!got.is_i64());
+    }
+
+    #[test]
+    fn coerce_float_field_accepts_integer_shaped_value_as_float() {
+        // Float field + integer-shaped input ("7") writes 7.0 — no
+        // precision lost, flavor stays float.
+        let current = serde_json::json!(42.5);
+        let got = coerce_value_to_field_type(Some(&current), "7").unwrap();
+        assert_eq!(got.as_f64(), Some(7.0));
+        assert!(!got.is_i64());
     }
 
     #[test]
@@ -475,11 +562,17 @@ mod tests {
         let current = serde_json::json!(7);
         let got = coerce_value_to_field_type(Some(&current), "").unwrap();
         assert_eq!(got, serde_json::Value::Null);
+        // Float field too.
+        let current = serde_json::json!(42.5);
+        let got = coerce_value_to_field_type(Some(&current), "").unwrap();
+        assert_eq!(got, serde_json::Value::Null);
     }
 
     #[test]
     fn coerce_numeric_field_rejects_non_numeric() {
         let current = serde_json::json!(7);
+        assert!(coerce_value_to_field_type(Some(&current), "abc").is_err());
+        let current = serde_json::json!(42.5);
         assert!(coerce_value_to_field_type(Some(&current), "abc").is_err());
     }
 
@@ -526,12 +619,42 @@ mod tests {
         assert_eq!(got, serde_json::Value::String("42".into()));
     }
 
+    #[test]
+    fn coerce_null_field_defaults_to_string() {
+        // Field exists but is null — same fall-through as absent.
+        // The `run_set` caller is responsible for emitting a stderr
+        // warning so the operator knows type couldn't be inferred.
+        let current = serde_json::Value::Null;
+        let got = coerce_value_to_field_type(Some(&current), "42").unwrap();
+        assert_eq!(got, serde_json::Value::String("42".into()));
+    }
+
+    #[test]
+    fn coerce_array_field_defaults_to_string() {
+        // Arrays / objects fall through to string — operators who
+        // need structured edits use the YAML declarative path.
+        let current = serde_json::json!(["a", "b"]);
+        let got = coerce_value_to_field_type(Some(&current), "x").unwrap();
+        assert_eq!(got, serde_json::Value::String("x".into()));
+    }
+
+    #[test]
+    fn coerce_object_field_defaults_to_string() {
+        let current = serde_json::json!({"k": "v"});
+        let got = coerce_value_to_field_type(Some(&current), "x").unwrap();
+        assert_eq!(got, serde_json::Value::String("x".into()));
+    }
+
     // ---- format_field_for_table (H6 JSON-literal-leak fix) ----
 
     #[test]
-    fn format_table_skips_null_and_empty() {
+    fn format_table_skips_null_empty_string_and_empty_containers() {
         assert_eq!(format_field_for_table(&serde_json::Value::Null), None);
         assert_eq!(format_field_for_table(&serde_json::json!("")), None);
+        // Empty containers also skipped — they carry no information
+        // and would otherwise produce noisy `(json) []` lines.
+        assert_eq!(format_field_for_table(&serde_json::json!([])), None);
+        assert_eq!(format_field_for_table(&serde_json::json!({})), None);
     }
 
     #[test]
@@ -560,6 +683,32 @@ mod tests {
         assert_eq!(array.as_deref(), Some(r#"(json) ["a","b"]"#));
         let object = format_field_for_table(&serde_json::json!({"k": "v"}));
         assert_eq!(object.as_deref(), Some(r#"(json) {"k":"v"}"#));
+    }
+
+    // ---- format_field_value (used by `get -o table` AND `list -o table`) ----
+
+    #[test]
+    fn format_field_value_renders_null_as_marker() {
+        // `get -o table` explicitly asked for this field; null must
+        // be visible (vs. `list` which skips null entirely).
+        assert_eq!(
+            format_field_value(&serde_json::Value::Null),
+            "<null>"
+        );
+    }
+
+    #[test]
+    fn format_field_value_renders_structured_with_json_prefix() {
+        // Same shape as `list -o table` for non-null structured
+        // values — locks the H6-fix consistency between get and list.
+        assert_eq!(
+            format_field_value(&serde_json::json!(["a", "b"])),
+            r#"(json) ["a","b"]"#
+        );
+        assert_eq!(
+            format_field_value(&serde_json::json!({"k": "v"})),
+            r#"(json) {"k":"v"}"#
+        );
     }
 
     #[test]
