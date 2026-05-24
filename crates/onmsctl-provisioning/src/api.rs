@@ -202,6 +202,25 @@ impl<'c> ProvisioningApi<'c> {
         self.client.delete::<serde_json::Value>(&path, None).await
     }
 
+    /// `DELETE /rest/requisitions/{fs}`. Removes the requisition's
+    /// **pending** state from the server. To fully purge a requisition,
+    /// `delete_deployed_requisition` must also be called — Horizon
+    /// stores pending and deployed snapshots separately, and a
+    /// requisition can persist in deployed state even after the
+    /// pending one is deleted.
+    pub async fn delete_pending_requisition(&self, fs: &str) -> Result<()> {
+        let path = format!("{BASE}/requisitions/{}", encode(fs));
+        self.client.delete::<serde_json::Value>(&path, None).await
+    }
+
+    /// `DELETE /rest/requisitions/deployed/{fs}`. Removes the
+    /// requisition's **deployed** state from the server. Paired with
+    /// `delete_pending_requisition` to fully purge a requisition.
+    pub async fn delete_deployed_requisition(&self, fs: &str) -> Result<()> {
+        let path = format!("{BASE}/requisitions/deployed/{}", encode(fs));
+        self.client.delete::<serde_json::Value>(&path, None).await
+    }
+
     // ---------------- Requisition interfaces (sub-resource) ----------------
 
     /// `GET /rest/requisitions/{fs}/nodes/{foreign-id}/interfaces/{ip}`.
@@ -715,6 +734,73 @@ mod tests {
             .await;
         let api = ProvisioningApi::new(&client);
         api.delete_requisition_node("acme", "web01").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn delete_pending_requisition_targets_pending_root() {
+        let (mock, client) = mock_with_client().await;
+        Mock::given(method("DELETE"))
+            .and(path("/rest/requisitions/acme"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&mock)
+            .await;
+        let api = ProvisioningApi::new(&client);
+        api.delete_pending_requisition("acme").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn delete_deployed_requisition_targets_deployed_root() {
+        let (mock, client) = mock_with_client().await;
+        Mock::given(method("DELETE"))
+            .and(path("/rest/requisitions/deployed/acme"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&mock)
+            .await;
+        let api = ProvisioningApi::new(&client);
+        api.delete_deployed_requisition("acme").await.unwrap();
+    }
+
+    /// 404 on either DELETE is legitimate (snapshot already absent);
+    /// the cmd-layer swallows both cases. This test pins the
+    /// underlying API behavior — the error surfaces as
+    /// `HttpStatus { status: 404, .. }` so the cmd layer can
+    /// pattern-match on it. Both endpoints behave identically wrt
+    /// 404, so a single test covers both via the deployed endpoint
+    /// (the pending one is exercised the same way by happy-path
+    /// tests at the cmd-layer integration level).
+    #[tokio::test]
+    async fn delete_deployed_requisition_propagates_404() {
+        let (mock, client) = mock_with_client().await;
+        Mock::given(method("DELETE"))
+            .and(path("/rest/requisitions/deployed/acme"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&mock)
+            .await;
+        let api = ProvisioningApi::new(&client);
+        let err = api.delete_deployed_requisition("acme").await.unwrap_err();
+        assert!(matches!(
+            err,
+            onmsctl_core::Error::HttpStatus { status: 404, .. }
+        ));
+    }
+
+    /// Pin symmetric 404 propagation on the pending endpoint too,
+    /// since the cmd-layer's symmetric idempotency depends on both
+    /// endpoints surfacing 404 the same way.
+    #[tokio::test]
+    async fn delete_pending_requisition_propagates_404() {
+        let (mock, client) = mock_with_client().await;
+        Mock::given(method("DELETE"))
+            .and(path("/rest/requisitions/acme"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&mock)
+            .await;
+        let api = ProvisioningApi::new(&client);
+        let err = api.delete_pending_requisition("acme").await.unwrap_err();
+        assert!(matches!(
+            err,
+            onmsctl_core::Error::HttpStatus { status: 404, .. }
+        ));
     }
 
     #[tokio::test]

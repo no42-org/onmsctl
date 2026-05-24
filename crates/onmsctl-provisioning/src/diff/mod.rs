@@ -509,17 +509,34 @@ pub fn classify_leaf(path: &str) -> ScanRelevance {
     ScanRelevance::Relevant
 }
 
-/// Aggregate per-leaf classifications into a single `rescanExisting`
-/// boolean for the import call. Returns `true` iff at least one leaf
-/// in the input is `Relevant`. Empty input returns `false` — but the
-/// apply path should have L1-short-circuited before this point.
-pub fn aggregate_rescan_decision<'a, I>(paths: I) -> bool
+/// Collect every leaf path that classifies as scan-relevant. Used by
+/// `--explain-rescan` so the operator sees which paths drove the auto
+/// decision, and by `aggregate_rescan_decision` as its single source
+/// of truth. Returns an empty vector if no leaf is relevant.
+pub fn scan_relevant_paths<'a, I>(paths: I) -> Vec<String>
 where
     I: IntoIterator<Item = &'a str>,
 {
     paths
         .into_iter()
-        .any(|p| classify_leaf(p) == ScanRelevance::Relevant)
+        .filter(|p| classify_leaf(p) == ScanRelevance::Relevant)
+        .map(String::from)
+        .collect()
+}
+
+/// Aggregate per-leaf classifications into a single `rescanExisting`
+/// boolean for the import call. Returns `true` iff at least one leaf
+/// in the input is `Relevant`. Empty input returns `false` — but the
+/// apply path should have L1-short-circuited before this point.
+///
+/// Delegates to [`scan_relevant_paths`] so there is a single
+/// classifier source-of-truth. Allocates a `Vec` then drops it; for
+/// the apply path this overhead is dwarfed by the HTTP I/O it gates.
+pub fn aggregate_rescan_decision<'a, I>(paths: I) -> bool
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    !scan_relevant_paths(paths).is_empty()
 }
 
 /// Replace `[N]` (concrete array indices) with `[*]` (wildcards) for

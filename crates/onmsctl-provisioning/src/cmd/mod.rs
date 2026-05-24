@@ -91,10 +91,19 @@ pub enum RequisitionCmd {
         /// review).
         #[arg(long)]
         diff: bool,
-        /// Force the `rescanExisting` query parameter on import.
-        /// Default: auto-decided from the diff's scan-relevance.
+        /// Override the `rescanExisting` query parameter on import.
+        /// Accepts `true`, `false`, or `auto`. `auto` (the default)
+        /// runs the diff's scan-relevance classification per design
+        /// §D3.
+        #[arg(long, value_parser = rescan_flag, default_value = "auto")]
+        rescan_existing: RescanFlag,
+        /// Print to stderr the leaf path(s) that drove the
+        /// `rescanExisting=true` auto-decision per design §D3. Useful
+        /// for understanding why a small change triggered (or didn't
+        /// trigger) a full rescan. Combine with `--dry-run` to see the
+        /// classification without mutating server state.
         #[arg(long)]
-        rescan_existing: Option<bool>,
+        explain_rescan: bool,
         /// Directory mode: halt phase 2 after the first per-file
         /// error instead of continuing. kubectl-style fail-fast.
         /// Has no effect in single-file mode.
@@ -148,6 +157,33 @@ pub enum RequisitionCmd {
     /// editorializing on the most recent import's result.
     Status {
         /// Foreign-source name to inspect.
+        #[arg(value_parser = nonempty_fs)]
+        fs: String,
+    },
+    /// List every requisition name deployed on the server.
+    ///
+    /// Wraps `GET /rest/requisitionNames`. Output respects `-o`:
+    /// table prints one foreign-source name per line; json / yaml
+    /// emit the array. Classified `Read`.
+    List,
+    /// Fully purge a requisition from the server.
+    ///
+    /// Horizon stores pending and deployed requisition snapshots
+    /// separately. This verb issues both `DELETE
+    /// /rest/requisitions/{fs}` (pending) AND `DELETE
+    /// /rest/requisitions/deployed/{fs}` (deployed) so the requisition
+    /// is fully removed in one call. The local YAML is NOT touched.
+    /// Classified `Write`.
+    ///
+    /// **Idempotent on both snapshots:** a 404 from either DELETE is
+    /// treated as success (the snapshot was already absent). If both
+    /// 404, the requisition didn't exist on the server and a stderr
+    /// note records that fact. If the pending DELETE succeeds but
+    /// the deployed DELETE fails with a non-404 error, the operator
+    /// is warned about the orphaned deployed snapshot before the
+    /// error propagates.
+    Delete {
+        /// Foreign-source name to purge.
         #[arg(value_parser = nonempty_fs)]
         fs: String,
     },
@@ -285,6 +321,10 @@ impl Classify for RequisitionCmd {
             RequisitionCmd::Import { .. } => CmdKind::Write,
             // Status is read-only.
             RequisitionCmd::Status { .. } => CmdKind::Read,
+            // List is read-only.
+            RequisitionCmd::List => CmdKind::Read,
+            // Delete issues DELETE calls.
+            RequisitionCmd::Delete { .. } => CmdKind::Write,
             // Export only issues GETs.
             RequisitionCmd::Export { .. } => CmdKind::Read,
             // Convert is pure local file transform — no HTTP at all.
@@ -310,6 +350,7 @@ impl RequisitionCmd {
                 dry_run,
                 diff,
                 rescan_existing,
+                explain_rescan,
                 stop_on_error,
                 wait_flags,
             } => {
@@ -318,6 +359,7 @@ impl RequisitionCmd {
                     dry_run,
                     diff,
                     rescan_existing,
+                    explain_rescan,
                     stop_on_error,
                     wait_flags,
                     ctx,
@@ -330,6 +372,8 @@ impl RequisitionCmd {
                 wait_flags,
             } => run_import(fs, rescan_existing, wait_flags, ctx).await,
             RequisitionCmd::Status { fs } => run_status(fs, ctx).await,
+            RequisitionCmd::List => run_list_requisitions(ctx).await,
+            RequisitionCmd::Delete { fs } => run_delete_requisition(fs, ctx).await,
             RequisitionCmd::Export {
                 fs,
                 out,
@@ -350,11 +394,13 @@ impl RequisitionCmd {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_apply(
     file: PathBuf,
     dry_run: bool,
     diff: bool,
-    rescan_existing: Option<bool>,
+    rescan_existing: RescanFlag,
+    explain_rescan: bool,
     stop_on_error: bool,
     wait_flags: AsyncFlags,
     ctx: &Context,
@@ -367,6 +413,11 @@ async fn run_apply(
         if diff {
             eprintln!(
                 "note: --diff has no effect in directory mode (use --dry-run + -o yaml for a per-file preview)"
+            );
+        }
+        if explain_rescan {
+            eprintln!(
+                "note: --explain-rescan has no effect in directory mode (use it per-file with --dry-run)"
             );
         }
         return run_apply_directory(file, dry_run, rescan_existing, stop_on_error, wait_flags, ctx)
@@ -405,10 +456,7 @@ async fn run_apply(
     // ---- 3. Run the apply orchestrator ----
     let opts = ApplyOptions {
         dry_run,
-        rescan_existing: match rescan_existing {
-            Some(b) => RescanChoice::Force(b),
-            None => RescanChoice::Auto,
-        },
+        rescan_existing: rescan_existing.into(),
     };
     let outcome = match apply_requisition(&local, &api, &opts).await {
         Ok(o) => o,
@@ -463,6 +511,9 @@ async fn run_apply(
         // caller also requested `-o json` / `-o yaml`. Matches the
         // eventconf `source apply --diff` precedent.
         eprint!("{}", render_apply_diff(&local, &outcome));
+    }
+    if explain_rescan {
+        eprint_rescan_explanation(&outcome);
     }
 
     match ctx.output_format {
@@ -897,6 +948,194 @@ pub(super) fn ip_addr(s: &str) -> std::result::Result<String, String> {
         .map_err(|_| format!("invalid IP address {s:?} (expected IPv4 or IPv6 literal)"))
 }
 
+/// CLI surface for the tri-state `--rescan-existing=<true|false|auto>`
+/// flag. `Auto` (the default) hands the decision off to the diff
+/// engine's scan-relevance classification per design §D3; `Force(b)`
+/// overrides regardless of the diff content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RescanFlag {
+    #[default]
+    Auto,
+    Force(bool),
+}
+
+impl From<RescanFlag> for RescanChoice {
+    fn from(f: RescanFlag) -> Self {
+        match f {
+            RescanFlag::Auto => RescanChoice::Auto,
+            RescanFlag::Force(b) => RescanChoice::Force(b),
+        }
+    }
+}
+
+/// clap value parser for `--rescan-existing`. Accepts `true`,
+/// `false`, or `auto` (case-insensitive). Rejects other inputs at
+/// parse time.
+fn rescan_flag(s: &str) -> std::result::Result<RescanFlag, String> {
+    match s.to_ascii_lowercase().as_str() {
+        "true" => Ok(RescanFlag::Force(true)),
+        "false" => Ok(RescanFlag::Force(false)),
+        "auto" => Ok(RescanFlag::Auto),
+        other => Err(format!(
+            "rescan-existing must be one of 'true', 'false', or 'auto' (got {other:?})"
+        )),
+    }
+}
+
+/// Render the `--explain-rescan` rationale to stderr. Shows the
+/// scan-relevant leaf paths from the diff so the operator can see
+/// why the auto-decision landed on `rescanExisting=true`, or that no
+/// leaf was relevant and the auto-decision is `false`. When the
+/// operator forced the value via `--rescan-existing=true|false`, the
+/// rendering distinguishes the *would-have* auto-decision from the
+/// effective outcome.
+fn eprint_rescan_explanation(outcome: &crate::apply::ApplyOutcome) {
+    eprint!("{}", explain_rescan_text(outcome));
+}
+
+/// Pure-function form of [`eprint_rescan_explanation`] used by unit
+/// tests so the rendering can be asserted without capturing stderr.
+fn explain_rescan_text(outcome: &crate::apply::ApplyOutcome) -> String {
+    use std::fmt::Write;
+    let mut s = String::new();
+    let auto_would_be = !outcome.scan_relevant_leaves.is_empty();
+    let overridden = auto_would_be != outcome.rescan_existing;
+
+    if outcome.scan_relevant_leaves.is_empty() {
+        writeln!(
+            s,
+            "explain-rescan: no scan-relevant leaves in the diff — auto-decision would be \
+             rescanExisting=false."
+        )
+        .ok();
+    } else if overridden {
+        writeln!(
+            s,
+            "explain-rescan: {} scan-relevant leaf path(s) would have driven \
+             rescanExisting=true per design §D3 (overridden by \
+             --rescan-existing flag):",
+            outcome.scan_relevant_leaves.len()
+        )
+        .ok();
+        for p in &outcome.scan_relevant_leaves {
+            writeln!(s, "  - {p}").ok();
+        }
+    } else {
+        writeln!(
+            s,
+            "explain-rescan: {} scan-relevant leaf path(s) drive rescanExisting=true \
+             per design §D3:",
+            outcome.scan_relevant_leaves.len()
+        )
+        .ok();
+        for p in &outcome.scan_relevant_leaves {
+            writeln!(s, "  - {p}").ok();
+        }
+    }
+    writeln!(s, "Effective rescanExisting={}", outcome.rescan_existing).ok();
+    s
+}
+
+async fn run_list_requisitions(ctx: &Context) -> Result<()> {
+    let client = OnmsClient::from_context(ctx)?;
+    let api = ProvisioningApi::new(&client);
+    let names = api.list_requisition_names().await?;
+
+    match ctx.output_format {
+        OutputFormat::Json => {
+            let json = serde_json::to_string_pretty(&names).map_err(|e| {
+                Error::Config(format!("serializing requisition list to JSON: {e}"))
+            })?;
+            write_stdout_line(json.as_bytes())?;
+        }
+        OutputFormat::Yaml => {
+            let yaml = serde_norway::to_string(&names).map_err(|e| {
+                Error::Config(format!("serializing requisition list to YAML: {e}"))
+            })?;
+            write_stdout(yaml.as_bytes())?;
+        }
+        OutputFormat::Table => {
+            if names.is_empty() {
+                write_stdout(b"(no requisitions)\n")?;
+            } else {
+                for n in &names {
+                    let line = format!("{n}\n");
+                    write_stdout(line.as_bytes())?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn run_delete_requisition(fs: String, ctx: &Context) -> Result<()> {
+    let client = OnmsClient::from_context(ctx)?;
+    let api = ProvisioningApi::new(&client);
+
+    // Issue the pending DELETE first. 404 here means the pending
+    // snapshot was already absent — fine, the deployed call will
+    // still run.
+    let pending_absent = match api.delete_pending_requisition(&fs).await {
+        Ok(()) => false,
+        Err(Error::HttpStatus { status: 404, .. }) => true,
+        Err(e) => return Err(e),
+    };
+
+    // Now the deployed DELETE. 404 means the snapshot was already
+    // absent (e.g. requisition was never imported). A non-404 error
+    // here, after a successful pending DELETE, leaves an orphan on
+    // the server — warn loudly so the operator knows to investigate.
+    let deployed_absent = match api.delete_deployed_requisition(&fs).await {
+        Ok(()) => false,
+        Err(Error::HttpStatus { status: 404, .. }) => true,
+        Err(e) => {
+            if !pending_absent {
+                eprintln!(
+                    "warning: Requisition/{fs} — pending snapshot was deleted, but the \
+                     deployed snapshot DELETE failed; server is now in a half-purged \
+                     state. Run `onmsctl requisition status {fs}` to check, and re-run \
+                     `requisition delete {fs}` to retry the deployed purge."
+                );
+            }
+            return Err(e);
+        }
+    };
+
+    if pending_absent && deployed_absent {
+        eprintln!(
+            "note: Requisition/{fs} was not present on the server (both pending and \
+             deployed snapshots returned 404); delete was a no-op."
+        );
+    }
+
+    let payload = serde_json::json!({
+        "foreign_source": fs,
+        "action": "deleted",
+        "pending_absent": pending_absent,
+        "deployed_absent": deployed_absent,
+    });
+    match ctx.output_format {
+        OutputFormat::Json => {
+            let json = serde_json::to_string_pretty(&payload).map_err(|e| {
+                Error::Config(format!("serializing delete outcome to JSON: {e}"))
+            })?;
+            write_stdout_line(json.as_bytes())?;
+        }
+        OutputFormat::Yaml => {
+            let yaml = serde_norway::to_string(&payload).map_err(|e| {
+                Error::Config(format!("serializing delete outcome to YAML: {e}"))
+            })?;
+            write_stdout(yaml.as_bytes())?;
+        }
+        OutputFormat::Table => {
+            let line =
+                format!("Requisition/{fs}: deleted (pending + deployed snapshots purged)\n");
+            write_stdout(line.as_bytes())?;
+        }
+    }
+    Ok(())
+}
+
 /// Write `bytes` to stdout, treating `BrokenPipe` as a clean exit
 /// (e.g. when the user pipes our output into `head -c N`). Other I/O
 /// errors propagate as `Error::Io` so the exit-code mapping picks them
@@ -925,7 +1164,7 @@ pub(super) fn write_stdout_line(bytes: &[u8]) -> Result<()> {
 async fn run_apply_directory(
     dir: PathBuf,
     dry_run: bool,
-    rescan_existing: Option<bool>,
+    rescan_existing: RescanFlag,
     stop_on_error: bool,
     wait_flags: AsyncFlags,
     ctx: &Context,
@@ -943,10 +1182,7 @@ async fn run_apply_directory(
 
     let opts = MultiApplyOptions {
         dry_run,
-        rescan_existing: match rescan_existing {
-            Some(b) => RescanChoice::Force(b),
-            None => RescanChoice::Auto,
-        },
+        rescan_existing: rescan_existing.into(),
         stop_on_error,
     };
 
@@ -1157,5 +1393,79 @@ mod tests {
         assert!(nonempty_string("").is_err());
         assert!(nonempty_string("   ").is_err());
         assert_eq!(nonempty_string("foo").unwrap(), "foo");
+    }
+
+    #[test]
+    fn rescan_flag_accepts_canonical_values_case_insensitive() {
+        assert_eq!(rescan_flag("true").unwrap(), RescanFlag::Force(true));
+        assert_eq!(rescan_flag("TRUE").unwrap(), RescanFlag::Force(true));
+        assert_eq!(rescan_flag("false").unwrap(), RescanFlag::Force(false));
+        assert_eq!(rescan_flag("FALSE").unwrap(), RescanFlag::Force(false));
+        assert_eq!(rescan_flag("auto").unwrap(), RescanFlag::Auto);
+        assert_eq!(rescan_flag("Auto").unwrap(), RescanFlag::Auto);
+    }
+
+    #[test]
+    fn rescan_flag_rejects_unknown_values() {
+        assert!(rescan_flag("maybe").is_err());
+        assert!(rescan_flag("").is_err());
+        assert!(rescan_flag("1").is_err());
+    }
+
+    #[test]
+    fn rescan_flag_converts_to_rescan_choice() {
+        assert_eq!(RescanChoice::from(RescanFlag::Auto), RescanChoice::Auto);
+        assert_eq!(
+            RescanChoice::from(RescanFlag::Force(true)),
+            RescanChoice::Force(true)
+        );
+        assert_eq!(
+            RescanChoice::from(RescanFlag::Force(false)),
+            RescanChoice::Force(false)
+        );
+    }
+
+    // ---- explain_rescan_text rendering ----
+
+    fn outcome_with(rescan_existing: bool, leaves: Vec<&str>) -> crate::apply::ApplyOutcome {
+        crate::apply::ApplyOutcome {
+            state: crate::apply::ApplyState::DryRun,
+            delta: Default::default(),
+            rescan_existing,
+            foreign_source_action: crate::apply::ForeignSourceAction::NoChange,
+            original_remote_fs: None,
+            pre_trigger_last_import_ms: None,
+            scan_relevant_leaves: leaves.into_iter().map(String::from).collect(),
+        }
+    }
+
+    #[test]
+    fn explain_rescan_empty_leaves_reports_no_relevant_paths() {
+        let outcome = outcome_with(false, vec![]);
+        let s = explain_rescan_text(&outcome);
+        assert!(s.contains("no scan-relevant leaves"));
+        assert!(s.contains("Effective rescanExisting=false"));
+    }
+
+    #[test]
+    fn explain_rescan_auto_with_leaves_drives_true() {
+        let outcome = outcome_with(true, vec!["spec.nodes[0].interfaces[0].services"]);
+        let s = explain_rescan_text(&outcome);
+        // Plain "drive" wording — auto-decision was honored.
+        assert!(s.contains("drive rescanExisting=true"));
+        assert!(!s.contains("would have driven"));
+        assert!(s.contains("spec.nodes[0].interfaces[0].services"));
+        assert!(s.contains("Effective rescanExisting=true"));
+    }
+
+    #[test]
+    fn explain_rescan_override_distinguishes_would_have_from_effective() {
+        // Operator forced --rescan-existing=false against a diff that
+        // auto would have driven to true.
+        let outcome = outcome_with(false, vec!["spec.nodes[0].interfaces[0].services"]);
+        let s = explain_rescan_text(&outcome);
+        assert!(s.contains("would have driven"));
+        assert!(s.contains("overridden by --rescan-existing"));
+        assert!(s.contains("Effective rescanExisting=false"));
     }
 }

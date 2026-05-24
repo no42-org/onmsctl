@@ -36,7 +36,7 @@ pub use multi::{
 };
 
 use crate::api::ProvisioningApi;
-use crate::diff::{RequisitionDelta, aggregate_rescan_decision, diff_requisition};
+use crate::diff::{RequisitionDelta, diff_requisition, scan_relevant_paths};
 use crate::model::{
     RequisitionLocal, requisition_from_wire, requisition_to_wire,
     server::{ForeignSourceServer, RequisitionServer},
@@ -101,6 +101,14 @@ pub struct ApplyOutcome {
     /// (Created path) or when the field was absent. Used by the
     /// `--wait` poller (task 6.3) as the snapshot to watch advance.
     pub pre_trigger_last_import_ms: Option<i64>,
+    /// Scan-relevant leaf paths from the diff — the paths the auto
+    /// `rescanExisting=true` decision would consider per design.md
+    /// §D3. **Populated even when the operator overrides via
+    /// `RescanChoice::Force`** so `--explain-rescan` can show "would
+    /// have driven" rationale alongside the actual `rescan_existing`
+    /// outcome. Empty only when the diff itself has no scan-relevant
+    /// leaves (or when delta was empty — Unchanged path).
+    pub scan_relevant_leaves: Vec<String>,
 }
 
 /// Top-level apply outcome.
@@ -226,13 +234,21 @@ pub async fn apply_requisition(
             foreign_source_action,
             original_remote_fs: remote_fs,
             pre_trigger_last_import_ms,
+            scan_relevant_leaves: vec![],
         });
     }
 
     // ---- 4. rescanExisting decision ----
+    // Compute the scan-relevant leaf set once so the auto-decision
+    // (the boolean) and the --explain-rescan output (the list) share
+    // a single classification result. When the operator forces the
+    // value via flag, the leaf list is still computed and surfaced
+    // so --explain-rescan reports what the auto decision *would have*
+    // been.
+    let scan_relevant_leaves: Vec<String> = scan_relevant_paths(delta.iter_paths());
     let rescan_existing = match opts.rescan_existing {
         RescanChoice::Force(b) => b,
-        RescanChoice::Auto => aggregate_rescan_decision(delta.iter_paths()),
+        RescanChoice::Auto => !scan_relevant_leaves.is_empty(),
     };
 
     // ---- 5. Dry-run: stop here, return decisions ----
@@ -244,6 +260,7 @@ pub async fn apply_requisition(
             foreign_source_action,
             original_remote_fs: remote_fs,
             pre_trigger_last_import_ms,
+            scan_relevant_leaves,
         });
     }
 
@@ -277,6 +294,7 @@ pub async fn apply_requisition(
         foreign_source_action,
         original_remote_fs: remote_fs,
         pre_trigger_last_import_ms,
+        scan_relevant_leaves,
     })
 }
 

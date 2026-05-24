@@ -239,6 +239,7 @@ mod tests {
             foreign_source_action: fs_action,
             original_remote_fs,
             pre_trigger_last_import_ms: None,
+            scan_relevant_leaves: vec![],
         }
     }
 
