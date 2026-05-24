@@ -420,7 +420,17 @@ async fn run_apply(
             // recovery guidance. Wrapping into `Error::Config` would
             // collapse every failure to exit code 2 and double-prefix
             // the message as "config error: apply failed for...".
-            eprint_recovery_hint(&local);
+            //
+            // Only emit the hint when the error indicates a request
+            // actually reached the server — `HttpStatus` is the only
+            // class that could leave partial state behind. Parse
+            // errors, auth failures, DNS lookup failures, TLS
+            // handshake failures, etc. all happen pre-mutation, so
+            // the "partial writes are possible" warning would be
+            // misleading.
+            if matches!(e, Error::HttpStatus { .. }) {
+                eprint_recovery_hint(&local);
+            }
             return Err(e);
         }
     };

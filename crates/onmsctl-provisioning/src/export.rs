@@ -168,6 +168,19 @@ fn render_yaml(local: &RequisitionLocal, default_fs_inlined: bool) -> Result<Str
              # re-applied at every `apply` — the inlined snapshot does \
              not stay in sync after this export).\n",
         ));
+    } else if local.spec.foreign_source.is_none() {
+        // Portable style: spec.foreignSource is omitted, so the
+        // requisition inherits Horizon's default-FS at apply time.
+        // Spec.md mandates the inherit-default annotation comment so
+        // a future reader of the YAML doesn't assume detectors /
+        // policies are intentionally absent — they're inherited
+        // from the server's current default.
+        out.push_str(
+            "# Portable style: spec.foreignSource is omitted; this requisition inherits\n\
+             # Horizon's default foreign-source (detectors + policies) at apply time.\n\
+             # Run `requisition export <fs> --include-defaults` to snapshot the\n\
+             # current default into spec.foreignSource if you need a pinned record.\n",
+        );
     }
     out.push_str(&body);
     Ok(out)
@@ -302,6 +315,11 @@ mod tests {
         assert!(!out.default_fs_inlined);
         assert!(!out.yaml.contains("foreignSource:"));
         assert!(!out.yaml.contains("inlined from Horizon's default"));
+        // Portable-style annotation comment — spec.md mandates this
+        // so future readers don't assume detectors/policies are
+        // intentionally absent.
+        assert!(out.yaml.contains("Portable style: spec.foreignSource is omitted"));
+        assert!(out.yaml.contains("inherits"));
     }
 
     #[tokio::test]
