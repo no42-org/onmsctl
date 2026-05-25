@@ -13,6 +13,7 @@
 //! architecture and `cli-core` spec deltas for observable requirements.
 
 pub mod apply;
+pub mod apply_input;
 pub mod async_flags;
 pub mod auth;
 pub mod client;

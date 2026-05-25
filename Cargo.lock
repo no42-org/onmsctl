@@ -993,6 +993,7 @@ dependencies = [
  "clap",
  "comfy-table",
  "directories",
+ "glob",
  "keyring",
  "reqwest",
  "serde",
@@ -1018,6 +1019,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_norway",
+ "tempfile",
  "thiserror",
  "tokio",
  "wiremock",
@@ -1039,7 +1041,6 @@ version = "0.0.1"
 dependencies = [
  "async-trait",
  "clap",
- "glob",
  "onmsctl-core",
  "percent-encoding",
  "quick-xml",

@@ -35,6 +35,9 @@ clap = { workspace = true }
 comfy-table = { workspace = true }
 similar = { workspace = true }
 
+# Glob expansion for the shared `apply -f` dispatcher (apply_input module).
+glob = { workspace = true }
+
 # Keyring needs a platform-native backend selected per OS, otherwise the
 # crate compiles to a no-op stub whose reads return "No matching entry
 # found" for every credential — silently broken. See the keyring crate's

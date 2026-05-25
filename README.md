@@ -203,6 +203,20 @@ onmsctl source apply -f cisco.foo.yaml --diff
 Fetches the server's current state, prints a UEI-bucketed diff to
 stderr, uploads only when changes exist. Add `--dry-run` to simulate.
 
+`source apply -f` accepts a single file, a directory of YAML files, or
+a glob pattern (quote it so the shell doesn't pre-expand):
+
+```sh
+onmsctl source apply -f sources/                  # directory
+onmsctl source apply -f 'sources/cisco-*.yaml'    # glob
+```
+
+With multiple files, each is applied in alphabetical (byte-wise) order
+with continue-on-error semantics — failures are collected and the
+exit code is non-zero if any file failed, but later files still run.
+`--diff` is single-file-only, but a glob that matches exactly one
+file collapses to single-file mode so `--diff` still applies.
+
 `metadata.name` becomes the server's stored source name verbatim;
 Horizon derives `vendor` server-side as the prefix before the first `.`
 (so `metadata.name: cisco.foo` → source name `cisco.foo`, vendor `cisco`).

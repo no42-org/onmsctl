@@ -19,6 +19,7 @@ use std::io::{ErrorKind, Write};
 use std::path::PathBuf;
 
 use clap::Subcommand;
+use onmsctl_core::apply_input::ApplyDispatch;
 use onmsctl_core::{
     AsyncFlags, Classify, CmdKind, Context, Error, OnmsClient, OutputFormat, Result,
 };
@@ -443,6 +444,15 @@ async fn run_apply(
                 .await;
         }
         ApplyDispatch::Single(path) => path,
+        // `ApplyDispatch` is `#[non_exhaustive]` — future variants
+        // (e.g. `Stdin`) require explicit per-capability routing.
+        // Refuse loudly today rather than dispatch silently.
+        other => {
+            return Err(Error::Config(format!(
+                "unsupported apply input shape: {other:?} (this CLI build does not \
+                 recognise this dispatch variant)"
+            )));
+        }
     };
     let meta = std::fs::metadata(&resolved)
         .map_err(|e| Error::Config(format!("failed to stat {}: {e}", resolved.display())))?;
@@ -1257,148 +1267,16 @@ async fn run_apply_files(
     Ok(())
 }
 
-/// Walk `dir` for `*.yaml` / `*.yml` regular files (case-sensitive,
-/// non-recursive — matches the eventconf precedent). Sorted output.
-fn list_yaml_files(dir: &std::path::Path) -> Result<Vec<PathBuf>> {
-    let entries = std::fs::read_dir(dir)
-        .map_err(|e| Error::Config(format!("read_dir {}: {e}", dir.display())))?;
-    let mut out: Vec<PathBuf> = entries
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| {
-            matches!(
-                p.extension().and_then(|s| s.to_str()),
-                Some("yaml") | Some("yml")
-            )
-        })
-        .collect();
-    out.sort();
-    Ok(out)
-}
 
-/// Result of classifying the `-f` argument: a single resolved file
-/// goes through the single-file fast-path; a multi-file dispatch
-/// goes through the directory orchestrator. `Single` carries the
-/// resolved path so glob patterns that happen to match exactly one
-/// file still get `--diff` / `--explain-rescan` support.
-#[derive(Debug)]
-enum ApplyDispatch {
-    Single(PathBuf),
-    Multi(Vec<PathBuf>),
-}
-
-/// Detect whether a string contains glob metacharacters per the
-/// `glob` crate's pattern language. `*`, `?`, and `[` are the three
-/// triggers. Backslash escapes are NOT considered here — operators
-/// who pass a literal `*` should quote it differently.
-fn looks_like_glob(s: &str) -> bool {
-    s.bytes().any(|b| matches!(b, b'*' | b'?' | b'['))
-}
-
-/// Resolve the `-f` argument into either a single-file or a
-/// multi-file dispatch decision. The classification:
-///
-/// 1. Path contains glob metacharacters AND does NOT literally
-///    exist as a regular file → expand via the `glob` crate (honors
-///    `**` recursion, single `*` matches one path segment, dotfile
-///    matching disabled via `require_literal_leading_dot: true`).
-///    Single-match-glob collapses to `Single` so `--diff` /
-///    `--explain-rescan` still work.
-/// 2. Path exists literally (whether or not it contains glob chars)
-///    → either `Single(file)` or `Multi(dir-listing)` based on
-///    whether it's a regular file or a directory.
-/// 3. Otherwise → error.
-///
-/// Glob expansion filters out non-`*.yaml`/`*.yml` matches and
-/// non-regular entries (with a stderr count when entries are
-/// dropped, so the operator isn't surprised). Empty match-sets
-/// raise a config error.
-fn resolve_apply_input(file: &std::path::Path) -> Result<ApplyDispatch> {
-    // Reject non-UTF-8 paths upfront. The `glob` crate's pattern
-    // language and our metachar detection both assume UTF-8; lossy
-    // conversion would corrupt the input.
-    let raw = file.to_str().ok_or_else(|| {
-        Error::Config(format!(
-            "path {:?} is not valid UTF-8 — pass a UTF-8 file path or glob pattern",
-            file.display()
-        ))
-    })?;
-
-    if looks_like_glob(raw) {
-        // Literal-glob-in-filename safety net: a file literally
-        // named `weird[1].yaml` (legal on POSIX) takes precedence
-        // over glob expansion. Operators with such filenames get
-        // the single-file fast-path; the glob expansion would
-        // otherwise error or produce surprising matches.
-        if file.is_file() {
-            return Ok(ApplyDispatch::Single(file.to_path_buf()));
-        }
-        let opts = glob::MatchOptions {
-            case_sensitive: true,
-            require_literal_separator: false,
-            // Don't match `.hidden.yaml`, `.tmp/`, editor backups,
-            // or anything under a dotted directory unless the
-            // pattern explicitly starts with a dot.
-            require_literal_leading_dot: true,
-        };
-        let entries = glob::glob_with(raw, opts).map_err(|e| {
-            Error::Config(format!("invalid glob pattern {raw:?}: {e}"))
-        })?;
-        let mut total_files = 0usize;
-        let mut out: Vec<PathBuf> = Vec::new();
-        for entry in entries {
-            let p = entry.map_err(|e| Error::Config(format!("glob match error: {e}")))?;
-            if !p.is_file() {
-                continue;
-            }
-            total_files += 1;
-            let ext = p.extension().and_then(|s| s.to_str());
-            if !matches!(ext, Some("yaml") | Some("yml")) {
-                continue;
-            }
-            out.push(p);
-        }
-        out.sort();
-        if out.is_empty() {
-            if total_files > 0 {
-                return Err(Error::Config(format!(
-                    "glob pattern {raw:?} matched {total_files} file(s), none with \
-                     .yaml / .yml extension"
-                )));
-            }
-            return Err(Error::Config(format!(
-                "glob pattern {raw:?} matched no files"
-            )));
-        }
-        let dropped = total_files - out.len();
-        if dropped > 0 {
-            eprintln!(
-                "note: glob {raw:?} matched {total_files} file(s); {dropped} non-yaml \
-                 entries skipped"
-            );
-        }
-        // Collapse single-match glob to Single so --diff and
-        // --explain-rescan still apply.
-        if out.len() == 1 {
-            return Ok(ApplyDispatch::Single(out.into_iter().next().unwrap()));
-        }
-        return Ok(ApplyDispatch::Multi(out));
-    }
-
-    let meta = std::fs::metadata(file).map_err(|e| {
-        Error::Config(format!("failed to stat {}: {e}", file.display()))
-    })?;
-    if meta.is_dir() {
-        let files = list_yaml_files(file)?;
-        if files.is_empty() {
-            return Err(Error::Config(format!(
-                "{} contains no *.yaml / *.yml files",
-                file.display()
-            )));
-        }
-        return Ok(ApplyDispatch::Multi(files));
-    }
-    Ok(ApplyDispatch::Single(file.to_path_buf()))
+/// Resolve the provisioning `-f` argument by delegating to the
+/// shared `onmsctl_core::apply_input::resolve_apply_input` helper
+/// with `&["yaml", "yml"]` as the extension filter. Eventconf calls
+/// the same helper with the same filter (see the parity Requirement
+/// in `harden-provisioning-and-eventconf-parity`'s spec deltas).
+fn resolve_apply_input(
+    file: &std::path::Path,
+) -> Result<onmsctl_core::apply_input::ApplyDispatch> {
+    onmsctl_core::apply_input::resolve_apply_input(file, &["yaml", "yml"])
 }
 
 fn count_failures(outcome: &MultiApplyOutcome) -> usize {
@@ -1610,171 +1488,28 @@ mod tests {
         assert!(s.contains("Effective rescanExisting=false"));
     }
 
-    // ---- Glob dispatch (looks_like_glob + resolve_apply_input) ----
+    // ---- Glob dispatch ----
+    //
+    // The bulk of glob-dispatch tests live in
+    // `onmsctl_core::apply_input::tests`. Provisioning keeps a single
+    // sanity test here verifying that the wrapper actually delegates
+    // to the shared helper with the yaml/yml extension filter — if
+    // the wrapper is renamed or removed, this test breaks.
 
     #[test]
-    fn looks_like_glob_detects_metacharacters() {
-        assert!(looks_like_glob("*.yaml"));
-        assert!(looks_like_glob("requisitions/*.yaml"));
-        assert!(looks_like_glob("requisitions/**/*.yaml"));
-        assert!(looks_like_glob("acme-?.yaml"));
-        assert!(looks_like_glob("[ab]cme.yaml"));
-    }
-
-    #[test]
-    fn looks_like_glob_passes_plain_paths() {
-        assert!(!looks_like_glob("acme.yaml"));
-        assert!(!looks_like_glob("requisitions/"));
-        assert!(!looks_like_glob("requisitions/acme-prod.yaml"));
-        assert!(!looks_like_glob(""));
-    }
-
-    #[test]
-    fn resolve_apply_input_routes_single_file_to_single() {
-        let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().join("acme.yaml");
-        std::fs::write(&path, "apiVersion: v1\n").unwrap();
-        match resolve_apply_input(&path).unwrap() {
-            ApplyDispatch::Single(resolved) => assert_eq!(resolved, path),
-            ApplyDispatch::Multi(_) => panic!("single file should resolve to Single"),
-        }
-    }
-
-    #[test]
-    fn resolve_apply_input_routes_directory_to_multi() {
+    fn resolve_apply_input_wrapper_dispatches_to_core_with_yaml_filter() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("a.yaml"), "x").unwrap();
         std::fs::write(tmp.path().join("b.yml"), "x").unwrap();
         std::fs::write(tmp.path().join("README.md"), "x").unwrap();
         match resolve_apply_input(tmp.path()).unwrap() {
             ApplyDispatch::Multi(files) => {
-                assert_eq!(files.len(), 2, "non-yaml files filtered out");
-                assert!(files[0].ends_with("a.yaml"));
-                assert!(files[1].ends_with("b.yml"));
-            }
-            ApplyDispatch::Single(_) => panic!("directory should resolve to Multi"),
-        }
-    }
-
-    #[test]
-    fn resolve_apply_input_expands_glob_non_recursively() {
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(tmp.path().join("a.yaml"), "x").unwrap();
-        std::fs::write(tmp.path().join("b.yaml"), "x").unwrap();
-        let subdir = tmp.path().join("subdir");
-        std::fs::create_dir(&subdir).unwrap();
-        std::fs::write(subdir.join("nested.yaml"), "x").unwrap();
-        // Non-recursive glob — should NOT pick up subdir/nested.yaml.
-        let pattern = tmp.path().join("*.yaml");
-        match resolve_apply_input(&pattern).unwrap() {
-            ApplyDispatch::Multi(files) => {
-                assert_eq!(files.len(), 2);
-                assert!(files.iter().all(|f| !f.ends_with("nested.yaml")));
-            }
-            ApplyDispatch::Single(_) => panic!("glob should resolve to Multi"),
-        }
-    }
-
-    #[test]
-    fn resolve_apply_input_expands_recursive_glob_with_double_star() {
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(tmp.path().join("a.yaml"), "x").unwrap();
-        let subdir = tmp.path().join("subdir");
-        std::fs::create_dir(&subdir).unwrap();
-        std::fs::write(subdir.join("nested.yaml"), "x").unwrap();
-        // Recursive glob — `**` picks up both levels.
-        let pattern = tmp.path().join("**/*.yaml");
-        match resolve_apply_input(&pattern).unwrap() {
-            ApplyDispatch::Multi(files) => {
-                assert!(files.len() >= 2);
-                let names: Vec<String> = files
-                    .iter()
-                    .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
-                    .collect();
-                assert!(names.contains(&"a.yaml".to_string()));
-                assert!(names.contains(&"nested.yaml".to_string()));
-            }
-            ApplyDispatch::Single(_) => panic!("recursive glob should resolve to Multi"),
-        }
-    }
-
-    #[test]
-    fn resolve_apply_input_glob_with_no_matches_is_a_config_error() {
-        let tmp = tempfile::tempdir().unwrap();
-        let pattern = tmp.path().join("nonexistent-*.yaml");
-        assert!(resolve_apply_input(&pattern).is_err());
-    }
-
-    #[test]
-    fn resolve_apply_input_glob_matching_exactly_one_file_collapses_to_single() {
-        // H1: when a glob happens to match exactly one file, route
-        // through Single so --diff and --explain-rescan still work.
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(tmp.path().join("acme-prod.yaml"), "x").unwrap();
-        std::fs::write(tmp.path().join("README.md"), "x").unwrap();
-        let pattern = tmp.path().join("acme-*.yaml");
-        match resolve_apply_input(&pattern).unwrap() {
-            ApplyDispatch::Single(p) => assert!(p.ends_with("acme-prod.yaml")),
-            ApplyDispatch::Multi(_) => {
-                panic!("single-file glob match should collapse to Single")
-            }
-        }
-    }
-
-    #[test]
-    fn resolve_apply_input_literal_glob_in_filename_routes_to_single() {
-        // H3: a file literally named `weird[1].yaml` (legal on
-        // POSIX) takes precedence over glob expansion.
-        let tmp = tempfile::tempdir().unwrap();
-        let weird = tmp.path().join("weird[1].yaml");
-        std::fs::write(&weird, "x").unwrap();
-        match resolve_apply_input(&weird).unwrap() {
-            ApplyDispatch::Single(resolved) => assert_eq!(resolved, weird),
-            ApplyDispatch::Multi(_) => {
-                panic!("literal filename with glob-like chars should route to Single")
-            }
-        }
-    }
-
-    #[test]
-    fn resolve_apply_input_glob_excludes_dotfiles() {
-        // H4: `require_literal_leading_dot: true` — `*.yaml` does
-        // NOT match `.hidden.yaml`.
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(tmp.path().join("a.yaml"), "x").unwrap();
-        std::fs::write(tmp.path().join(".hidden.yaml"), "x").unwrap();
-        let pattern = tmp.path().join("*.yaml");
-        match resolve_apply_input(&pattern).unwrap() {
-            ApplyDispatch::Single(p) => {
-                // Single because only a.yaml matched after the
-                // dotfile was filtered out.
-                assert!(p.ends_with("a.yaml"));
-            }
-            ApplyDispatch::Multi(files) => {
-                assert!(files.iter().all(|f| !f.ends_with(".hidden.yaml")));
-            }
-        }
-    }
-
-    #[test]
-    fn resolve_apply_input_glob_matches_yml_extension_too() {
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(tmp.path().join("a.yaml"), "x").unwrap();
-        std::fs::write(tmp.path().join("b.yml"), "x").unwrap();
-        let pattern = tmp.path().join("*");
-        match resolve_apply_input(&pattern).unwrap() {
-            ApplyDispatch::Multi(files) => {
-                assert_eq!(files.len(), 2);
-                let names: Vec<String> = files
-                    .iter()
-                    .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
-                    .collect();
-                assert!(names.contains(&"a.yaml".to_string()));
-                assert!(names.contains(&"b.yml".to_string()));
+                assert_eq!(files.len(), 2, "yaml + yml kept, README.md filtered");
             }
             ApplyDispatch::Single(_) => {
-                panic!("two yaml files should resolve to Multi")
+                panic!("directory with two yaml files should resolve to Multi")
             }
+            other => panic!("unexpected dispatch variant: {other:?}"),
         }
     }
 }
