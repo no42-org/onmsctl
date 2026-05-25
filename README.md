@@ -348,7 +348,7 @@ fixture demonstrates the pinned style with every modeled field.
 | `provision.pl` | `onmsctl` |
 |---|---|
 | `provision.pl requisition add <fs>` | `onmsctl requisition apply -f <fs>.yaml` (with an empty `nodes: []` payload) |
-| `provision.pl requisition remove <fs>` | `onmsctl requisition delete <fs>` (issues both `DELETE /rest/requisitions/<fs>` AND `DELETE /rest/requisitions/deployed/<fs>` in one call; idempotent on both — 404 on either snapshot is treated as success. Remove the local YAML separately) |
+| `provision.pl requisition remove <fs>` | `onmsctl requisition delete <fs> --yes` (issues both `DELETE /rest/requisitions/<fs>` AND `DELETE /rest/requisitions/deployed/<fs>` in one call; idempotent on both — 404 on either snapshot is treated as success. **`--yes` is required in non-TTY contexts (CI / scripting); TTY contexts prompt interactively.** Remove the local YAML separately) |
 | `provision.pl requisition import <fs>` | `onmsctl requisition import <fs>` (PUT-only, no re-POST; add `--wait` to block until completion) |
 | `provision.pl requisition list` | `onmsctl requisition list` (wraps `GET /rest/requisitionNames`; respects `-o` table / json / yaml) |
 | `provision.pl node add <fs> <foreign-id> <node-label>` | Recommended: edit YAML, `onmsctl requisition apply -f <fs>.yaml`. Imperative escape-hatch: `onmsctl requisition node add <fs> <foreign-id> --label <node-label>` (the imperative path stages the change in the pending requisition; run `requisition import <fs>` to take effect, or `apply -f` to also resync the rest of the YAML) |
@@ -412,6 +412,39 @@ schema lives at `schemas/requisition.schema.json` and ships with the
 same `x-onmsctl-list-kind` annotations the diff engine uses to
 distinguish ordered lists (detectors / policies) from sets
 (categories / services).
+
+### Breaking changes since v0.1.0
+
+#### `onmsctl requisition delete <fs>` now requires `--yes` confirmation
+
+The verb purges both pending and deployed snapshots in a single
+call, which has a wider blast radius than any other Write verb in
+the CLI. Starting in v0.1.1 it refuses to run without explicit
+operator acknowledgement:
+
+- **Interactive (TTY) shells:** the verb shows the requisition name
+  + node count + last-import timestamp (ISO-8601 UTC) and prompts
+  for `yes` or `y` (case-insensitive). Any other input — including
+  `no`, empty line, or Ctrl-D / EOF — aborts with a **non-zero**
+  exit so calling scripts can distinguish cancellation from success.
+- **Non-interactive contexts (CI, scripted pipelines, redirected
+  stderr):** the verb refuses with a clear error pointing at
+  `--yes`. There is no "auto-confirm because non-interactive" path.
+  Both stdin AND stderr must be TTYs for the interactive prompt
+  to fire.
+
+**CI fix recipe:** add `--yes` (or `-y`) to existing invocations:
+
+```sh
+# Before:
+onmsctl requisition delete acme-prod
+
+# After:
+onmsctl requisition delete acme-prod --yes
+```
+
+If the requisition already doesn't exist on the server (both
+snapshots return 404), the verb is a no-op and skips the prompt.
 
 ---
 

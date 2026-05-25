@@ -193,10 +193,24 @@ pub enum RequisitionCmd {
     /// the deployed DELETE fails with a non-404 error, the operator
     /// is warned about the orphaned deployed snapshot before the
     /// error propagates.
+    ///
+    /// **Confirmation guard (BREAKING since v0.1.1):** because the
+    /// verb purges both pending and deployed snapshots in one call,
+    /// it refuses to run without explicit operator acknowledgement.
+    /// With `--yes` / `-y`, the verb proceeds without prompting.
+    /// Without `--yes`: TTY → interactive prompt showing the
+    /// requisition name + node count; non-TTY (CI) → refuse with a
+    /// clear error pointing at `--yes`. Pre-delete 404 (requisition
+    /// already absent) skips confirmation entirely.
     Delete {
         /// Foreign-source name to purge.
         #[arg(value_parser = nonempty_fs)]
         fs: String,
+        /// Skip the interactive confirmation prompt and proceed with
+        /// the dual DELETE. In non-TTY (CI / scripting) contexts
+        /// this flag is REQUIRED — the verb refuses without it.
+        #[arg(short = 'y', long)]
+        yes: bool,
     },
     /// Export server requisitions to declarative `kind: Requisition`
     /// YAML — the reverse of `apply`.
@@ -384,7 +398,7 @@ impl RequisitionCmd {
             } => run_import(fs, rescan_existing, wait_flags, ctx).await,
             RequisitionCmd::Status { fs } => run_status(fs, ctx).await,
             RequisitionCmd::List => run_list_requisitions(ctx).await,
-            RequisitionCmd::Delete { fs } => run_delete_requisition(fs, ctx).await,
+            RequisitionCmd::Delete { fs, yes } => run_delete_requisition(fs, yes, ctx).await,
             RequisitionCmd::Export {
                 fs,
                 out,
@@ -1101,9 +1115,126 @@ async fn run_list_requisitions(ctx: &Context) -> Result<()> {
     Ok(())
 }
 
-async fn run_delete_requisition(fs: String, ctx: &Context) -> Result<()> {
+/// Format the interactive confirmation prompt for `requisition
+/// delete`. Pure function so the formatting can be unit-tested
+/// without driving stdin/stdout. Includes the requisition name, the
+/// node count, and the last-import timestamp (when present, rendered
+/// as ISO-8601 UTC via the same helper export uses) so the operator
+/// sees the blast radius before typing `yes`.
+fn format_delete_confirmation_prompt(
+    fs: &str,
+    node_count: usize,
+    last_import_ms: Option<i64>,
+) -> String {
+    let import_clause = match last_import_ms {
+        Some(ms) if ms > 0 => {
+            // Render as `YYYY-MM-DDTHH:MM:SSZ` UTC. Negative or
+            // zero ms is unusable (pre-epoch / unset); fall through
+            // to "never imported" in that case.
+            let t = std::time::UNIX_EPOCH
+                + std::time::Duration::from_millis(ms as u64);
+            format!(", last imported {}", crate::export::format_unix_ts(t))
+        }
+        _ => String::from(", never imported"),
+    };
+    format!(
+        "About to purge Requisition/{fs} ({node_count} node(s){import_clause}). \
+         This deletes BOTH pending and deployed snapshots and cannot be undone.\n\
+         Type 'yes' or 'y' to confirm (case-insensitive): "
+    )
+}
+
+/// Whether operator input at the delete prompt counts as
+/// confirmation. Accepts `yes`/`y` case-insensitively after
+/// whitespace trimming. Anything else (including an empty line or
+/// EOF) is a cancellation.
+fn is_delete_confirmation(line: &str) -> bool {
+    matches!(line.trim().to_ascii_lowercase().as_str(), "yes" | "y")
+}
+
+async fn run_delete_requisition(fs: String, yes: bool, ctx: &Context) -> Result<()> {
+    use std::io::{BufRead, IsTerminal, Write};
+
     let client = OnmsClient::from_context(ctx)?;
     let api = ProvisioningApi::new(&client);
+
+    // ---- Confirmation guard ----
+    //
+    // `--yes` skips the prompt entirely. Without `--yes`:
+    //   - TTY (both stdin AND stderr): GET the requisition to show
+    //     node count + last-import, then prompt. Pre-delete 404 →
+    //     emit a stderr note and fall through to the idempotent
+    //     DELETE path.
+    //   - non-TTY (CI / scripted / stderr redirected): refuse with
+    //     a clear pointer at --yes.
+    //
+    // `confirmed_interactively` tracks whether the operator just
+    // approved a non-empty requisition. Used at the end to mirror
+    // the success outcome to stderr (in case stdout is redirected).
+    //
+    // `preflight_404_already_noted` tracks whether the pre-confirm
+    // GET 404'd and emitted its own "not present" stderr note. The
+    // dual-DELETE absent-on-both path checks this to avoid emitting
+    // a near-duplicate second note.
+    let mut confirmed_interactively = false;
+    let mut preflight_404_already_noted = false;
+    if !yes {
+        let stdin_is_tty = std::io::stdin().is_terminal();
+        let stderr_is_tty = std::io::stderr().is_terminal();
+        if !(stdin_is_tty && stderr_is_tty) {
+            let which = match (stdin_is_tty, stderr_is_tty) {
+                (false, false) => "stdin and stderr are not terminals",
+                (false, true) => "stdin is not a terminal",
+                (true, false) => "stderr is not a terminal (redirected?)",
+                (true, true) => unreachable!(),
+            };
+            return Err(Error::Config(format!(
+                "error: `requisition delete {fs}` requires --yes in non-interactive \
+                 contexts ({which}). Re-run with: onmsctl requisition delete {fs} --yes \
+                 — this guards a destructive operation that purges both pending and \
+                 deployed snapshots in a single call."
+            )));
+        }
+        // TTY path: probe the requisition first so the prompt names
+        // the blast radius. 404 → emit a "skipping confirmation"
+        // note and fall through to the idempotent DELETE path.
+        match api.get_requisition(&fs).await? {
+            Some(req) => {
+                let prompt = format_delete_confirmation_prompt(
+                    &fs,
+                    req.node.len(),
+                    req.last_import,
+                );
+                eprint!("{prompt}");
+                let _ = std::io::stderr().flush();
+                let mut line = String::new();
+                let read = std::io::stdin().lock().read_line(&mut line).map_err(|e| {
+                    Error::Config(format!("reading confirmation from stdin: {e}"))
+                })?;
+                // EOF (Ctrl-D, closed pipe) → treat as cancellation,
+                // not an I/O fault. Operator intent is "no".
+                if read == 0 {
+                    eprintln!();
+                    return Err(Error::Config(format!(
+                        "delete cancelled by operator (EOF on stdin): {fs}"
+                    )));
+                }
+                if !is_delete_confirmation(&line) {
+                    return Err(Error::Config(format!(
+                        "delete cancelled by operator: {fs}"
+                    )));
+                }
+                confirmed_interactively = true;
+            }
+            None => {
+                eprintln!(
+                    "note: requisition '{fs}' is not present on the server (pre-confirm GET returned 404); \
+                     skipping confirmation."
+                );
+                preflight_404_already_noted = true;
+            }
+        }
+    }
 
     // Issue the pending DELETE first. 404 here means the pending
     // snapshot was already absent — fine, the deployed call will
@@ -1134,7 +1265,7 @@ async fn run_delete_requisition(fs: String, ctx: &Context) -> Result<()> {
         }
     };
 
-    if pending_absent && deployed_absent {
+    if pending_absent && deployed_absent && !preflight_404_already_noted {
         eprintln!(
             "note: Requisition/{fs} was not present on the server (both pending and \
              deployed snapshots returned 404); delete was a no-op."
@@ -1165,6 +1296,17 @@ async fn run_delete_requisition(fs: String, ctx: &Context) -> Result<()> {
                 format!("Requisition/{fs}: deleted (pending + deployed snapshots purged)\n");
             write_stdout(line.as_bytes())?;
         }
+    }
+    // Mirror the outcome to stderr when the operator confirmed
+    // interactively — if stdout is redirected (`delete X >log`),
+    // they'd otherwise see no feedback after typing `yes`.
+    // Skipped when both snapshots were absent (no-op delete) since
+    // the stderr note above already covers the operator-visible
+    // case.
+    if confirmed_interactively && !(pending_absent && deployed_absent) {
+        eprintln!(
+            "Requisition/{fs} deleted (pending + deployed snapshots purged)."
+        );
     }
     Ok(())
 }
@@ -1412,6 +1554,71 @@ mod tests {
         assert!(nonempty_string("").is_err());
         assert!(nonempty_string("   ").is_err());
         assert_eq!(nonempty_string("foo").unwrap(), "foo");
+    }
+
+    // ---- requisition delete confirmation prompt ----
+
+    #[test]
+    fn delete_prompt_includes_fs_node_count_and_last_import_as_iso8601() {
+        // 1_700_000_000_000 ms = 2023-11-14T22:13:20Z
+        let s = format_delete_confirmation_prompt("acme-prod", 42, Some(1_700_000_000_000));
+        assert!(s.contains("Requisition/acme-prod"));
+        assert!(s.contains("42 node(s)"));
+        // ISO-8601 UTC rendering via the shared `format_unix_ts`
+        // helper — operators can read this at a glance.
+        assert!(s.contains("2023-11-14T22:13:20Z"), "prompt was: {s}");
+        assert!(!s.contains("epoch-ms"));
+        assert!(s.contains("Type 'yes' or 'y' to confirm"));
+    }
+
+    #[test]
+    fn delete_prompt_handles_never_imported_requisition() {
+        let s = format_delete_confirmation_prompt("acme-prod", 0, None);
+        assert!(s.contains("0 node(s)"));
+        assert!(s.contains("never imported"));
+        assert!(!s.contains("epoch-ms"));
+    }
+
+    #[test]
+    fn delete_prompt_treats_non_positive_epoch_ms_as_never_imported() {
+        // Negative or zero ms is unusable; fall through to "never".
+        let s = format_delete_confirmation_prompt("acme-prod", 0, Some(0));
+        assert!(s.contains("never imported"));
+        let s = format_delete_confirmation_prompt("acme-prod", 0, Some(-1));
+        assert!(s.contains("never imported"));
+    }
+
+    #[test]
+    fn delete_prompt_warns_about_dual_snapshot_purge() {
+        let s = format_delete_confirmation_prompt("acme-prod", 1, None);
+        // The blast-radius wording is load-bearing — operators need
+        // to know this deletes BOTH snapshots.
+        assert!(s.contains("BOTH pending and deployed"));
+        assert!(s.contains("cannot be undone"));
+    }
+
+    #[test]
+    fn is_delete_confirmation_accepts_yes_and_y_case_insensitive() {
+        assert!(is_delete_confirmation("yes"));
+        assert!(is_delete_confirmation("YES"));
+        assert!(is_delete_confirmation("Yes"));
+        assert!(is_delete_confirmation("y"));
+        assert!(is_delete_confirmation("Y"));
+        // Trailing newline from read_line.
+        assert!(is_delete_confirmation("yes\n"));
+        // Surrounding whitespace tolerated.
+        assert!(is_delete_confirmation("  yes  \n"));
+    }
+
+    #[test]
+    fn is_delete_confirmation_rejects_anything_else() {
+        assert!(!is_delete_confirmation(""));
+        assert!(!is_delete_confirmation("\n"));
+        assert!(!is_delete_confirmation("no"));
+        assert!(!is_delete_confirmation("yeah"));
+        assert!(!is_delete_confirmation("ya"));
+        assert!(!is_delete_confirmation("yes please"));
+        assert!(!is_delete_confirmation("0"));
     }
 
     #[test]

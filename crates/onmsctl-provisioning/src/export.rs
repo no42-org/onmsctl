@@ -189,7 +189,11 @@ fn render_yaml(local: &RequisitionLocal, default_fs_inlined: bool) -> Result<Str
 /// Format a SystemTime as `YYYY-MM-DDTHH:MM:SSZ` UTC without pulling
 /// in chrono. Computes Gregorian Y/M/D from epoch seconds using the
 /// standard algorithm (Howard Hinnant's date library, public domain).
-fn format_unix_ts(t: SystemTime) -> String {
+///
+/// `pub(crate)` so the requisition `delete` confirmation prompt
+/// (`cmd/mod.rs::format_delete_confirmation_prompt`) can render
+/// `last-import` timestamps the same way export does.
+pub(crate) fn format_unix_ts(t: SystemTime) -> String {
     let secs = t
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
