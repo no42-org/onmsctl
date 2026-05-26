@@ -5,17 +5,27 @@
 
 //! Multi-file `apply -f <dir>` orchestration.
 //!
-//! Two-phase semantics (task 5.10–5.12):
+//! Two-phase semantics (Group 4 of `harden-provisioning-and-eventconf-parity`):
 //!
-//! - **Phase 1** parses every input file and runs cross-file
-//!   collision checks (per task 5.12). No HTTP is issued during
-//!   phase 1, so an abort here costs only file-system reads.
-//! - **Phase 2** applies parseable files in alphabetical path order.
-//!   Default is continue-on-error (later files still attempt their
-//!   apply when earlier files failed); `--stop-on-error` switches
-//!   to kubectl-style fail-fast (task 5.11).
+//! - **Phase 1** (`plan_directory`) parses every input file, runs
+//!   cross-file collision checks, AND issues per-file read-only GETs
+//!   to compute a [`RequisitionPlan`] for each file. Phase 1 is
+//!   all-or-nothing: a parse failure, schema error, or hard collision
+//!   aborts before Phase 2 begins, **and** any plan-time HTTP error
+//!   propagates as `Err` from `plan_directory`. No mutating call is
+//!   ever issued in Phase 1.
+//! - **Phase 2** (`execute_multi`) consumes the pre-computed plans
+//!   and issues mutating calls in alphabetical path order. The
+//!   Phase-1 diff is reused — Phase 2 does no second GET. Default is
+//!   continue-on-error; `--stop-on-error` switches to kubectl-style
+//!   fail-fast.
 //!
-//! Collision rules (task 5.12):
+//! Dry-run lives **above** this layer: the CLI calls `plan_directory`,
+//! renders the combined plan to stderr, and either returns (dry-run)
+//! or proceeds to `execute_multi`. Neither `apply_directory` nor the
+//! plan-vs-execute split honors `dry_run` internally.
+//!
+//! Collision rules (unchanged from the original implementation):
 //!
 //! - **Duplicate `metadata.name`** across files is a HARD ERROR.
 //!   Two files trying to manage the same requisition is almost
@@ -33,16 +43,21 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::api::ProvisioningApi;
-use crate::apply::{ApplyOptions, ApplyOutcome, RescanChoice, apply_requisition};
+use crate::apply::{
+    ApplyOptions, ApplyOutcome, ApplyState, PlanState, RequisitionPlan, RescanChoice, execute_plan,
+    plan_requisition,
+};
 use crate::model::RequisitionLocal;
 use onmsctl_core::{Error, Result};
 
-/// Caller-facing knobs for [`apply_directory`].
+/// Caller-facing knobs for [`apply_directory`] / [`execute_multi`].
+///
+/// `dry_run` is intentionally absent — the multi-file pipeline
+/// honors dry-run at the CLI boundary by calling `plan_directory` +
+/// rendering + returning. See module docs.
 #[derive(Debug, Clone, Default)]
 pub struct MultiApplyOptions {
-    /// Forwarded to every per-file `apply_requisition` call.
-    pub dry_run: bool,
-    /// Forwarded to every per-file `apply_requisition` call.
+    /// Forwarded to every per-file `plan_requisition` call.
     pub rescan_existing: RescanChoice,
     /// When `true`, the first per-file error in phase 2 halts the
     /// loop and remaining files are skipped. Default `false`
@@ -129,29 +144,67 @@ impl CollisionFinding {
     }
 }
 
-/// Apply every requisition YAML in `files` against the provided
-/// [`ProvisioningApi`]. Returns once every file has been processed
-/// (or earlier on `--stop-on-error` / phase-1 abort).
+/// What Phase 1 would do for a single file: a `RequisitionPlan`
+/// pinned to its source path. Carries enough context for the CLI
+/// layer to render the combined Phase-1 plan and for
+/// [`execute_multi`] to run Phase 2 without re-GETting.
+#[derive(Debug, Clone)]
+pub struct MultiApplyPlanEntry {
+    pub path: PathBuf,
+    pub plan: RequisitionPlan,
+}
+
+/// Phase-1 output across all input files.
 ///
-/// `files` is consumed by reference — the caller (CLI layer) is
-/// responsible for glob expansion + filtering. Phase 2 processes
-/// files in alphabetical path order regardless of the input list's
-/// order.
-pub async fn apply_directory(
+/// Either `entries` is populated (Phase 1 succeeded across every
+/// file; Phase 2 can proceed via [`execute_multi`]) **or** one of
+/// `parse_errors` / `collision_findings` carries an abort reason.
+/// `is_aborted()` is the load-bearing predicate.
+#[derive(Debug, Clone)]
+pub struct MultiApplyPlan {
+    /// Per-file plan entries in alphabetical path order. Populated
+    /// only when no parse error and no hard collision aborted Phase 1.
+    pub entries: Vec<MultiApplyPlanEntry>,
+    /// Parse failures encountered in Phase 1a. Non-empty implies
+    /// Phase 1 aborted before Phase 1b's collision check ran.
+    pub parse_errors: Vec<MultiApplyFileResult>,
+    /// Cross-file findings raised in Phase 1b. May include warnings
+    /// (`DuplicateForeignId`) even on the success path.
+    pub collision_findings: Vec<CollisionFinding>,
+}
+
+impl MultiApplyPlan {
+    /// True when Phase 1 surfaced a parse error or a hard collision.
+    /// Callers (CLI layer, [`apply_directory`]) MUST NOT call
+    /// [`execute_multi`] on an aborted plan.
+    pub fn is_aborted(&self) -> bool {
+        !self.parse_errors.is_empty()
+            || self
+                .collision_findings
+                .iter()
+                .any(CollisionFinding::is_hard_error)
+    }
+}
+
+/// Phase 1: parse + collision-check + per-file `plan_requisition`.
+///
+/// All-or-nothing semantics: returns a [`MultiApplyPlan`] populated
+/// either with full `entries` (success) or with the abort reason in
+/// `parse_errors` / `collision_findings`. Plan-time HTTP failures
+/// (e.g. a `GET /requisitions/{fs}` returning 500) propagate as
+/// `Err` — the caller can't safely act on partial plan information.
+///
+/// Files are processed in alphabetical path order, deterministically,
+/// regardless of caller-provided ordering.
+pub async fn plan_directory(
     files: &[PathBuf],
     api: &ProvisioningApi<'_>,
     opts: &MultiApplyOptions,
-) -> Result<MultiApplyOutcome> {
+) -> Result<MultiApplyPlan> {
     // ---- Phase 1a: read + parse every file ----
-    // Sort up-front so per-file results land in alphabetical path
-    // order regardless of caller-provided order. This also pins
-    // the order collision findings reference (deterministic).
     let mut sorted: Vec<PathBuf> = files.to_vec();
     sorted.sort();
 
-    // Two parallel collections: successfully-parsed (PathBuf,
-    // RequisitionLocal) pairs and per-file parse errors that need
-    // to surface as Err results.
     let mut parsed: Vec<(PathBuf, RequisitionLocal)> = Vec::new();
     let mut parse_errors: Vec<MultiApplyFileResult> = Vec::new();
 
@@ -166,34 +219,99 @@ pub async fn apply_directory(
         }
     }
 
+    // Parse failure aborts Phase 1 (spec: "all-or-nothing"). Skip
+    // collision check and per-file planning — we already know we
+    // won't reach Phase 2.
+    if !parse_errors.is_empty() {
+        return Ok(MultiApplyPlan {
+            entries: vec![],
+            parse_errors,
+            collision_findings: vec![],
+        });
+    }
+
     // ---- Phase 1b: cross-file collision checks ----
     let collisions = check_collisions(&parsed);
 
     if collisions.iter().any(CollisionFinding::is_hard_error) {
-        // Hard error — return parse results plus collision findings
-        // without issuing any writes. The CLI layer renders the
-        // findings + exits non-zero.
-        return Ok(MultiApplyOutcome {
-            results: parse_errors,
+        // Hard collision: skip per-file planning. Soft collisions
+        // (foreignId warnings) don't reach here — they fall through
+        // to per-file planning below and ride along on the plan.
+        return Ok(MultiApplyPlan {
+            entries: vec![],
+            parse_errors: vec![],
             collision_findings: collisions,
-            state: MultiApplyState::AbortedPhase1,
         });
     }
 
-    // ---- Phase 2: per-file apply in alphabetical order ----
+    // ---- Phase 1c: per-file plan_requisition (GET only) ----
     let per_file_opts = ApplyOptions {
-        dry_run: opts.dry_run,
+        dry_run: false,
         rescan_existing: opts.rescan_existing,
     };
 
-    let mut results = parse_errors;
-    let mut stopped_early = false;
+    let mut entries: Vec<MultiApplyPlanEntry> = Vec::with_capacity(parsed.len());
     for (path, local) in parsed {
-        let outcome = apply_requisition(&local, api, &per_file_opts).await;
+        let plan = plan_requisition(&local, api, &per_file_opts).await?;
+        entries.push(MultiApplyPlanEntry { path, plan });
+    }
+
+    Ok(MultiApplyPlan {
+        entries,
+        parse_errors: vec![],
+        collision_findings: collisions,
+    })
+}
+
+/// Phase 2: execute the pre-computed plans in alphabetical path
+/// order. Reuses each entry's `RequisitionPlan` — no second GET.
+///
+/// `Unchanged` entries short-circuit into an `Unchanged` outcome
+/// without any write. Other entries flow through the single-file
+/// `execute_plan`. Errors collect per-file when `stop_on_error` is
+/// `false` (default) and halt the loop when it's `true`.
+///
+/// # Panics
+///
+/// Panics in `debug_assert!` (and returns `Err` in release) if the
+/// plan is aborted — callers must check [`MultiApplyPlan::is_aborted`]
+/// first.
+pub async fn execute_multi(
+    plan: MultiApplyPlan,
+    api: &ProvisioningApi<'_>,
+    opts: &MultiApplyOptions,
+) -> Result<MultiApplyOutcome> {
+    debug_assert!(
+        !plan.is_aborted(),
+        "execute_multi called on an aborted MultiApplyPlan — caller bug"
+    );
+    if plan.is_aborted() {
+        return Err(Error::Config(
+            "execute_multi called on an aborted MultiApplyPlan".into(),
+        ));
+    }
+
+    let mut results: Vec<MultiApplyFileResult> = Vec::with_capacity(plan.entries.len());
+    let mut stopped_early = false;
+
+    for entry in plan.entries {
+        let MultiApplyPlanEntry { path, plan: rp } = entry;
+        let fs_name = rp.local.metadata.name.clone();
+
+        // Per-entry short-circuit: Unchanged plans produce an
+        // `Unchanged` ApplyOutcome without any HTTP. Other plans
+        // hand off to single-file execute_plan, which reuses the
+        // pre-computed delta + decisions.
+        let outcome = if rp.state == PlanState::Unchanged {
+            Ok(rp.into_short_circuit(ApplyState::Unchanged))
+        } else {
+            execute_plan(rp, api).await
+        };
+
         let is_err = outcome.is_err();
         results.push(MultiApplyFileResult {
             path,
-            foreign_source: Some(local.metadata.name.clone()),
+            foreign_source: Some(fs_name),
             outcome: outcome.map_err(|e| e.to_string()),
         });
         if is_err && opts.stop_on_error {
@@ -202,12 +320,6 @@ pub async fn apply_directory(
         }
     }
 
-    // `results` is already in alphabetical path order: phase 1a
-    // pushed parse errors in `sorted` order, and the phase-2 loop
-    // iterates `parsed` (also in `sorted` order) for the
-    // successful + failed-apply rows. No re-sort needed; pinned
-    // here so a future refactor that breaks insertion order also
-    // updates this contract or restores an explicit sort.
     debug_assert!(
         results.windows(2).all(|w| w[0].path <= w[1].path),
         "MultiApplyOutcome.results must remain in alphabetical path order"
@@ -215,13 +327,35 @@ pub async fn apply_directory(
 
     Ok(MultiApplyOutcome {
         results,
-        collision_findings: collisions,
+        collision_findings: plan.collision_findings,
         state: if stopped_early {
             MultiApplyState::StoppedEarly
         } else {
             MultiApplyState::Completed
         },
     })
+}
+
+/// Apply every requisition YAML in `files` against the provided
+/// [`ProvisioningApi`]. Thin orchestrator over [`plan_directory`]
+/// and [`execute_multi`] — does **not** honor dry-run. Callers that
+/// need the dry-run / combined-plan rendering boundary should compose
+/// `plan_directory` + their own render + (optionally) `execute_multi`
+/// directly, the way `cmd/mod.rs::run_apply_files` does.
+pub async fn apply_directory(
+    files: &[PathBuf],
+    api: &ProvisioningApi<'_>,
+    opts: &MultiApplyOptions,
+) -> Result<MultiApplyOutcome> {
+    let plan = plan_directory(files, api, opts).await?;
+    if plan.is_aborted() {
+        return Ok(MultiApplyOutcome {
+            results: plan.parse_errors,
+            collision_findings: plan.collision_findings,
+            state: MultiApplyState::AbortedPhase1,
+        });
+    }
+    execute_multi(plan, api, opts).await
 }
 
 /// Read a file and parse it as `RequisitionLocal`. Errors carry the
@@ -496,7 +630,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn parse_error_surfaces_as_err_result_continue_on_error() {
+    async fn parse_error_aborts_phase_1_before_any_http() {
         let (server, client) = mock_with_client().await;
         let api = ProvisioningApi::new(&client);
 
@@ -506,33 +640,9 @@ mod tests {
         std::fs::write(&good, yaml_with_name("good-req", "g1")).unwrap();
         std::fs::write(&bad, "this is not valid yaml: [[[").unwrap();
 
-        Mock::given(method("GET"))
-            .and(path("/rest/requisitions/good-req"))
-            .respond_with(ResponseTemplate::new(404))
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path("/rest/foreignSources/good-req"))
-            .respond_with(ResponseTemplate::new(404))
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path("/rest/foreignSources/default"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(empty_default_fs()))
-            .mount(&server)
-            .await;
-        Mock::given(method("POST"))
-            .and(path("/rest/requisitions/good-req"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
-            .mount(&server)
-            .await;
-        Mock::given(method("PUT"))
-            .and(path("/rest/requisitions/good-req/import"))
-            .respond_with(ResponseTemplate::new(200))
-            .mount(&server)
-            .await;
-
-        // Continue-on-error default — both files in results, bad is Err.
+        // No HTTP mocks defined — Phase 1 must abort before any GET
+        // or non-GET is issued. Wiremock panics on unmatched requests.
+        let _ = server;
         let outcome = apply_directory(
             &[good.clone(), bad.clone()],
             &api,
@@ -540,13 +650,14 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(outcome.state, MultiApplyState::Completed);
-        assert_eq!(outcome.results.len(), 2);
-        // Alphabetical: bad before good.
+        assert_eq!(outcome.state, MultiApplyState::AbortedPhase1);
+        // Only the parse error surfaces in results; the good file is
+        // not planned because Phase 1 is all-or-nothing.
+        assert_eq!(outcome.results.len(), 1);
         assert_eq!(outcome.results[0].path, bad);
         assert!(outcome.results[0].outcome.is_err());
-        assert_eq!(outcome.results[1].path, good);
-        assert!(outcome.results[1].outcome.is_ok());
+        // No collision findings — Phase 1b never ran.
+        assert!(outcome.collision_findings.is_empty());
     }
 
     #[tokio::test]
@@ -558,21 +669,34 @@ mod tests {
         let a = dir.path().join("a.yaml");
         let b = dir.path().join("b.yaml");
         let c = dir.path().join("c.yaml");
-        // a parses but its apply fails (500); b would succeed; c never tried.
+        // All three plan successfully (404 → WouldCreate). In Phase 2:
+        // a's POST fails (500); --stop-on-error halts before b / c.
         std::fs::write(&a, yaml_with_name("a-req", "a1")).unwrap();
         std::fs::write(&b, yaml_with_name("b-req", "b1")).unwrap();
         std::fs::write(&c, yaml_with_name("c-req", "c1")).unwrap();
 
-        Mock::given(method("GET"))
-            .and(path("/rest/requisitions/a-req"))
-            .respond_with(ResponseTemplate::new(500))
-            .mount(&server)
-            .await;
-        // No mocks for b-req or c-req — wiremock unmatched-request
-        // panic if Phase 2 reaches them.
+        for name in ["a-req", "b-req", "c-req"] {
+            Mock::given(method("GET"))
+                .and(path(format!("/rest/requisitions/{name}")))
+                .respond_with(ResponseTemplate::new(404))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(format!("/rest/foreignSources/{name}")))
+                .respond_with(ResponseTemplate::new(404))
+                .mount(&server)
+                .await;
+        }
         Mock::given(method("GET"))
             .and(path("/rest/foreignSources/default"))
             .respond_with(ResponseTemplate::new(200).set_body_json(empty_default_fs()))
+            .mount(&server)
+            .await;
+        // Phase 2: a fails (500), no mocks for b / c — wiremock
+        // unmatched-request panic if Phase 2 reaches them.
+        Mock::given(method("POST"))
+            .and(path("/rest/requisitions/a-req"))
+            .respond_with(ResponseTemplate::new(500))
             .mount(&server)
             .await;
 
@@ -587,9 +711,118 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(outcome.state, MultiApplyState::StoppedEarly);
-        // Only `a` was attempted.
+        // Only `a` was attempted in Phase 2.
         assert_eq!(outcome.results.len(), 1);
         assert_eq!(outcome.results[0].path, a);
         assert!(outcome.results[0].outcome.is_err());
+    }
+
+    #[tokio::test]
+    async fn plan_directory_dry_run_path_issues_only_gets() {
+        // Task 4.7: when the CLI dry-run flow calls plan_directory
+        // and skips execute_multi, only GET requests touch the wire
+        // — no POST, no PUT, no DELETE.
+        let (server, client) = mock_with_client().await;
+        let api = ProvisioningApi::new(&client);
+
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.yaml");
+        let b = dir.path().join("b.yaml");
+        std::fs::write(&a, yaml_with_name("a-req", "a1")).unwrap();
+        std::fs::write(&b, yaml_with_name("b-req", "b1")).unwrap();
+
+        for name in ["a-req", "b-req"] {
+            Mock::given(method("GET"))
+                .and(path(format!("/rest/requisitions/{name}")))
+                .respond_with(ResponseTemplate::new(404))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(format!("/rest/foreignSources/{name}")))
+                .respond_with(ResponseTemplate::new(404))
+                .mount(&server)
+                .await;
+        }
+        Mock::given(method("GET"))
+            .and(path("/rest/foreignSources/default"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(empty_default_fs()))
+            .mount(&server)
+            .await;
+        // NO POST / PUT / DELETE mocks. If plan_directory issues any,
+        // wiremock panics on the unmatched request.
+
+        let plan = plan_directory(&[a.clone(), b.clone()], &api, &MultiApplyOptions::default())
+            .await
+            .unwrap();
+
+        assert!(!plan.is_aborted());
+        assert_eq!(plan.entries.len(), 2);
+        assert_eq!(plan.entries[0].path, a);
+        assert_eq!(plan.entries[1].path, b);
+        // Both plans are WouldCreate (404 + 404).
+        assert_eq!(plan.entries[0].plan.state, PlanState::WouldCreate);
+        assert_eq!(plan.entries[1].plan.state, PlanState::WouldCreate);
+    }
+
+    #[tokio::test]
+    async fn execute_multi_outcomes_match_phase1_plan() {
+        // Task 4.6: Phase 2's per-file outcomes correspond 1-1 to
+        // Phase 1's plan entries — alphabetical order, same files,
+        // ApplyOutcome.state derives from RequisitionPlan.state.
+        let (server, client) = mock_with_client().await;
+        let api = ProvisioningApi::new(&client);
+
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.yaml");
+        let b = dir.path().join("b.yaml");
+        std::fs::write(&a, yaml_with_name("a-req", "a1")).unwrap();
+        std::fs::write(&b, yaml_with_name("b-req", "b1")).unwrap();
+
+        for name in ["a-req", "b-req"] {
+            Mock::given(method("GET"))
+                .and(path(format!("/rest/requisitions/{name}")))
+                .respond_with(ResponseTemplate::new(404))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(format!("/rest/foreignSources/{name}")))
+                .respond_with(ResponseTemplate::new(404))
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(path(format!("/rest/requisitions/{name}")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+                .mount(&server)
+                .await;
+            Mock::given(method("PUT"))
+                .and(path(format!("/rest/requisitions/{name}/import")))
+                .respond_with(ResponseTemplate::new(200))
+                .mount(&server)
+                .await;
+        }
+        Mock::given(method("GET"))
+            .and(path("/rest/foreignSources/default"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(empty_default_fs()))
+            .mount(&server)
+            .await;
+
+        let plan = plan_directory(&[a.clone(), b.clone()], &api, &MultiApplyOptions::default())
+            .await
+            .unwrap();
+        let phase1_states: Vec<_> = plan.entries.iter().map(|e| e.plan.state).collect();
+
+        let outcome = execute_multi(plan, &api, &MultiApplyOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(outcome.state, MultiApplyState::Completed);
+        assert_eq!(outcome.results.len(), 2);
+        assert_eq!(outcome.results[0].path, a);
+        assert_eq!(outcome.results[1].path, b);
+        // Phase 1 WouldCreate → Phase 2 Created, one-for-one.
+        for (i, ph1) in phase1_states.iter().enumerate() {
+            assert_eq!(*ph1, PlanState::WouldCreate);
+            let ph2 = outcome.results[i].outcome.as_ref().unwrap();
+            assert_eq!(ph2.state, ApplyState::Created);
+        }
     }
 }

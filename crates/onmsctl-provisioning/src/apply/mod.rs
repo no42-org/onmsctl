@@ -163,8 +163,10 @@ pub enum PlanState {
 impl RequisitionPlan {
     /// Produce an `ApplyOutcome` from a plan as if Phase 2 were
     /// skipped. Used for the `--dry-run` and `Unchanged` short-circuit
-    /// paths in [`apply_requisition`] and [`execute_plan`].
-    fn into_short_circuit(self, state: ApplyState) -> ApplyOutcome {
+    /// paths in [`apply_requisition`] and [`execute_plan`], plus the
+    /// multi-file orchestrator's per-entry `Unchanged` short-circuit
+    /// (Group 4).
+    pub(super) fn into_short_circuit(self, state: ApplyState) -> ApplyOutcome {
         ApplyOutcome {
             state,
             delta: self.delta,

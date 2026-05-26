@@ -25,10 +25,10 @@ use onmsctl_core::{
 };
 
 use crate::api::ProvisioningApi;
-use crate::apply::multi::CollisionCode;
+use crate::apply::multi::{CollisionCode, MultiApplyPlan, execute_multi, plan_directory};
 use crate::apply::{
-    ApplyOptions, MultiApplyOptions, MultiApplyOutcome, MultiApplyState, RescanChoice,
-    apply_directory, apply_requisition,
+    ApplyOptions, MultiApplyOptions, MultiApplyOutcome, MultiApplyState, PlanState, RescanChoice,
+    apply_requisition,
 };
 use crate::convert::{ConversionResult, FindingCode, Severity, convert_directory, explain};
 use crate::export::{export_all_requisitions, export_requisition};
@@ -1328,9 +1328,11 @@ pub(super) fn write_stdout_line(bytes: &[u8]) -> Result<()> {
 
 /// Run `apply` over a pre-resolved list of requisition YAML files
 /// (from either directory expansion or glob expansion). Two-phase
-/// orchestration lives in `apply::multi::apply_directory`; this
-/// function handles output rendering and exit-code semantics. The
-/// caller is responsible for producing a non-empty file list.
+/// orchestration: `plan_directory` reads deployed state per file and
+/// builds a [`MultiApplyPlan`]; the combined plan is rendered to
+/// stderr; `--dry-run` exits here; otherwise `execute_multi` consumes
+/// the pre-computed plans. The caller is responsible for producing a
+/// non-empty file list.
 async fn run_apply_files(
     files: Vec<PathBuf>,
     dry_run: bool,
@@ -1343,21 +1345,57 @@ async fn run_apply_files(
     let api = ProvisioningApi::new(&client);
 
     let opts = MultiApplyOptions {
-        dry_run,
         rescan_existing: rescan_existing.into(),
         stop_on_error,
     };
 
-    let outcome = apply_directory(&files, &api, &opts).await?;
+    // ---- Phase 1: plan ----
+    let plan = plan_directory(&files, &api, &opts).await?;
+    render_combined_plan(&plan, dry_run)?;
+
+    if plan.is_aborted() {
+        // Map Phase-1 abort cause to a structured error. The
+        // diagnostics (collision messages / parse errors) already
+        // landed on stderr via render_combined_plan.
+        let hard_collisions: Vec<&str> = plan
+            .collision_findings
+            .iter()
+            .filter(|f| matches!(f.code, CollisionCode::DuplicateMetadataName))
+            .map(|f| f.key.as_str())
+            .collect();
+        if !hard_collisions.is_empty() {
+            let first = hard_collisions.first().copied().unwrap_or("?");
+            return Err(Error::Config(format!(
+                "phase-1 abort: {} hard collision(s) detected (first: '{first}'); \
+                 see stderr for the full list",
+                hard_collisions.len()
+            )));
+        }
+        let parse_count = plan.parse_errors.len();
+        return Err(Error::Config(format!(
+            "phase-1 abort: {parse_count} parse error(s); see stderr"
+        )));
+    }
+
+    if dry_run {
+        // Spec: --dry-run exits 0 after Phase 1, after the combined
+        // plan is rendered. No structured stdout — JSON / YAML
+        // consumers that need the plan in a parseable shape should
+        // open an issue; the text plan on stderr is the contract.
+        return Ok(());
+    }
+
+    // ---- Phase 2: execute ----
+    let outcome = execute_multi(plan, &api, &opts).await?;
     render_multi_outcome(&outcome, ctx)?;
 
     // ---- --wait phase ----
     // Honor --wait by polling per-file in the order results were
     // produced (alphabetical path). Only Created/Updated successes
-    // are waited on; parse errors and apply errors skip naturally.
-    // Wait errors abort the whole sequence (the Horizon-side import
-    // is already done; what failed is the polling, which is a real
-    // problem the operator wants to surface).
+    // are waited on; apply errors skip naturally. Wait errors abort
+    // the whole sequence (the Horizon-side import is already done;
+    // what failed is the polling, which is a real problem the
+    // operator wants to surface).
     if wait_flags.wait {
         for r in &outcome.results {
             if let (Some(fs), Ok(apply)) = (&r.foreign_source, &r.outcome) {
@@ -1376,29 +1414,84 @@ async fn run_apply_files(
         }
     }
 
-    // Exit-code policy: AbortedPhase1 / StoppedEarly / any per-file
-    // Err → non-zero. Use Error::PartialSuccess (exit 1) as the
-    // umbrella class; the structured outcome (rendered above) tells
-    // the operator which files failed.
+    // Exit-code policy: any per-file Err → PartialSuccess (exit 1).
+    // Phase-1 aborts already returned above.
     let failed = count_failures(&outcome);
-    if outcome.state == MultiApplyState::AbortedPhase1 {
-        let hard_collisions: Vec<&str> = outcome
-            .collision_findings
-            .iter()
-            .filter(|f| matches!(f.code, CollisionCode::DuplicateMetadataName))
-            .map(|f| f.key.as_str())
-            .collect();
-        let first = hard_collisions.first().copied().unwrap_or("?");
-        return Err(Error::Config(format!(
-            "phase-1 abort: {} hard collision(s) detected (first: '{first}'); \
-             see stderr for the full list",
-            hard_collisions.len()
-        )));
-    }
     if failed > 0 {
         return Err(Error::PartialSuccess { failed });
     }
     Ok(())
+}
+
+/// Render the Phase-1 combined plan to stderr.
+///
+/// Format (multi-line so the output scales to N files):
+///
+/// ```text
+/// Phase 1 plan (3 files):
+///   ✓ a.yaml -> Requisition/acme-prod: would-create (rescanExisting=true, foreignSource=created)
+///   ✓ b.yaml -> Requisition/site-b: unchanged
+///   ✓ c.yaml -> Requisition/lab-east: would-update (rescanExisting=false, foreignSource=no-change)
+/// ```
+///
+/// Aborted Phase 1 (parse error or hard collision) renders the
+/// header as `ABORTED` and lists the parse-error rows / collision
+/// findings below.
+fn render_combined_plan(plan: &MultiApplyPlan, dry_run: bool) -> Result<()> {
+    if plan.is_aborted() {
+        eprintln!("Phase 1 plan: ABORTED");
+    } else {
+        let n = plan.entries.len();
+        let suffix = if dry_run { " (dry-run)" } else { "" };
+        eprintln!(
+            "Phase 1 plan ({n} file{}):{suffix}",
+            if n == 1 { "" } else { "s" }
+        );
+    }
+
+    for entry in &plan.entries {
+        eprintln!(
+            "  ✓ {} -> Requisition/{}: {} (rescanExisting={}, foreignSource={})",
+            entry.path.display(),
+            entry.plan.local.metadata.name,
+            plan_state_word(entry.plan.state),
+            entry.plan.rescan_existing,
+            fs_word(entry.plan.foreign_source_action),
+        );
+    }
+
+    for err in &plan.parse_errors {
+        let msg = err
+            .outcome
+            .as_ref()
+            .err()
+            .map(String::as_str)
+            .unwrap_or("?");
+        eprintln!("  ✗ {} -> (parse error): {msg}", err.path.display());
+    }
+
+    // Collision findings — hard errors as "error", soft duplicates
+    // as "warn". These are emitted here (Phase 1) rather than after
+    // Phase 2 so the spec scenario "warning ... continue to Phase 2"
+    // observes the warning BEFORE any non-GET HTTP request.
+    for f in &plan.collision_findings {
+        let sev = if matches!(f.code, CollisionCode::DuplicateMetadataName) {
+            "error"
+        } else {
+            "warn"
+        };
+        eprintln!("collision {sev}: {}", f.message);
+    }
+
+    Ok(())
+}
+
+fn plan_state_word(s: PlanState) -> &'static str {
+    match s {
+        PlanState::Unchanged => "unchanged",
+        PlanState::WouldCreate => "would-create",
+        PlanState::WouldUpdate => "would-update",
+    }
 }
 
 /// Resolve the provisioning `-f` argument by delegating to the
@@ -1419,18 +1512,12 @@ fn count_failures(outcome: &MultiApplyOutcome) -> usize {
 }
 
 /// Render the multi-apply outcome by the global output-format flag.
+///
+/// Collision findings are NOT rendered here — they land on stderr
+/// via `render_combined_plan` during Phase 1 so that the spec's
+/// "warning ... continue to Phase 2" scenario observes the warning
+/// before any non-GET HTTP request.
 fn render_multi_outcome(outcome: &MultiApplyOutcome, ctx: &Context) -> Result<()> {
-    // Collision findings always go to stderr (matches the convert
-    // verb pattern). Hard errors get tagged "error", warnings "warn".
-    for f in &outcome.collision_findings {
-        let sev = if matches!(f.code, CollisionCode::DuplicateMetadataName) {
-            "error"
-        } else {
-            "warn"
-        };
-        eprintln!("collision {sev}: {}", f.message);
-    }
-
     match ctx.output_format {
         OutputFormat::Json => {
             let json = serde_json::to_string_pretty(outcome)
