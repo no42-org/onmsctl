@@ -23,8 +23,8 @@ use serde::Serialize;
 
 use crate::convert::finding::{Finding, FindingCode, Severity};
 use crate::convert::xml::{
-    ForeignSourceXml, InterfaceXml, NodeXml, ParameterXml, RequisitionXml, parse_foreign_source,
-    parse_requisition,
+    Extras, ForeignSourceXml, InterfaceXml, NodeXml, ParameterXml, RequisitionXml,
+    parse_foreign_source, parse_requisition,
 };
 use crate::model::{
     ApiVersion, Detector, ForeignSourceSpec, Interface, Kind, Metadata, Node, Parameter, Policy,
@@ -188,17 +188,28 @@ fn build_local(
     findings: &mut Vec<Finding>,
     source_path: Option<&PathBuf>,
 ) -> RequisitionLocal {
-    // PR001 surfaces XML attributes / elements that exist in the
-    // source but have no place in the local model. Catalog of
-    // currently-unmodeled-but-known: node.@location, node.@city,
-    // interface.@status, interface.@descr, all <meta-data> elements.
-    flag_unmodeled(req, findings, source_path);
+    // PR001 surfaces XML content that exists in the source but has
+    // no place in the local model — both the enumerated catalog
+    // (node.@location / @city / @status / @descr / <meta-data>) AND
+    // arbitrary custom attrs / child elements captured by the
+    // `#[serde(flatten)] extras` on each XML DTO. The data is
+    // recorded in a nested `serde_norway::Mapping` (no flat dotted
+    // keys, so foreign-ids and IPs containing `.` don't collide)
+    // and surfaces via the `metadata.x-onmsctl-unmodeled` annotation
+    // on the emitted YAML.
+    let mut unmodeled: serde_norway::Mapping = serde_norway::Mapping::new();
+    flag_unmodeled(req, findings, &mut unmodeled, source_path);
 
     RequisitionLocal {
         api_version: ApiVersion,
         kind: Kind,
         metadata: Metadata {
             name: req.foreign_source.clone(),
+            unmodeled: if unmodeled.is_empty() {
+                None
+            } else {
+                Some(unmodeled)
+            },
         },
         spec: Spec {
             foreign_source: fs.map(convert_fs),
@@ -276,33 +287,76 @@ fn convert_parameter(p: &ParameterXml) -> Parameter {
     }
 }
 
-/// Walk the requisition XML for known-unmodeled attributes / elements
-/// and emit one PR001 finding each. Catalog is enumerated here rather
-/// than dynamically discovered so the warning matrix is auditable.
-fn flag_unmodeled(req: &RequisitionXml, findings: &mut Vec<Finding>, src: Option<&PathBuf>) {
+/// Walk the requisition XML for unmodeled content, emit PR001
+/// findings, AND record everything into `unmodeled` as a nested
+/// `serde_norway::Mapping` so the YAML round-trips it via the
+/// `metadata.x-onmsctl-unmodeled` annotation. Two sources of
+/// unmodeled content:
+///
+/// 1. **Enumerated catalog**: known-but-unmodeled fields on the
+///    typed XML DTOs (`node.@location`, `@city`, `interface.@status`,
+///    `@descr`, all `<meta-data>` elements). PR001 finding text
+///    names each.
+/// 2. **Extras passthrough**: anything captured by the
+///    `#[serde(flatten)] extras` field on each XML DTO — custom
+///    vendor attrs, unknown child elements, future Horizon
+///    additions. PR001 finding text names each.
+///
+/// Annotation keys are XML-attribute-prefix-stripped (`@location` →
+/// `location`) so operators reading the YAML don't have to know
+/// about XML's `@` convention. Catalog keys take precedence over
+/// extras when names collide (the catalog is the documented contract;
+/// extras would otherwise duplicate it).
+fn flag_unmodeled(
+    req: &RequisitionXml,
+    findings: &mut Vec<Finding>,
+    unmodeled: &mut serde_norway::Mapping,
+    src: Option<&PathBuf>,
+) {
+    // Root-level extras (custom attrs / child elements on
+    // `<model-import>`). Surface as top-level keys on the
+    // annotation alongside `nodes`.
+    record_extras(
+        &req.extras,
+        unmodeled,
+        findings,
+        || "model-import (root)".to_string(),
+        src,
+    );
+
+    let mut nodes_map = serde_norway::Mapping::new();
     for n in &req.nodes {
-        if n.location.is_some() {
+        let mut node_map = serde_norway::Mapping::new();
+        if let Some(loc) = n.location.as_deref() {
             findings.push(
                 Finding::new(
                     FindingCode::Pr001,
                     format!(
-                        "node '{}': @location is not modeled in YAML (dropped)",
+                        "node '{}': 'location' is not modeled in YAML (preserved as annotation)",
                         n.foreign_id
                     ),
                 )
                 .opt_source(src),
             );
+            node_map.insert(
+                "location".into(),
+                serde_norway::Value::String(loc.to_string()),
+            );
         }
-        if n.city.is_some() {
+        if let Some(city) = n.city.as_deref() {
             findings.push(
                 Finding::new(
                     FindingCode::Pr001,
                     format!(
-                        "node '{}': @city is not modeled in YAML (dropped — use asset instead)",
+                        "node '{}': 'city' is not modeled in YAML (preserved as annotation — use asset for round-trip)",
                         n.foreign_id
                     ),
                 )
                 .opt_source(src),
+            );
+            node_map.insert(
+                "city".into(),
+                serde_norway::Value::String(city.to_string()),
             );
         }
         if !n.meta_data.is_empty() {
@@ -310,19 +364,30 @@ fn flag_unmodeled(req: &RequisitionXml, findings: &mut Vec<Finding>, src: Option
                 Finding::new(
                     FindingCode::Pr001,
                     format!(
-                        "node '{}': <meta-data> elements are not modeled in YAML ({} dropped)",
+                        "node '{}': <meta-data> elements are not modeled in YAML ({} preserved as annotation)",
                         n.foreign_id,
                         n.meta_data.len()
                     ),
                 )
                 .opt_source(src),
             );
+            node_map.insert("meta-data".into(), meta_data_to_value(&n.meta_data));
         }
+        // Node-level extras passthrough.
+        record_extras(
+            &n.extras,
+            &mut node_map,
+            findings,
+            || format!("node '{}'", n.foreign_id),
+            src,
+        );
+
+        let mut ifaces_map = serde_norway::Mapping::new();
         for iface in &n.interfaces {
-            // PR005: snmp-primary value isn't one of P/S/N. The
-            // local-model SnmpPrimary enum rejects unknown variants
-            // at parse-time, so without this finding the operator
-            // sees a silent drop instead of a useful warning.
+            let mut iface_map = serde_norway::Mapping::new();
+            // PR005 (invalid snmp-primary) is a hard drop, not
+            // unmodeled — the value is invalid, not just
+            // unrepresented. Keep out of the annotation.
             if let Some(val) = iface.snmp_primary.as_deref()
                 && parse_snmp_primary(val).is_none()
             {
@@ -337,28 +402,36 @@ fn flag_unmodeled(req: &RequisitionXml, findings: &mut Vec<Finding>, src: Option
                     .opt_source(src),
                 );
             }
-            if iface.status.is_some() {
+            if let Some(status) = iface.status.as_deref() {
                 findings.push(
                     Finding::new(
                         FindingCode::Pr001,
                         format!(
-                            "node '{}' interface {}: @status is not modeled in YAML (dropped)",
+                            "node '{}' interface {}: 'status' is not modeled in YAML (preserved as annotation)",
                             n.foreign_id, iface.ip_addr
                         ),
                     )
                     .opt_source(src),
                 );
+                iface_map.insert(
+                    "status".into(),
+                    serde_norway::Value::String(status.to_string()),
+                );
             }
-            if iface.descr.is_some() {
+            if let Some(descr) = iface.descr.as_deref() {
                 findings.push(
                     Finding::new(
                         FindingCode::Pr001,
                         format!(
-                            "node '{}' interface {}: @descr is not modeled in YAML (dropped)",
+                            "node '{}' interface {}: 'descr' is not modeled in YAML (preserved as annotation)",
                             n.foreign_id, iface.ip_addr
                         ),
                     )
                     .opt_source(src),
+                );
+                iface_map.insert(
+                    "descr".into(),
+                    serde_norway::Value::String(descr.to_string()),
                 );
             }
             if !iface.meta_data.is_empty() {
@@ -366,7 +439,7 @@ fn flag_unmodeled(req: &RequisitionXml, findings: &mut Vec<Finding>, src: Option
                     Finding::new(
                         FindingCode::Pr001,
                         format!(
-                            "node '{}' interface {}: <meta-data> elements not modeled ({} dropped)",
+                            "node '{}' interface {}: <meta-data> elements not modeled ({} preserved as annotation)",
                             n.foreign_id,
                             iface.ip_addr,
                             iface.meta_data.len()
@@ -374,14 +447,28 @@ fn flag_unmodeled(req: &RequisitionXml, findings: &mut Vec<Finding>, src: Option
                     )
                     .opt_source(src),
                 );
+                iface_map
+                    .insert("meta-data".into(), meta_data_to_value(&iface.meta_data));
             }
+            // Interface-level extras passthrough.
+            record_extras(
+                &iface.extras,
+                &mut iface_map,
+                findings,
+                || format!("node '{}' interface {}", n.foreign_id, iface.ip_addr),
+                src,
+            );
+
+            // Services with unmodeled content.
+            let mut svcs_map = serde_norway::Mapping::new();
             for svc in &iface.monitored_services {
+                let mut svc_map = serde_norway::Mapping::new();
                 if !svc.meta_data.is_empty() {
                     findings.push(
                         Finding::new(
                             FindingCode::Pr001,
                             format!(
-                                "node '{}' interface {} service '{}': <meta-data> elements not modeled ({} dropped)",
+                                "node '{}' interface {} service '{}': <meta-data> elements not modeled ({} preserved as annotation)",
                                 n.foreign_id,
                                 iface.ip_addr,
                                 svc.service_name,
@@ -390,10 +477,140 @@ fn flag_unmodeled(req: &RequisitionXml, findings: &mut Vec<Finding>, src: Option
                         )
                         .opt_source(src),
                     );
+                    svc_map.insert(
+                        "meta-data".into(),
+                        meta_data_to_value(&svc.meta_data),
+                    );
+                }
+                record_extras(
+                    &svc.extras,
+                    &mut svc_map,
+                    findings,
+                    || format!(
+                        "node '{}' interface {} service '{}'",
+                        n.foreign_id, iface.ip_addr, svc.service_name
+                    ),
+                    src,
+                );
+                if !svc_map.is_empty() {
+                    svcs_map.insert(
+                        svc.service_name.clone().into(),
+                        serde_norway::Value::Mapping(svc_map),
+                    );
                 }
             }
+            if !svcs_map.is_empty() {
+                iface_map
+                    .insert("services".into(), serde_norway::Value::Mapping(svcs_map));
+            }
+            if !iface_map.is_empty() {
+                ifaces_map.insert(
+                    iface.ip_addr.clone().into(),
+                    serde_norway::Value::Mapping(iface_map),
+                );
+            }
+        }
+        if !ifaces_map.is_empty() {
+            node_map
+                .insert("interfaces".into(), serde_norway::Value::Mapping(ifaces_map));
+        }
+        if !node_map.is_empty() {
+            nodes_map.insert(
+                n.foreign_id.clone().into(),
+                serde_norway::Value::Mapping(node_map),
+            );
         }
     }
+    if !nodes_map.is_empty() {
+        unmodeled.insert("nodes".into(), serde_norway::Value::Mapping(nodes_map));
+    }
+}
+
+/// Strip the leading `@` from an XML attribute key (quick-xml's
+/// convention) so the operator-facing YAML uses bare names. Child
+/// element keys flow through unchanged.
+fn strip_at(key: &str) -> &str {
+    key.strip_prefix('@').unwrap_or(key)
+}
+
+/// Copy unclaimed fields from a `#[serde(flatten)] extras` map into
+/// the annotation `target` mapping, stripping `@` prefixes from
+/// keys. Emits a PR001 finding per entry — `context_label` builds
+/// the human-readable scope string lazily (only called when extras
+/// are present).
+///
+/// Collision policy: if an extras key collides with a catalog key
+/// already on `target` (e.g. `<location>NY</location>` child vs
+/// `@location="HQ"` attr — both strip to `location`), the catalog
+/// value is kept and a distinct PR001 finding is emitted reporting
+/// the shadowed child element, so the data-loss is auditable rather
+/// than silent.
+fn record_extras<L: Fn() -> String>(
+    extras: &Extras,
+    target: &mut serde_norway::Mapping,
+    findings: &mut Vec<Finding>,
+    context_label: L,
+    src: Option<&PathBuf>,
+) {
+    if extras.is_empty() {
+        return;
+    }
+    let scope = context_label();
+    for (raw_key_value, value) in extras.iter() {
+        let Some(raw_key) = raw_key_value.as_str() else {
+            continue;
+        };
+        let stripped = strip_at(raw_key).to_string();
+        let key_value = serde_norway::Value::String(stripped.clone());
+        if target.contains_key(&key_value) {
+            // Catalog already claimed this name — record the
+            // shadowed child as an auditable finding instead of
+            // dropping it silently.
+            findings.push(
+                Finding::new(
+                    FindingCode::Pr001,
+                    format!(
+                        "{scope}: '{raw_key}' collides with catalog key '{stripped}' (child shadowed, value not preserved in annotation)"
+                    ),
+                )
+                .opt_source(src),
+            );
+            continue;
+        }
+        findings.push(
+            Finding::new(
+                FindingCode::Pr001,
+                format!("{scope}: '{stripped}' is not modeled in YAML (preserved as annotation)"),
+            )
+            .opt_source(src),
+        );
+        target.insert(key_value, value.clone());
+    }
+}
+
+/// Render a sequence of `<meta-data>` elements as a YAML sequence of
+/// `{context, key, value}` maps for the unmodeled annotation.
+fn meta_data_to_value(items: &[crate::convert::xml::MetaDataXml]) -> serde_norway::Value {
+    let seq: Vec<serde_norway::Value> = items
+        .iter()
+        .map(|m| {
+            let mut map = serde_norway::Mapping::new();
+            map.insert(
+                serde_norway::Value::String("context".into()),
+                serde_norway::Value::String(m.context.clone()),
+            );
+            map.insert(
+                serde_norway::Value::String("key".into()),
+                serde_norway::Value::String(m.key.clone()),
+            );
+            map.insert(
+                serde_norway::Value::String("value".into()),
+                serde_norway::Value::String(m.value.clone()),
+            );
+            serde_norway::Value::Mapping(map)
+        })
+        .collect();
+    serde_norway::Value::Sequence(seq)
 }
 
 // ---------------------------------------------------------------------------
@@ -507,22 +724,160 @@ mod tests {
             .iter()
             .filter(|f| f.code == FindingCode::Pr001)
             .collect();
-        // Expect: location, city, status, descr, interface meta-data,
-        // service meta-data ABSENT (no <meta-data> on service in this
-        // fixture), node meta-data. Total = 6.
-        assert!(
-            pr001s.len() >= 5,
-            "expected >=5 PR001 findings, got {}: {:#?}",
+        // Expected catalog findings (REQ_WITH_UNMODELED in this file):
+        //   1. node 'web01' @location
+        //   2. node 'web01' @city
+        //   3. node 'web01' <meta-data> (1 entry)
+        //   4. interface 10.0.0.1 @status
+        //   5. interface 10.0.0.1 @descr
+        //   6. interface 10.0.0.1 <meta-data> (1 entry)
+        // No service-level <meta-data> in the fixture. Total = 6.
+        assert_eq!(
+            pr001s.len(),
+            6,
+            "expected exactly 6 PR001 findings, got {}: {:#?}",
             pr001s.len(),
             pr001s
         );
-        // Spot-check the categorization.
-        assert!(pr001s.iter().any(|f| f.message.contains("@location")));
-        assert!(pr001s.iter().any(|f| f.message.contains("@city")));
-        assert!(pr001s.iter().any(|f| f.message.contains("@status")));
-        assert!(pr001s.iter().any(|f| f.message.contains("@descr")));
+        // Spot-check the categorization (messages now show stripped
+        // YAML keys, not the XML `@` prefix).
+        assert!(pr001s.iter().any(|f| f.message.contains("'location'")));
+        assert!(pr001s.iter().any(|f| f.message.contains("'city'")));
+        assert!(pr001s.iter().any(|f| f.message.contains("'status'")));
+        assert!(pr001s.iter().any(|f| f.message.contains("'descr'")));
         // Exit code is 1 because PR001s are Warnings.
         assert_eq!(r.exit_code(), 1);
+    }
+
+    #[test]
+    fn unmodeled_content_round_trips_via_metadata_annotation() {
+        // PR001 unmodeled attributes/elements are no longer silently
+        // dropped — they're preserved under
+        // `metadata.x-onmsctl-unmodeled` as a NESTED YAML map (not
+        // flat dotted keys, so foreign-ids and IPs containing `.`
+        // don't collide). Attribute `@` prefixes are stripped from
+        // keys for operator-facing readability.
+        let r = convert_requisition_xml(REQ_WITH_UNMODELED, None, None).unwrap();
+        let yaml = r.yaml.as_ref().expect("yaml emitted");
+        // Deserialize back to verify the structure rather than
+        // string-match brittle YAML formatter output.
+        let parsed: serde_norway::Value =
+            serde_norway::from_str(yaml).expect("emitted yaml round-trips");
+        let unmodeled = parsed
+            .get("metadata")
+            .and_then(|m| m.get("x-onmsctl-unmodeled"))
+            .expect("x-onmsctl-unmodeled present on metadata");
+        let nodes = unmodeled.get("nodes").expect("nodes key present");
+        let web01 = nodes.get("web01").expect("web01 node entry present");
+        assert_eq!(
+            web01.get("location").and_then(|v| v.as_str()),
+            Some("HQ")
+        );
+        assert_eq!(web01.get("city").and_then(|v| v.as_str()), Some("NYC"));
+        let node_md = web01
+            .get("meta-data")
+            .and_then(|v| v.as_sequence())
+            .expect("node meta-data is a sequence");
+        assert_eq!(node_md.len(), 1);
+        assert_eq!(node_md[0].get("key").and_then(|v| v.as_str()), Some("owner"));
+
+        // Interface entries nested under interfaces.<ip>.
+        let ifaces = web01
+            .get("interfaces")
+            .and_then(|v| v.as_mapping())
+            .expect("interfaces map present");
+        let iface = ifaces
+            .get("10.0.0.1")
+            .expect("interface 10.0.0.1 present (IP with dots maps cleanly)");
+        assert_eq!(iface.get("status").and_then(|v| v.as_str()), Some("1"));
+        assert_eq!(
+            iface.get("descr").and_then(|v| v.as_str()),
+            Some("primary nic")
+        );
+        let iface_md = iface
+            .get("meta-data")
+            .and_then(|v| v.as_sequence())
+            .expect("iface meta-data is a sequence");
+        assert_eq!(iface_md.len(), 1);
+        assert_eq!(iface_md[0].get("key").and_then(|v| v.as_str()), Some("k"));
+    }
+
+    #[test]
+    fn unmodeled_passthrough_captures_custom_vendor_attrs() {
+        // Option B / full passthrough: arbitrary unmodeled XML
+        // (custom vendor attrs, unknown child elements) flows
+        // through `#[serde(flatten)] extras` into the annotation.
+        // `@` prefixes are stripped for operator-facing keys.
+        const REQ_WITH_CUSTOM: &str = r#"<?xml version="1.0"?>
+<model-import foreign-source="acme-prod" some-vendor-attr="vendor-x">
+  <node foreign-id="web01.acme.com" node-label="web01"
+        legacy-tag="tag-1" location="HQ">
+    <interface ip-addr="10.0.0.1" custom-port-mode="trunk"/>
+  </node>
+</model-import>"#;
+        let r = convert_requisition_xml(REQ_WITH_CUSTOM, None, None).unwrap();
+        let yaml = r.yaml.as_ref().expect("yaml emitted");
+        let parsed: serde_norway::Value = serde_norway::from_str(yaml).unwrap();
+        let unmodeled = parsed
+            .get("metadata")
+            .and_then(|m| m.get("x-onmsctl-unmodeled"))
+            .expect("annotation present");
+
+        // Root-level extras captured AS top-level keys (stripped @).
+        assert_eq!(
+            unmodeled.get("some-vendor-attr").and_then(|v| v.as_str()),
+            Some("vendor-x")
+        );
+
+        // Node-level extras nested under nodes.<foreign-id>.
+        // Note: foreign-id contains dots — keys it as a single key
+        // in the nested map, not a dotted path.
+        let nodes = unmodeled.get("nodes").and_then(|v| v.as_mapping()).unwrap();
+        let web01 = nodes.get("web01.acme.com").expect(
+            "foreign-id with dots maps cleanly as a single map key",
+        );
+        assert_eq!(
+            web01.get("legacy-tag").and_then(|v| v.as_str()),
+            Some("tag-1")
+        );
+        // Catalog field also preserved (location).
+        assert_eq!(web01.get("location").and_then(|v| v.as_str()), Some("HQ"));
+
+        // Interface-level extras passthrough.
+        let ifaces = web01.get("interfaces").and_then(|v| v.as_mapping()).unwrap();
+        let iface = ifaces.get("10.0.0.1").unwrap();
+        assert_eq!(
+            iface.get("custom-port-mode").and_then(|v| v.as_str()),
+            Some("trunk")
+        );
+
+        // PR001 findings should mention the custom attrs.
+        let messages: Vec<&str> = r.findings.iter().map(|f| f.message.as_str()).collect();
+        assert!(
+            messages.iter().any(|m| m.contains("some-vendor-attr")),
+            "expected PR001 for root extras, got: {messages:#?}"
+        );
+        assert!(
+            messages.iter().any(|m| m.contains("legacy-tag")),
+            "expected PR001 for node extras, got: {messages:#?}"
+        );
+        assert!(
+            messages.iter().any(|m| m.contains("custom-port-mode")),
+            "expected PR001 for interface extras, got: {messages:#?}"
+        );
+    }
+
+    #[test]
+    fn unmodeled_annotation_is_absent_when_xml_has_no_unmodeled_content() {
+        // Clean XML — no unmodeled attrs / meta-data → the annotation
+        // key should NOT appear in the emitted YAML (serde
+        // skip_serializing_if = "Option::is_none").
+        let r = convert_requisition_xml(REQ_BASIC, None, None).unwrap();
+        let yaml = r.yaml.as_ref().unwrap();
+        assert!(
+            !yaml.contains("x-onmsctl-unmodeled"),
+            "annotation should be absent for clean input, got:\n{yaml}"
+        );
     }
 
     #[test]
@@ -608,5 +963,41 @@ mod tests {
     fn malformed_xml_returns_err_not_panic() {
         let bad = "<model-import><node foreign-id=\"x\"";
         assert!(convert_requisition_xml(bad, None, None).is_err());
+    }
+
+    #[test]
+    fn probe_repeated_unknown_siblings_extras_shape() {
+        // Diagnostic: how does quick-xml route TWO same-named unknown
+        // child elements through #[serde(flatten)] extras: BTreeMap?
+        // Two outcomes possible:
+        //   (a) BTreeMap last-write-wins → only the second survives
+        //       (data loss); we'd need to change the extras shape.
+        //   (b) quick-xml aggregates into a Value::Sequence under one
+        //       key → both survive; no shape change needed.
+        const REQ_DUP: &str = r#"<?xml version="1.0"?>
+<model-import foreign-source="acme">
+  <node foreign-id="web01" node-label="web01">
+    <future-extension key="a"/>
+    <future-extension key="b"/>
+  </node>
+</model-import>"#;
+        let parsed =
+            crate::convert::xml::parse_requisition(REQ_DUP).expect("xml parses");
+        let node_extras = &parsed.nodes[0].extras;
+        let key = serde_norway::Value::String("future-extension".into());
+        let value = node_extras.0.get(&key);
+        let v = value.expect("future-extension key present");
+        match v {
+            serde_norway::Value::Sequence(s) => {
+                assert_eq!(
+                    s.len(),
+                    2,
+                    "expected both siblings preserved as sequence"
+                );
+            }
+            other => panic!(
+                "expected Value::Sequence preserving both siblings, got {other:#?}"
+            ),
+        }
     }
 }

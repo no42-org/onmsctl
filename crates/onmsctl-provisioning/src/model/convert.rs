@@ -59,6 +59,9 @@ pub fn requisition_from_wire(
         kind: Kind,
         metadata: Metadata {
             name: req.foreign_source.clone(),
+            // Wire-side (server → local) never carries unmodeled
+            // annotation; that's a convert-side artifact only.
+            unmodeled: None,
         },
         spec: Spec {
             foreign_source: fs.map(foreign_source_from_wire),
@@ -479,5 +482,58 @@ spec:
         assert_eq!(round_fs.detectors.len(), fs.detectors.len());
         assert_eq!(round_fs.policies.len(), fs.policies.len());
         assert_eq!(round_fs.scan_interval, fs.scan_interval);
+    }
+
+    #[test]
+    fn requisition_to_wire_strips_unmodeled_annotation() {
+        // The PR001 unmodeled-XML annotation is a convert-side
+        // artifact only; the apply path MUST strip it before the
+        // wire body reaches Horizon. This test locks the contract:
+        // a non-empty `metadata.x-onmsctl-unmodeled` block survives
+        // YAML round-trips locally but never appears in the wire
+        // payload (`RequisitionServer` doesn't have the field, so
+        // the serialized JSON can't contain the annotation key).
+        use crate::model::{ApiVersion, Kind, Metadata, RequisitionLocal, Spec};
+
+        // Nested-Mapping annotation: nodes.web01.location = HQ.
+        let mut node_inner = serde_norway::Mapping::new();
+        node_inner.insert(
+            "location".into(),
+            serde_norway::Value::String("HQ".into()),
+        );
+        let mut unmodeled = serde_norway::Mapping::new();
+        unmodeled.insert(
+            "nodes".into(),
+            serde_norway::Value::Mapping({
+                let mut m = serde_norway::Mapping::new();
+                m.insert("web01".into(), serde_norway::Value::Mapping(node_inner));
+                m
+            }),
+        );
+        let local = RequisitionLocal {
+            api_version: ApiVersion,
+            kind: Kind,
+            metadata: Metadata {
+                name: "acme-prod".into(),
+                unmodeled: Some(unmodeled),
+            },
+            spec: Spec {
+                foreign_source: None,
+                nodes: vec![],
+            },
+        };
+
+        let (wire_req, _wire_fs) = requisition_to_wire(&local);
+        let json = serde_json::to_string(&wire_req).unwrap();
+        assert!(
+            !json.contains("x-onmsctl-unmodeled"),
+            "wire payload must not contain the annotation; got: {json}"
+        );
+        assert!(
+            !json.contains("\"location\""),
+            "wire payload must not contain unmodeled values; got: {json}"
+        );
+        // Still has the foreign-source name from metadata.
+        assert_eq!(wire_req.foreign_source, "acme-prod");
     }
 }

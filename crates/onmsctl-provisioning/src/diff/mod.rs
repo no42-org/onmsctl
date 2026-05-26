@@ -86,8 +86,17 @@ pub fn canonicalize(req: &RequisitionLocal) -> Vec<u8> {
 /// Same normalization rules as [`canonicalize`]; exposed so the L2/L3
 /// diff machinery can compare canonical forms directly without
 /// round-tripping through bytes.
+///
+/// The `metadata.x-onmsctl-unmodeled` annotation is stripped before
+/// normalization — it is a local-only audit artifact that does not
+/// participate in apply / `l1_compare`. Including it would cause
+/// `l1_compare(local_with_annotation, remote)` to falsely report
+/// `Changed` even when the spec body is identical.
 pub fn canonical_value(req: &RequisitionLocal) -> Value {
     let mut value: Value = serde_json::to_value(req).expect("RequisitionLocal serializes as JSON");
+    if let Some(metadata) = value.get_mut("metadata").and_then(Value::as_object_mut) {
+        metadata.remove("x-onmsctl-unmodeled");
+    }
     normalize(&mut value, &mut Vec::new());
     value
 }
@@ -588,6 +597,32 @@ mod tests {
     }
 
     // -- Invariants: same logical content -> same canonical bytes ---------
+
+    #[test]
+    fn unmodeled_annotation_does_not_affect_l1_compare() {
+        // metadata.x-onmsctl-unmodeled is a local audit artifact; it
+        // MUST NOT affect L1 equality, otherwise a local YAML with
+        // captured-from-XML annotations would always look "Changed"
+        // against an unannotated server-derived RequisitionLocal even
+        // when spec is identical.
+        let bare = doc("  nodes:\n    - foreignId: web01\n      label: w\n");
+        let annotated = parse(
+            "apiVersion: provisioning.opennms.org/v1\n\
+             kind: Requisition\n\
+             metadata:\n\
+             \x20\x20name: acme-prod\n\
+             \x20\x20x-onmsctl-unmodeled:\n\
+             \x20\x20\x20\x20nodes:\n\
+             \x20\x20\x20\x20\x20\x20web01:\n\
+             \x20\x20\x20\x20\x20\x20\x20\x20location: HQ\n\
+             spec:\n\
+             \x20\x20nodes:\n\
+             \x20\x20\x20\x20- foreignId: web01\n\
+             \x20\x20\x20\x20\x20\x20label: w\n",
+        );
+        assert_eq!(canonicalize(&bare), canonicalize(&annotated));
+        assert_eq!(l1_compare(&bare, &annotated), L1Result::Unchanged);
+    }
 
     #[test]
     fn reordered_object_keys_produce_same_canonical_bytes() {

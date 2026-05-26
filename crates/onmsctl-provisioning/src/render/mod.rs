@@ -57,6 +57,24 @@ pub fn render_apply_diff(local: &RequisitionLocal, outcome: &ApplyOutcome) -> St
     }
 
     writeln!(out, "  rescanExisting: {}", outcome.rescan_existing).ok();
+    // PR001 unmodeled annotation summary (per
+    // `harden-provisioning-and-eventconf-parity` design §D1). If the
+    // local YAML carries an `x-onmsctl-unmodeled` block (typically
+    // from `requisition convert`), surface a one-line count so the
+    // operator sees the annotation exists without drowning the diff
+    // body in raw key/value pairs. The annotation is stripped from
+    // the wire body — this line is purely informational.
+    if let Some(unmodeled) = &local.metadata.unmodeled
+        && !unmodeled.is_empty()
+    {
+        let leaves = count_unmodeled_leaves(unmodeled);
+        let word = if leaves == 1 { "entry" } else { "entries" };
+        writeln!(
+            out,
+            "  metadata.x-onmsctl-unmodeled: {leaves} {word}"
+        )
+        .ok();
+    }
     render_fs_section(&mut out, outcome);
     render_node_section(&mut out, &outcome.delta);
 
@@ -78,6 +96,30 @@ pub fn render_apply_diff(local: &RequisitionLocal, outcome: &ApplyOutcome) -> St
     }
 
     out
+}
+
+/// Count terminal entries in the unmodeled-annotation tree.
+///
+/// Nested structural containers (Mapping / Sequence) recurse so the
+/// count reflects the actual number of preserved leaf values:
+/// - A `Mapping` whose keys are structural (`nodes`, `<foreign-id>`,
+///   `interfaces`, `<ip>`, `services`) is descended into, summing the
+///   leaves under each entry.
+/// - A `Sequence` (e.g. a `meta-data: [...]` block of N elements, or
+///   a `future-extension: [...]` aggregation of repeated unknown
+///   siblings) recurses into each element, summing their leaves.
+/// - Scalar values (String / Number / Bool / Null) count as one
+///   leaf each.
+fn count_unmodeled_leaves(m: &serde_norway::Mapping) -> usize {
+    m.values().map(count_value_leaves).sum()
+}
+
+fn count_value_leaves(v: &serde_norway::Value) -> usize {
+    match v {
+        serde_norway::Value::Mapping(inner) => count_unmodeled_leaves(inner),
+        serde_norway::Value::Sequence(seq) => seq.iter().map(count_value_leaves).sum(),
+        _ => 1,
+    }
 }
 
 fn state_label(state: ApplyState) -> &'static str {
@@ -511,5 +553,183 @@ mod tests {
         );
         let rendered = render_apply_diff(&local, &o);
         assert!(rendered.starts_with("Requisition/acme-prod (dry-run)"));
+    }
+
+    #[test]
+    fn diff_collapses_unmodeled_annotation_to_one_line_summary() {
+        // PR001 unmodeled annotation: the diff renderer surfaces a
+        // count line for non-empty `metadata.x-onmsctl-unmodeled`
+        // instead of dumping every entry. Operators reviewing a
+        // migration `--diff` see "metadata.x-onmsctl-unmodeled: N
+        // entries" — enough to know the annotation exists without
+        // drowning the diff in raw key/value pairs.
+        let mut local = local_with_fs();
+        // Nested-Mapping shape: three scalar leaves under
+        // `nodes.web01` → diff renders "3 entries".
+        let mut node_inner = serde_norway::Mapping::new();
+        node_inner.insert(
+            "location".into(),
+            serde_norway::Value::String("HQ".into()),
+        );
+        node_inner.insert(
+            "city".into(),
+            serde_norway::Value::String("NYC".into()),
+        );
+        node_inner.insert(
+            "legacy-tag".into(),
+            serde_norway::Value::String("tag-1".into()),
+        );
+        let mut unmodeled = serde_norway::Mapping::new();
+        unmodeled.insert(
+            "nodes".into(),
+            serde_norway::Value::Mapping({
+                let mut m = serde_norway::Mapping::new();
+                m.insert("web01".into(), serde_norway::Value::Mapping(node_inner));
+                m
+            }),
+        );
+        local.metadata.unmodeled = Some(unmodeled);
+
+        let delta = RequisitionDelta {
+            nodes_added: vec![NodeRef {
+                foreign_id: "web01".into(),
+                value: json!({}),
+            }],
+            ..Default::default()
+        };
+        let o = outcome(
+            ApplyState::Updated,
+            false,
+            ForeignSourceAction::NoChange,
+            delta,
+            None,
+        );
+        let rendered = render_apply_diff(&local, &o);
+        assert!(
+            rendered.contains("metadata.x-onmsctl-unmodeled: 3 entries"),
+            "expected one-line summary, got:\n{rendered}"
+        );
+        // Should NOT recurse into the annotation map.
+        assert!(!rendered.contains("nodes.web01.@location"));
+        assert!(!rendered.contains("HQ"));
+    }
+
+    #[test]
+    fn diff_unmodeled_count_recurses_into_sequences() {
+        // A `meta-data: [...]` block with 2 entries (each a Mapping
+        // with 3 scalar keys: context/key/value) and 1 sibling scalar
+        // leaf totals 1 + (2 * 3) = 7 leaves. Without recursion
+        // through Sequences, this would mis-report as "2 entries".
+        let mut local = local_with_fs();
+        let entry = |ctx: &str, k: &str, v: &str| {
+            let mut m = serde_norway::Mapping::new();
+            m.insert("context".into(), serde_norway::Value::String(ctx.into()));
+            m.insert("key".into(), serde_norway::Value::String(k.into()));
+            m.insert("value".into(), serde_norway::Value::String(v.into()));
+            serde_norway::Value::Mapping(m)
+        };
+        let mut node_inner = serde_norway::Mapping::new();
+        node_inner.insert(
+            "location".into(),
+            serde_norway::Value::String("HQ".into()),
+        );
+        node_inner.insert(
+            "meta-data".into(),
+            serde_norway::Value::Sequence(vec![
+                entry("r", "owner", "ops"),
+                entry("r", "tier", "1"),
+            ]),
+        );
+        let mut unmodeled = serde_norway::Mapping::new();
+        unmodeled.insert(
+            "nodes".into(),
+            serde_norway::Value::Mapping({
+                let mut m = serde_norway::Mapping::new();
+                m.insert("web01".into(), serde_norway::Value::Mapping(node_inner));
+                m
+            }),
+        );
+        local.metadata.unmodeled = Some(unmodeled);
+
+        let delta = RequisitionDelta {
+            nodes_added: vec![NodeRef {
+                foreign_id: "web01".into(),
+                value: json!({}),
+            }],
+            ..Default::default()
+        };
+        let o = outcome(
+            ApplyState::Updated,
+            false,
+            ForeignSourceAction::NoChange,
+            delta,
+            None,
+        );
+        let rendered = render_apply_diff(&local, &o);
+        assert!(
+            rendered.contains("metadata.x-onmsctl-unmodeled: 7 entries"),
+            "expected 7-leaf count (1 scalar + 2 meta-data * 3 keys), got:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn diff_pluralizes_unmodeled_single_entry_as_entry_not_entries() {
+        let mut local = local_with_fs();
+        // One leaf entry: `nodes.web01.location`.
+        let mut node_inner = serde_norway::Mapping::new();
+        node_inner.insert(
+            "location".into(),
+            serde_norway::Value::String("HQ".into()),
+        );
+        let mut unmodeled = serde_norway::Mapping::new();
+        unmodeled.insert(
+            "nodes".into(),
+            serde_norway::Value::Mapping({
+                let mut m = serde_norway::Mapping::new();
+                m.insert("web01".into(), serde_norway::Value::Mapping(node_inner));
+                m
+            }),
+        );
+        local.metadata.unmodeled = Some(unmodeled);
+
+        let delta = RequisitionDelta {
+            nodes_added: vec![NodeRef {
+                foreign_id: "web01".into(),
+                value: json!({}),
+            }],
+            ..Default::default()
+        };
+        let o = outcome(
+            ApplyState::Updated,
+            false,
+            ForeignSourceAction::NoChange,
+            delta,
+            None,
+        );
+        let rendered = render_apply_diff(&local, &o);
+        assert!(rendered.contains("metadata.x-onmsctl-unmodeled: 1 entry"));
+    }
+
+    #[test]
+    fn diff_omits_unmodeled_line_when_annotation_is_absent() {
+        let local = local_with_fs();
+        // No unmodeled annotation on this fixture.
+        assert!(local.metadata.unmodeled.is_none());
+        let delta = RequisitionDelta {
+            nodes_added: vec![NodeRef {
+                foreign_id: "web01".into(),
+                value: json!({}),
+            }],
+            ..Default::default()
+        };
+        let o = outcome(
+            ApplyState::Updated,
+            false,
+            ForeignSourceAction::NoChange,
+            delta,
+            None,
+        );
+        let rendered = render_apply_diff(&local, &o);
+        assert!(!rendered.contains("x-onmsctl-unmodeled"));
     }
 }

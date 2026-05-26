@@ -161,14 +161,14 @@ fn unmodeled_elements_fixture_raises_seven_pr001s() {
 }
 
 #[test]
-fn truly_unknown_element_passes_silently() {
-    // FORWARD-COMPAT LIMITATION test. The fixture contains a
-    // `<future-extension>` element that quick_xml silently drops
-    // during deserialization. The migrator's flag_unmodeled pass
-    // doesn't (today) detect truly-unknown elements — only the
-    // hand-rolled catalog. This test pins that behavior so a future
-    // change that adds true unknown-element detection breaks the
-    // assertion intentionally.
+fn truly_unknown_element_is_preserved_via_extras_passthrough() {
+    // The fixture contains a `<future-extension>` element that no
+    // typed XML DTO models. Per the `harden-provisioning-and-
+    // eventconf-parity` change (Option B / full passthrough), each
+    // XML DTO carries `#[serde(flatten)] extras` so quick_xml routes
+    // any unmodeled attribute or child element into the catch-all
+    // map. `flag_unmodeled` then emits PR001 and records the data
+    // on `metadata.x-onmsctl-unmodeled`.
     let r = convert_requisition_xml(UNKNOWN_ELEMENT_REQ, None, None).unwrap();
     let pr001s: Vec<_> = r
         .findings
@@ -176,13 +176,26 @@ fn truly_unknown_element_passes_silently() {
         .filter(|f| f.code == FindingCode::Pr001)
         .collect();
     assert!(
-        pr001s.is_empty(),
-        "today PR001 should NOT fire for truly-unknown elements (forward-compat gap); \
-         if this test breaks because you added detection, update the fixture comment + \
-         the PR001 doc-comment in convert/finding.rs"
+        pr001s.iter().any(|f| f.message.contains("future-extension")),
+        "expected PR001 for `<future-extension>`; got: {:#?}",
+        pr001s
     );
     // PR004 still fires (no FS XML) — that's expected.
     assert!(r.findings.iter().any(|f| f.code == FindingCode::Pr004));
+
+    // And the YAML carries the captured passthrough.
+    let yaml = r.yaml.as_ref().expect("yaml emitted");
+    let parsed: serde_norway::Value =
+        serde_norway::from_str(yaml).expect("emitted yaml round-trips");
+    let nodes = parsed
+        .get("metadata")
+        .and_then(|m| m.get("x-onmsctl-unmodeled"))
+        .and_then(|u| u.get("nodes"))
+        .expect("nodes entry present on annotation");
+    assert!(
+        nodes.get("web01").and_then(|n| n.get("future-extension")).is_some(),
+        "annotation should carry the unknown element; got: {nodes:#?}"
+    );
 }
 
 #[test]

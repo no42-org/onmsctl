@@ -1,18 +1,20 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Edge-case fixture (task 8.7): an element name the migrator's
-  catalog does not know about (`<future-extension>`). Documents
-  the FORWARD-COMPAT LIMITATION:
+  Edge-case fixture: an element name the migrator's typed DTOs
+  don't model (`<future-extension>`). Verifies the Option B /
+  full-passthrough contract:
 
-    quick_xml's serde deserializer silently drops unknown elements.
-    The flag_unmodeled pass only checks a hand-rolled catalog of
-    known-unmodeled fields, so this element passes through with no
-    finding.
+    XML DTOs carry an `Extras` (`#[serde(flatten)]`) field that
+    captures any unclaimed attribute or child element. The
+    convert pipeline projects these into the
+    `metadata.x-onmsctl-unmodeled` annotation on the emitted YAML
+    and emits one PR001 finding per stripped key.
 
-  The integration test asserts the silent-drop behavior as a
-  contract — future work to add proper "unknown elements as
-  PR001" detection (parse into Value first, walk against DTO
-  field names) will flip this assertion.
+  The integration test asserts the PASSTHROUGH behavior as a
+  contract — `<future-extension>` now flows through to the
+  annotation under `nodes.web01.future-extension` (a Mapping with
+  the element's attributes), and PR001 fires for the operator to
+  audit.
 -->
 <model-import foreign-source="future-fs">
   <node foreign-id="web01" node-label="web01">

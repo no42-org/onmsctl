@@ -21,7 +21,84 @@
 //! elements still parses. Unknown elements / attributes flow through
 //! to the PR001 finding via a wrapper pass at the pipeline layer.
 
-use serde::Deserialize;
+use std::fmt;
+
+use serde::{
+    de::{MapAccess, Visitor},
+    Deserialize, Deserializer,
+};
+
+// ---------------------------------------------------------------------------
+// Extras — unmodeled XML attributes / child elements
+// ---------------------------------------------------------------------------
+
+/// Container for `#[serde(flatten)] extras` — XML attributes and child
+/// elements not modeled by typed DTO fields. Backed by
+/// `serde_norway::Mapping` so insertion order is preserved AND so
+/// repeated child-element siblings (`<future-extension/><future-extension/>`)
+/// aggregate into a `Value::Sequence` instead of last-write-wins.
+///
+/// The convert pipeline projects these into the
+/// `metadata.x-onmsctl-unmodeled` annotation on the emitted YAML so
+/// custom vendor data is preserved-for-review (stripped on apply).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Extras(pub serde_norway::Mapping);
+
+impl Extras {
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Iterate `(key, value)` pairs in insertion order. Keys retain
+    /// quick-xml's `@` prefix on attributes; child element names flow
+    /// through unchanged.
+    pub fn iter(&self) -> impl Iterator<Item = (&serde_norway::Value, &serde_norway::Value)> {
+        self.0.iter()
+    }
+}
+
+impl<'de> Deserialize<'de> for Extras {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct V;
+        impl<'de> Visitor<'de> for V {
+            type Value = Extras;
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("a map of unmodeled XML attributes / child elements")
+            }
+            fn visit_map<A>(self, mut access: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut out = serde_norway::Mapping::new();
+                while let Some((k, v)) =
+                    access.next_entry::<String, serde_norway::Value>()?
+                {
+                    let key = serde_norway::Value::String(k);
+                    match out.remove(&key) {
+                        Some(serde_norway::Value::Sequence(mut existing)) => {
+                            existing.push(v);
+                            out.insert(key, serde_norway::Value::Sequence(existing));
+                        }
+                        Some(existing) => {
+                            out.insert(
+                                key,
+                                serde_norway::Value::Sequence(vec![existing, v]),
+                            );
+                        }
+                        None => {
+                            out.insert(key, v);
+                        }
+                    }
+                }
+                Ok(Extras(out))
+            }
+        }
+        deserializer.deserialize_map(V)
+    }
+}
 
 // ---------------------------------------------------------------------------
 // <model-import> — requisition XML
@@ -49,6 +126,10 @@ pub struct RequisitionXml {
     /// migrator preserves the shape).
     #[serde(default, rename = "node")]
     pub nodes: Vec<NodeXml>,
+    /// Catch-all for unmodeled attrs / child elements on the
+    /// `<model-import>` root. See [`Extras`] for the design rationale.
+    #[serde(flatten, default)]
+    pub extras: Extras,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
@@ -71,6 +152,10 @@ pub struct NodeXml {
     pub assets: Vec<AssetXml>,
     #[serde(default, rename = "meta-data")]
     pub meta_data: Vec<MetaDataXml>,
+    /// Catch-all for attributes and child elements that aren't
+    /// modeled above. See [`Extras`].
+    #[serde(flatten, default)]
+    pub extras: Extras,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
@@ -91,6 +176,9 @@ pub struct InterfaceXml {
     pub monitored_services: Vec<MonitoredServiceXml>,
     #[serde(default, rename = "meta-data")]
     pub meta_data: Vec<MetaDataXml>,
+    /// Catch-all for unmodeled attrs / child elements. See [`Extras`].
+    #[serde(flatten, default)]
+    pub extras: Extras,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
@@ -99,6 +187,9 @@ pub struct MonitoredServiceXml {
     pub service_name: String,
     #[serde(default, rename = "meta-data")]
     pub meta_data: Vec<MetaDataXml>,
+    /// Catch-all for unmodeled attrs / child elements. See [`Extras`].
+    #[serde(flatten, default)]
+    pub extras: Extras,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]

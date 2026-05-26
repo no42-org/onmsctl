@@ -229,11 +229,46 @@ impl JsonSchema for Kind {
 
 /// Document metadata. `name` is the foreign-source identifier — the value
 /// used in the REST path `/requisitions/{fs}` and `/foreignSources/{fs}`.
+///
+/// `unmodeled` is an annotation populated by the `convert` migrator when
+/// the source XML carries elements / attributes that the local YAML
+/// model doesn't represent (e.g. `node.location`, `node.city`,
+/// custom vendor attrs, `<meta-data>` blocks). The annotation is
+/// **preserved-for-review on the local YAML only** — it is *not*
+/// re-emitted on apply (there is no YAML→XML reverse path in
+/// `onmsctl`). The `--diff` renderer collapses it to a one-line
+/// summary, the apply path (`requisition_to_wire`) strips it before
+/// the POST body so it never reaches Horizon, and `canonicalize`
+/// drops it before `l1_compare` so apply-outcome is identical with
+/// or without the annotation.
+///
+/// The annotation is structured as a nested YAML map (`nodes.<foreign-
+/// id>.<key>`, `nodes.<foreign-id>.interfaces.<ip>.<key>`, etc.) so
+/// foreign-ids and IP addresses containing literal `.` don't collide
+/// with the path separator. XML attribute prefixes (`@`) are stripped
+/// from keys — operators reading the YAML see `location: HQ`, not
+/// `@location: HQ`. Repeated same-named sibling child elements
+/// aggregate into a `Value::Sequence` under one key.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Metadata {
     #[serde(deserialize_with = "deserialize_non_empty")]
     pub name: String,
+
+    /// XML content the convert step couldn't model. Structured as a
+    /// nested YAML map; see the type-level doc-comment for shape.
+    /// `Option<Mapping>` so an empty annotation serializes as absent
+    /// rather than as an empty map.
+    #[serde(
+        rename = "x-onmsctl-unmodeled",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(
+        with = "Option<std::collections::BTreeMap<String, serde_json::Value>>",
+        description = "Convert-side annotation: XML content the migrator could not model. Stripped before apply; ignored by Horizon."
+    )]
+    pub unmodeled: Option<serde_norway::Mapping>,
 }
 
 // ---------------------------------------------------------------------------

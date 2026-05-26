@@ -99,10 +99,18 @@
     },
     "Metadata": {
       "additionalProperties": false,
-      "description": "Document metadata. `name` is the foreign-source identifier — the value\nused in the REST path `/requisitions/{fs}` and `/foreignSources/{fs}`.",
+      "description": "Document metadata. `name` is the foreign-source identifier — the value\nused in the REST path `/requisitions/{fs}` and `/foreignSources/{fs}`.\n\n`unmodeled` is an annotation populated by the `convert` migrator when\nthe source XML carries elements / attributes that the local YAML\nmodel doesn't represent (e.g. `node.location`, `node.city`,\ncustom vendor attrs, `<meta-data>` blocks). The annotation is\n**preserved-for-review on the local YAML only** — it is *not*\nre-emitted on apply (there is no YAML→XML reverse path in\n`onmsctl`). The `--diff` renderer collapses it to a one-line\nsummary, the apply path (`requisition_to_wire`) strips it before\nthe POST body so it never reaches Horizon, and `canonicalize`\ndrops it before `l1_compare` so apply-outcome is identical with\nor without the annotation.\n\nThe annotation is structured as a nested YAML map (`nodes.<foreign-\nid>.<key>`, `nodes.<foreign-id>.interfaces.<ip>.<key>`, etc.) so\nforeign-ids and IP addresses containing literal `.` don't collide\nwith the path separator. XML attribute prefixes (`@`) are stripped\nfrom keys — operators reading the YAML see `location: HQ`, not\n`@location: HQ`. Repeated same-named sibling child elements\naggregate into a `Value::Sequence` under one key.",
       "properties": {
         "name": {
           "type": "string"
+        },
+        "x-onmsctl-unmodeled": {
+          "additionalProperties": true,
+          "description": "Convert-side annotation: XML content the migrator could not model. Stripped before apply; ignored by Horizon.",
+          "type": [
+            "object",
+            "null"
+          ]
         }
       },
       "required": [
