@@ -111,6 +111,72 @@ pub struct ApplyOutcome {
     pub scan_relevant_leaves: Vec<String>,
 }
 
+/// Phase-1 plan for a single requisition. Carries the decisions and
+/// the cloned local document needed to either render a dry-run
+/// preview or hand off to [`execute_plan`] for the mutating Phase 2.
+///
+/// Plans are produced by [`plan_requisition`] which performs only
+/// idempotent GETs against Horizon — no POST / PUT / DELETE. A
+/// multi-file orchestrator can build a `Vec<RequisitionPlan>` up
+/// front and feed it back through Phase 2 without re-GETting.
+#[derive(Debug, Clone)]
+pub struct RequisitionPlan {
+    /// The local document (cloned). [`execute_plan`] reads
+    /// `metadata.name` for endpoint paths and projects via
+    /// `requisition_to_wire` for the POST bodies.
+    pub local: RequisitionLocal,
+    /// What Phase 2 would do — or that no Phase 2 is needed.
+    pub state: PlanState,
+    /// Computed L2/L3 delta between local and the composite remote
+    /// state. Always populated (empty when `state == Unchanged`).
+    pub delta: RequisitionDelta,
+    /// The decided `rescanExisting` query-param value.
+    pub rescan_existing: bool,
+    /// Action Phase 2 would take against `/foreignSources/{fs}`.
+    pub foreign_source_action: ForeignSourceAction,
+    /// Server's custom FS at the moment the plan read state, for
+    /// the `--diff` renderer.
+    pub original_remote_fs: Option<ForeignSourceServer>,
+    /// Server's `last-import` timestamp on the requisition at the
+    /// moment the plan read state. Used by `--wait` as the watch
+    /// snapshot.
+    pub pre_trigger_last_import_ms: Option<i64>,
+    /// Scan-relevant leaves the rescan auto-decision considered.
+    pub scan_relevant_leaves: Vec<String>,
+}
+
+/// What Phase 2 would do for a given plan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PlanState {
+    /// Local and remote are already byte-equivalent. Phase 2 issues
+    /// no writes for this file.
+    Unchanged,
+    /// Server has no requisition by this foreign-source name; Phase
+    /// 2 would POST and trigger import.
+    WouldCreate,
+    /// Server already has a requisition; Phase 2 would POST the new
+    /// state and trigger import.
+    WouldUpdate,
+}
+
+impl RequisitionPlan {
+    /// Produce an `ApplyOutcome` from a plan as if Phase 2 were
+    /// skipped. Used for the `--dry-run` and `Unchanged` short-circuit
+    /// paths in [`apply_requisition`] and [`execute_plan`].
+    fn into_short_circuit(self, state: ApplyState) -> ApplyOutcome {
+        ApplyOutcome {
+            state,
+            delta: self.delta,
+            rescan_existing: self.rescan_existing,
+            foreign_source_action: self.foreign_source_action,
+            original_remote_fs: self.original_remote_fs,
+            pre_trigger_last_import_ms: self.pre_trigger_last_import_ms,
+            scan_relevant_leaves: self.scan_relevant_leaves,
+        }
+    }
+}
+
 /// Top-level apply outcome.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -151,6 +217,34 @@ pub enum ForeignSourceAction {
 /// Apply a parsed `kind: Requisition` document against a Horizon
 /// instance. Returns an [`ApplyOutcome`] describing what happened.
 ///
+/// This is a thin two-phase composition: [`plan_requisition`] reads
+/// deployed state and produces a [`RequisitionPlan`]; if the plan
+/// resolves to [`PlanState::Unchanged`] (or `opts.dry_run` is set)
+/// the plan short-circuits into an outcome. Otherwise the plan is
+/// handed to [`execute_plan`] for the mutating Phase-2 writes per
+/// design D7.
+pub async fn apply_requisition(
+    local: &RequisitionLocal,
+    api: &ProvisioningApi<'_>,
+    opts: &ApplyOptions,
+) -> Result<ApplyOutcome> {
+    let plan = plan_requisition(local, api, opts).await?;
+    if plan.state == PlanState::Unchanged {
+        return Ok(plan.into_short_circuit(ApplyState::Unchanged));
+    }
+    if opts.dry_run {
+        return Ok(plan.into_short_circuit(ApplyState::DryRun));
+    }
+    execute_plan(plan, api).await
+}
+
+/// Phase 1: read deployed state and produce a [`RequisitionPlan`].
+///
+/// Only idempotent GETs are issued — no POST / PUT / DELETE.
+/// Callers that want to render `--diff` or `--explain-rescan` without
+/// applying can stop here. Callers that want to apply pass the plan
+/// to [`execute_plan`] (or use [`apply_requisition`] which wires both).
+///
 /// Sequence:
 ///   1. Pull deployed requisition (`GET /requisitions/{fs}`) + FS
 ///      (`GET /foreignSources/{fs}`) concurrently — both may return
@@ -162,22 +256,19 @@ pub enum ForeignSourceAction {
 ///      (per design D1).
 ///   3. Convert remote state → local form via
 ///      [`requisition_from_wire`], canonicalize both sides, and
-///      compute the [`RequisitionDelta`]. Early-exit Unchanged only
-///      when the diff is empty, the server already has the
-///      requisition, AND no FS-side action is required.
+///      compute the [`RequisitionDelta`]. Resolve to
+///      [`PlanState::Unchanged`] only when the diff is empty, the
+///      server already has the requisition, AND no FS-side action
+///      is required.
 ///   4. Choose `rescanExisting` from
 ///      [`aggregate_rescan_decision`] over the delta's leaves — any
 ///      single scan-relevant leaf (OR semantics) flips the decision
 ///      to `true`. `opts.rescan_existing` overrides.
-///   5. With `--dry-run`, stop here and return the decisions.
-///   6. Execute writes in order (per design D7): foreign-source
-///      first (upsert OR delete OR no-op), then requisition POST,
-///      then import trigger.
-pub async fn apply_requisition(
+pub async fn plan_requisition(
     local: &RequisitionLocal,
     api: &ProvisioningApi<'_>,
     opts: &ApplyOptions,
-) -> Result<ApplyOutcome> {
+) -> Result<RequisitionPlan> {
     let fs_name = local.metadata.name.as_str();
 
     // ---- 1. Pull deployed state (concurrent — independent reads) ----
@@ -212,23 +303,25 @@ pub async fn apply_requisition(
         default_fs.as_ref(),
     );
 
-    // ---- 3. Diff + FS-action classification + L1 short-circuit ----
-    // The short-circuit only fires when the server already has the
+    // ---- 3. Diff + FS-action classification + Unchanged resolution ----
+    // Unchanged only resolves when the server already has the
     // requisition, the composite diff is empty, AND no FS-side action
     // is required. Without the fs_action check, a custom FS that
-    // canonicalizes equal to default-FS substitution would short-
-    // circuit "Unchanged" while still owing a DELETE to bring the
-    // server back to default — leaving the server in the wrong state.
+    // canonicalizes equal to default-FS substitution would resolve
+    // Unchanged while still owing a DELETE to bring the server back
+    // to default — leaving the server in the wrong state.
     let delta = diff_requisition(&local_composite, &remote_composite);
     let foreign_source_action =
         classify_fs_action(remote_fs.is_some(), local.spec.foreign_source.is_some());
 
-    if delta.is_empty()
+    let unchanged = delta.is_empty()
         && remote_req.is_some()
-        && matches!(foreign_source_action, ForeignSourceAction::NoChange)
-    {
-        return Ok(ApplyOutcome {
-            state: ApplyState::Unchanged,
+        && matches!(foreign_source_action, ForeignSourceAction::NoChange);
+
+    if unchanged {
+        return Ok(RequisitionPlan {
+            local: local.clone(),
+            state: PlanState::Unchanged,
             delta,
             rescan_existing: false,
             foreign_source_action,
@@ -251,50 +344,70 @@ pub async fn apply_requisition(
         RescanChoice::Auto => !scan_relevant_leaves.is_empty(),
     };
 
-    // ---- 5. Dry-run: stop here, return decisions ----
-    if opts.dry_run {
-        return Ok(ApplyOutcome {
-            state: ApplyState::DryRun,
-            delta,
-            rescan_existing,
-            foreign_source_action,
-            original_remote_fs: remote_fs,
-            pre_trigger_last_import_ms,
-            scan_relevant_leaves,
-        });
-    }
+    let state = if remote_req.is_none() {
+        PlanState::WouldCreate
+    } else {
+        PlanState::WouldUpdate
+    };
 
-    // ---- 6. Execute writes per design D7 ----
-    let was_created = remote_req.is_none();
-    let (wire_req, wire_fs) = requisition_to_wire(local);
-
-    match foreign_source_action {
-        ForeignSourceAction::Created | ForeignSourceAction::Updated => {
-            if let Some(fs) = &wire_fs {
-                api.post_foreign_source(fs).await?;
-            }
-        }
-        ForeignSourceAction::Deleted => {
-            api.delete_foreign_source(fs_name).await?;
-        }
-        ForeignSourceAction::NoChange => {}
-    }
-
-    api.post_requisition(&wire_req).await?;
-    api.trigger_import(fs_name, rescan_existing).await?;
-
-    Ok(ApplyOutcome {
-        state: if was_created {
-            ApplyState::Created
-        } else {
-            ApplyState::Updated
-        },
+    Ok(RequisitionPlan {
+        local: local.clone(),
+        state,
         delta,
         rescan_existing,
         foreign_source_action,
         original_remote_fs: remote_fs,
         pre_trigger_last_import_ms,
         scan_relevant_leaves,
+    })
+}
+
+/// Phase 2: execute the writes a [`RequisitionPlan`] describes.
+///
+/// Write order per design D7: foreign-source first (upsert OR delete
+/// OR no-op), then requisition POST, then import trigger. Plans with
+/// `state == PlanState::Unchanged` short-circuit into an `Unchanged`
+/// outcome — callers may pipe plans through without filtering.
+pub async fn execute_plan(
+    plan: RequisitionPlan,
+    api: &ProvisioningApi<'_>,
+) -> Result<ApplyOutcome> {
+    if plan.state == PlanState::Unchanged {
+        return Ok(plan.into_short_circuit(ApplyState::Unchanged));
+    }
+
+    let fs_name = plan.local.metadata.name.clone();
+    let (wire_req, wire_fs) = requisition_to_wire(&plan.local);
+
+    match plan.foreign_source_action {
+        ForeignSourceAction::Created | ForeignSourceAction::Updated => {
+            if let Some(fs) = &wire_fs {
+                api.post_foreign_source(fs).await?;
+            }
+        }
+        ForeignSourceAction::Deleted => {
+            api.delete_foreign_source(&fs_name).await?;
+        }
+        ForeignSourceAction::NoChange => {}
+    }
+
+    api.post_requisition(&wire_req).await?;
+    api.trigger_import(&fs_name, plan.rescan_existing).await?;
+
+    let state = match plan.state {
+        PlanState::WouldCreate => ApplyState::Created,
+        PlanState::WouldUpdate => ApplyState::Updated,
+        PlanState::Unchanged => unreachable!("short-circuited above"),
+    };
+
+    Ok(ApplyOutcome {
+        state,
+        delta: plan.delta,
+        rescan_existing: plan.rescan_existing,
+        foreign_source_action: plan.foreign_source_action,
+        original_remote_fs: plan.original_remote_fs,
+        pre_trigger_last_import_ms: plan.pre_trigger_last_import_ms,
+        scan_relevant_leaves: plan.scan_relevant_leaves,
     })
 }
 
