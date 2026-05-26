@@ -177,12 +177,7 @@ async fn run_list(api: &ProvisioningApi<'_>, db_id: i64, ctx: &Context) -> Resul
     Ok(())
 }
 
-async fn run_get(
-    api: &ProvisioningApi<'_>,
-    db_id: i64,
-    field: &str,
-    ctx: &Context,
-) -> Result<()> {
+async fn run_get(api: &ProvisioningApi<'_>, db_id: i64, field: &str, ctx: &Context) -> Result<()> {
     let record = api.get_node_asset_record(db_id).await?;
     let map = record.as_object().ok_or_else(|| {
         Error::Config(
@@ -199,15 +194,13 @@ async fn run_get(
 
     match ctx.output_format {
         OutputFormat::Json => {
-            let json = serde_json::to_string_pretty(value).map_err(|e| {
-                Error::Config(format!("serializing asset field to JSON: {e}"))
-            })?;
+            let json = serde_json::to_string_pretty(value)
+                .map_err(|e| Error::Config(format!("serializing asset field to JSON: {e}")))?;
             super::write_stdout_line(json.as_bytes())?;
         }
         OutputFormat::Yaml => {
-            let yaml = serde_norway::to_string(value).map_err(|e| {
-                Error::Config(format!("serializing asset field to YAML: {e}"))
-            })?;
+            let yaml = serde_norway::to_string(value)
+                .map_err(|e| Error::Config(format!("serializing asset field to YAML: {e}")))?;
             super::write_stdout(yaml.as_bytes())?;
         }
         OutputFormat::Table => {
@@ -352,15 +345,13 @@ fn emit_action_outcome(
     });
     match ctx.output_format {
         OutputFormat::Json => {
-            let json = serde_json::to_string_pretty(&payload).map_err(|e| {
-                Error::Config(format!("serializing asset action to JSON: {e}"))
-            })?;
+            let json = serde_json::to_string_pretty(&payload)
+                .map_err(|e| Error::Config(format!("serializing asset action to JSON: {e}")))?;
             super::write_stdout_line(json.as_bytes())?;
         }
         OutputFormat::Yaml => {
-            let yaml = serde_norway::to_string(&payload).map_err(|e| {
-                Error::Config(format!("serializing asset action to YAML: {e}"))
-            })?;
+            let yaml = serde_norway::to_string(&payload)
+                .map_err(|e| Error::Config(format!("serializing asset action to YAML: {e}")))?;
             super::write_stdout(yaml.as_bytes())?;
         }
         OutputFormat::Table => {
@@ -386,10 +377,9 @@ fn format_field_value(v: &serde_json::Value) -> String {
         serde_json::Value::String(s) => s.clone(),
         serde_json::Value::Bool(b) => b.to_string(),
         serde_json::Value::Number(n) => n.to_string(),
-        serde_json::Value::Array(_) | serde_json::Value::Object(_) => format!(
-            "(json) {}",
-            serde_json::to_string(v).unwrap_or_default()
-        ),
+        serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
+            format!("(json) {}", serde_json::to_string(v).unwrap_or_default())
+        }
     }
 }
 
@@ -511,7 +501,10 @@ mod tests {
     fn asset_field_accepts_identifier_shape() {
         assert_eq!(asset_field("city").unwrap(), "city");
         assert_eq!(asset_field("serialNumber").unwrap(), "serialNumber");
-        assert_eq!(asset_field("vendorAssetNumber").unwrap(), "vendorAssetNumber");
+        assert_eq!(
+            asset_field("vendorAssetNumber").unwrap(),
+            "vendorAssetNumber"
+        );
         assert_eq!(asset_field("rack").unwrap(), "rack");
         // Underscore-containing identifiers — accepted to support
         // customer-extended schemas keeping to the identifier shape.
@@ -691,10 +684,7 @@ mod tests {
     fn format_field_value_renders_null_as_marker() {
         // `get -o table` explicitly asked for this field; null must
         // be visible (vs. `list` which skips null entirely).
-        assert_eq!(
-            format_field_value(&serde_json::Value::Null),
-            "<null>"
-        );
+        assert_eq!(format_field_value(&serde_json::Value::Null), "<null>");
     }
 
     #[test]

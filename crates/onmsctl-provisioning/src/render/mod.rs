@@ -69,11 +69,7 @@ pub fn render_apply_diff(local: &RequisitionLocal, outcome: &ApplyOutcome) -> St
     {
         let leaves = count_unmodeled_leaves(unmodeled);
         let word = if leaves == 1 { "entry" } else { "entries" };
-        writeln!(
-            out,
-            "  metadata.x-onmsctl-unmodeled: {leaves} {word}"
-        )
-        .ok();
+        writeln!(out, "  metadata.x-onmsctl-unmodeled: {leaves} {word}").ok();
     }
     render_fs_section(&mut out, outcome);
     render_node_section(&mut out, &outcome.delta);
@@ -567,14 +563,8 @@ mod tests {
         // Nested-Mapping shape: three scalar leaves under
         // `nodes.web01` → diff renders "3 entries".
         let mut node_inner = serde_norway::Mapping::new();
-        node_inner.insert(
-            "location".into(),
-            serde_norway::Value::String("HQ".into()),
-        );
-        node_inner.insert(
-            "city".into(),
-            serde_norway::Value::String("NYC".into()),
-        );
+        node_inner.insert("location".into(), serde_norway::Value::String("HQ".into()));
+        node_inner.insert("city".into(), serde_norway::Value::String("NYC".into()));
         node_inner.insert(
             "legacy-tag".into(),
             serde_norway::Value::String("tag-1".into()),
@@ -629,10 +619,7 @@ mod tests {
             serde_norway::Value::Mapping(m)
         };
         let mut node_inner = serde_norway::Mapping::new();
-        node_inner.insert(
-            "location".into(),
-            serde_norway::Value::String("HQ".into()),
-        );
+        node_inner.insert("location".into(), serde_norway::Value::String("HQ".into()));
         node_inner.insert(
             "meta-data".into(),
             serde_norway::Value::Sequence(vec![
@@ -677,10 +664,7 @@ mod tests {
         let mut local = local_with_fs();
         // One leaf entry: `nodes.web01.location`.
         let mut node_inner = serde_norway::Mapping::new();
-        node_inner.insert(
-            "location".into(),
-            serde_norway::Value::String("HQ".into()),
-        );
+        node_inner.insert("location".into(), serde_norway::Value::String("HQ".into()));
         let mut unmodeled = serde_norway::Mapping::new();
         unmodeled.insert(
             "nodes".into(),

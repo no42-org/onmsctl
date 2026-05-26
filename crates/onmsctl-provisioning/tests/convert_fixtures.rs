@@ -176,7 +176,9 @@ fn truly_unknown_element_is_preserved_via_extras_passthrough() {
         .filter(|f| f.code == FindingCode::Pr001)
         .collect();
     assert!(
-        pr001s.iter().any(|f| f.message.contains("future-extension")),
+        pr001s
+            .iter()
+            .any(|f| f.message.contains("future-extension")),
         "expected PR001 for `<future-extension>`; got: {:#?}",
         pr001s
     );
@@ -193,7 +195,10 @@ fn truly_unknown_element_is_preserved_via_extras_passthrough() {
         .and_then(|u| u.get("nodes"))
         .expect("nodes entry present on annotation");
     assert!(
-        nodes.get("web01").and_then(|n| n.get("future-extension")).is_some(),
+        nodes
+            .get("web01")
+            .and_then(|n| n.get("future-extension"))
+            .is_some(),
         "annotation should carry the unknown element; got: {nodes:#?}"
     );
 }

@@ -148,7 +148,17 @@ impl NodeCmd {
                 foreign_id,
                 label,
                 location,
-            } => run_set(&api, &fs, &foreign_id, label.as_deref(), location.as_deref(), ctx).await,
+            } => {
+                run_set(
+                    &api,
+                    &fs,
+                    &foreign_id,
+                    label.as_deref(),
+                    location.as_deref(),
+                    ctx,
+                )
+                .await
+            }
             NodeCmd::Remove { fs, foreign_id } => run_remove(&api, &fs, &foreign_id, ctx).await,
         }
     }
@@ -336,4 +346,3 @@ fn emit_action_outcome(fs: &str, foreign_id: &str, action: &str, ctx: &Context) 
     }
     Ok(())
 }
-

@@ -497,10 +497,7 @@ spec:
 
         // Nested-Mapping annotation: nodes.web01.location = HQ.
         let mut node_inner = serde_norway::Mapping::new();
-        node_inner.insert(
-            "location".into(),
-            serde_norway::Value::String("HQ".into()),
-        );
+        node_inner.insert("location".into(), serde_norway::Value::String("HQ".into()));
         let mut unmodeled = serde_norway::Mapping::new();
         unmodeled.insert(
             "nodes".into(),

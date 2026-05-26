@@ -13,10 +13,10 @@
 //! there's nothing to mutate beyond add/remove, and `get` would
 //! surface no information `list` doesn't.
 
-use clap::Subcommand;
-use onmsctl_core::{Classify, CmdKind, Context, Error, OnmsClient, OutputFormat, Result};
 use crate::api::ProvisioningApi;
 use crate::model::server::CategoryRef;
+use clap::Subcommand;
+use onmsctl_core::{Classify, CmdKind, Context, Error, OnmsClient, OutputFormat, Result};
 
 /// `onmsctl requisition category ...` subcommands.
 #[derive(Subcommand, Debug, Clone)]
@@ -198,15 +198,13 @@ fn emit_action_outcome(
     });
     match ctx.output_format {
         OutputFormat::Json => {
-            let json = serde_json::to_string_pretty(&payload).map_err(|e| {
-                Error::Config(format!("serializing category action to JSON: {e}"))
-            })?;
+            let json = serde_json::to_string_pretty(&payload)
+                .map_err(|e| Error::Config(format!("serializing category action to JSON: {e}")))?;
             super::write_stdout_line(json.as_bytes())?;
         }
         OutputFormat::Yaml => {
-            let yaml = serde_norway::to_string(&payload).map_err(|e| {
-                Error::Config(format!("serializing category action to YAML: {e}"))
-            })?;
+            let yaml = serde_norway::to_string(&payload)
+                .map_err(|e| Error::Config(format!("serializing category action to YAML: {e}")))?;
             super::write_stdout(yaml.as_bytes())?;
         }
         OutputFormat::Table => {
@@ -294,10 +292,7 @@ mod tests {
             category_name("Production Servers").unwrap(),
             "Production Servers"
         );
-        assert_eq!(
-            category_name("App (prod)").unwrap(),
-            "App (prod)"
-        );
+        assert_eq!(category_name("App (prod)").unwrap(), "App (prod)");
     }
 
     #[test]

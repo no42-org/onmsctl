@@ -133,13 +133,9 @@ pub async fn export_all_requisitions(
     };
     let mut out = Vec::with_capacity(names.len());
     for name in names {
-        let outcome = export_requisition_with_default(
-            api,
-            &name,
-            include_defaults,
-            cached_default.as_ref(),
-        )
-        .await?;
+        let outcome =
+            export_requisition_with_default(api, &name, include_defaults, cached_default.as_ref())
+                .await?;
         out.push(outcome);
     }
     Ok(out)
@@ -222,7 +218,11 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
     let mp = (5 * doy + 2) / 153; // [0, 11]
     let d = (doy - (153 * mp + 2) / 5 + 1) as u32; // [1, 31]
-    let m = if mp < 10 { (mp + 3) as u32 } else { (mp - 9) as u32 }; // [1, 12]
+    let m = if mp < 10 {
+        (mp + 3) as u32
+    } else {
+        (mp - 9) as u32
+    }; // [1, 12]
     let year = if m <= 2 { y + 1 } else { y };
     (year, m, d)
 }
@@ -322,7 +322,10 @@ mod tests {
         // Portable-style annotation comment — spec.md mandates this
         // so future readers don't assume detectors/policies are
         // intentionally absent.
-        assert!(out.yaml.contains("Portable style: spec.foreignSource is omitted"));
+        assert!(
+            out.yaml
+                .contains("Portable style: spec.foreignSource is omitted")
+        );
         assert!(out.yaml.contains("inherits"));
     }
 
@@ -375,7 +378,11 @@ mod tests {
             .expect("snapshot marker present in comment");
         let ts_start = idx + marker.len();
         let ts = &out.yaml[ts_start..ts_start + 20]; // YYYY-MM-DDTHH:MM:SSZ = 20 chars
-        assert_eq!(ts.len(), 20, "timestamp must be 20 chars (YYYY-MM-DDTHH:MM:SSZ), got {ts:?}");
+        assert_eq!(
+            ts.len(),
+            20,
+            "timestamp must be 20 chars (YYYY-MM-DDTHH:MM:SSZ), got {ts:?}"
+        );
         assert!(
             ts.ends_with('Z'),
             "timestamp must end with Z (UTC marker), got {ts:?}"
@@ -412,7 +419,9 @@ mod tests {
             .mount(&server)
             .await;
 
-        let err = export_requisition(&api, "missing", false).await.unwrap_err();
+        let err = export_requisition(&api, "missing", false)
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("no requisition 'missing'"));
     }
 

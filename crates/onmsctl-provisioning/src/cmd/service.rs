@@ -116,11 +116,9 @@ impl ServiceCmd {
         let client = OnmsClient::from_context(ctx)?;
         let api = ProvisioningApi::new(&client);
         match self {
-            ServiceCmd::List {
-                fs,
-                foreign_id,
-                ip,
-            } => run_list(&api, &fs, &foreign_id, &ip, ctx).await,
+            ServiceCmd::List { fs, foreign_id, ip } => {
+                run_list(&api, &fs, &foreign_id, &ip, ctx).await
+            }
             ServiceCmd::Add {
                 fs,
                 foreign_id,
@@ -229,7 +227,8 @@ async fn run_add(
         category: vec![],
         meta_data: vec![],
     };
-    api.post_requisition_service(fs, foreign_id, ip, &svc).await?;
+    api.post_requisition_service(fs, foreign_id, ip, &svc)
+        .await?;
     emit_action_outcome(fs, foreign_id, ip, service, "added", ctx)
 }
 
@@ -263,15 +262,13 @@ fn emit_action_outcome(
     });
     match ctx.output_format {
         OutputFormat::Json => {
-            let json = serde_json::to_string_pretty(&payload).map_err(|e| {
-                Error::Config(format!("serializing service action to JSON: {e}"))
-            })?;
+            let json = serde_json::to_string_pretty(&payload)
+                .map_err(|e| Error::Config(format!("serializing service action to JSON: {e}")))?;
             super::write_stdout_line(json.as_bytes())?;
         }
         OutputFormat::Yaml => {
-            let yaml = serde_norway::to_string(&payload).map_err(|e| {
-                Error::Config(format!("serializing service action to YAML: {e}"))
-            })?;
+            let yaml = serde_norway::to_string(&payload)
+                .map_err(|e| Error::Config(format!("serializing service action to YAML: {e}")))?;
             super::write_stdout(yaml.as_bytes())?;
         }
         OutputFormat::Table => {

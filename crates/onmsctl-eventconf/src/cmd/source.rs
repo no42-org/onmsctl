@@ -507,11 +507,7 @@ impl SourceCmd {
                             // can correlate outcomes back to files.
                             // Single-file mode keeps the bare outcome
                             // line for backwards compatibility.
-                            match apply_single_source_with_path_prefix(
-                                path, dry_run, ctx,
-                            )
-                            .await
-                            {
+                            match apply_single_source_with_path_prefix(path, dry_run, ctx).await {
                                 Ok(()) => {}
                                 Err(e) => {
                                     failures += 1;
@@ -631,10 +627,7 @@ async fn apply_single_source_inner(
         other => other,
     })?;
 
-    let opts = ApplyOptions {
-        dry_run,
-        show_diff,
-    };
+    let opts = ApplyOptions { dry_run, show_diff };
     run_apply::<EventSourceTarget>(local, &opts, ctx).await
 }
 

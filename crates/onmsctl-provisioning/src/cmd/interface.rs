@@ -163,11 +163,9 @@ impl InterfaceCmd {
         let api = ProvisioningApi::new(&client);
         match self {
             InterfaceCmd::List { fs, foreign_id } => run_list(&api, &fs, &foreign_id, ctx).await,
-            InterfaceCmd::Get {
-                fs,
-                foreign_id,
-                ip,
-            } => run_get(&api, &fs, &foreign_id, &ip, ctx).await,
+            InterfaceCmd::Get { fs, foreign_id, ip } => {
+                run_get(&api, &fs, &foreign_id, &ip, ctx).await
+            }
             InterfaceCmd::Add {
                 fs,
                 foreign_id,
@@ -208,11 +206,9 @@ impl InterfaceCmd {
                 )
                 .await
             }
-            InterfaceCmd::Remove {
-                fs,
-                foreign_id,
-                ip,
-            } => run_remove(&api, &fs, &foreign_id, &ip, ctx).await,
+            InterfaceCmd::Remove { fs, foreign_id, ip } => {
+                run_remove(&api, &fs, &foreign_id, &ip, ctx).await
+            }
         }
     }
 }
@@ -272,12 +268,8 @@ async fn run_list(
                 super::write_stdout(b"(no interfaces)\n")?;
             } else {
                 for r in &rows {
-                    let status = r
-                        .status
-                        .map(|s| format!(" status={s}"))
-                        .unwrap_or_default();
-                    let line =
-                        format!("{}  snmp-primary={}{status}\n", r.ip, r.snmp_primary);
+                    let status = r.status.map(|s| format!(" status={s}")).unwrap_or_default();
+                    let line = format!("{}  snmp-primary={}{status}\n", r.ip, r.snmp_primary);
                     super::write_stdout(line.as_bytes())?;
                 }
             }
@@ -338,7 +330,8 @@ async fn run_add(
         category: vec![],
         meta_data: vec![],
     };
-    api.post_requisition_interface(fs, foreign_id, &iface).await?;
+    api.post_requisition_interface(fs, foreign_id, &iface)
+        .await?;
     emit_action_outcome(fs, foreign_id, ip, "added", ctx)
 }
 
@@ -379,7 +372,8 @@ async fn run_set(
             Some(d.to_string())
         };
     }
-    api.put_requisition_interface(fs, foreign_id, ip, &iface).await?;
+    api.put_requisition_interface(fs, foreign_id, ip, &iface)
+        .await?;
     emit_action_outcome(fs, foreign_id, ip, "updated", ctx)
 }
 
@@ -409,20 +403,17 @@ fn emit_action_outcome(
     });
     match ctx.output_format {
         OutputFormat::Json => {
-            let json = serde_json::to_string_pretty(&payload).map_err(|e| {
-                Error::Config(format!("serializing interface action to JSON: {e}"))
-            })?;
+            let json = serde_json::to_string_pretty(&payload)
+                .map_err(|e| Error::Config(format!("serializing interface action to JSON: {e}")))?;
             super::write_stdout_line(json.as_bytes())?;
         }
         OutputFormat::Yaml => {
-            let yaml = serde_norway::to_string(&payload).map_err(|e| {
-                Error::Config(format!("serializing interface action to YAML: {e}"))
-            })?;
+            let yaml = serde_norway::to_string(&payload)
+                .map_err(|e| Error::Config(format!("serializing interface action to YAML: {e}")))?;
             super::write_stdout(yaml.as_bytes())?;
         }
         OutputFormat::Table => {
-            let line =
-                format!("Requisition/{fs} node/{foreign_id} interface/{ip}: {action}\n");
+            let line = format!("Requisition/{fs} node/{foreign_id} interface/{ip}: {action}\n");
             super::write_stdout(line.as_bytes())?;
         }
     }
@@ -435,9 +426,7 @@ fn emit_action_outcome(
 fn snmp_primary(s: &str) -> std::result::Result<String, String> {
     match s.to_ascii_uppercase().as_str() {
         v @ ("P" | "S" | "N") => Ok(v.to_string()),
-        _ => Err(format!(
-            "snmp-primary must be one of P, S, N (got {s:?})"
-        )),
+        _ => Err(format!("snmp-primary must be one of P, S, N (got {s:?})")),
     }
 }
 
@@ -534,5 +523,4 @@ mod tests {
         assert!(status_code("-1").is_err());
         assert!(status_code("abc").is_err());
     }
-
 }

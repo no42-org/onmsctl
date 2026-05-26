@@ -169,7 +169,9 @@ impl<'c> ProvisioningApi<'c> {
     /// keyed by the body's `foreign-id`.
     pub async fn post_requisition_node(&self, fs: &str, node: &NodeServer) -> Result<()> {
         let path = format!("{BASE}/requisitions/{}/nodes", encode(fs));
-        self.client.post::<_, serde_json::Value>(&path, node).await?;
+        self.client
+            .post::<_, serde_json::Value>(&path, node)
+            .await?;
         Ok(())
     }
 
@@ -259,7 +261,9 @@ impl<'c> ProvisioningApi<'c> {
             encode(fs),
             encode(foreign_id),
         );
-        self.client.post::<_, serde_json::Value>(&path, iface).await?;
+        self.client
+            .post::<_, serde_json::Value>(&path, iface)
+            .await?;
         Ok(())
     }
 
@@ -807,7 +811,9 @@ mod tests {
     async fn get_requisition_interface_returns_some_on_200() {
         let (mock, client) = mock_with_client().await;
         Mock::given(method("GET"))
-            .and(path("/rest/requisitions/acme/nodes/web01/interfaces/10.0.0.1"))
+            .and(path(
+                "/rest/requisitions/acme/nodes/web01/interfaces/10.0.0.1",
+            ))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "ip-addr": "10.0.0.1",
                 "snmp-primary": "P",
@@ -831,7 +837,9 @@ mod tests {
     async fn get_requisition_interface_returns_none_on_404() {
         let (mock, client) = mock_with_client().await;
         Mock::given(method("GET"))
-            .and(path("/rest/requisitions/acme/nodes/web01/interfaces/10.0.0.99"))
+            .and(path(
+                "/rest/requisitions/acme/nodes/web01/interfaces/10.0.0.99",
+            ))
             .respond_with(ResponseTemplate::new(404))
             .mount(&mock)
             .await;
@@ -919,7 +927,9 @@ mod tests {
         use crate::model::server::InterfaceServer;
         let (mock, client) = mock_with_client().await;
         Mock::given(method("PUT"))
-            .and(path("/rest/requisitions/acme/nodes/web01/interfaces/10.0.0.1"))
+            .and(path(
+                "/rest/requisitions/acme/nodes/web01/interfaces/10.0.0.1",
+            ))
             .respond_with(ResponseTemplate::new(200))
             .mount(&mock)
             .await;
@@ -947,7 +957,9 @@ mod tests {
     async fn delete_requisition_interface_targets_specific_ip() {
         let (mock, client) = mock_with_client().await;
         Mock::given(method("DELETE"))
-            .and(path("/rest/requisitions/acme/nodes/web01/interfaces/10.0.0.1"))
+            .and(path(
+                "/rest/requisitions/acme/nodes/web01/interfaces/10.0.0.1",
+            ))
             .respond_with(ResponseTemplate::new(200))
             .mount(&mock)
             .await;
@@ -1211,7 +1223,9 @@ mod tests {
     async fn delete_requisition_category_returns_error_on_404() {
         let (mock, client) = mock_with_client().await;
         Mock::given(method("DELETE"))
-            .and(path("/rest/requisitions/acme/nodes/web01/categories/MISSING"))
+            .and(path(
+                "/rest/requisitions/acme/nodes/web01/categories/MISSING",
+            ))
             .respond_with(ResponseTemplate::new(404))
             .mount(&mock)
             .await;

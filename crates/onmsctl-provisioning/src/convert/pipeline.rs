@@ -354,10 +354,7 @@ fn flag_unmodeled(
                 )
                 .opt_source(src),
             );
-            node_map.insert(
-                "city".into(),
-                serde_norway::Value::String(city.to_string()),
-            );
+            node_map.insert("city".into(), serde_norway::Value::String(city.to_string()));
         }
         if !n.meta_data.is_empty() {
             findings.push(
@@ -447,8 +444,7 @@ fn flag_unmodeled(
                     )
                     .opt_source(src),
                 );
-                iface_map
-                    .insert("meta-data".into(), meta_data_to_value(&iface.meta_data));
+                iface_map.insert("meta-data".into(), meta_data_to_value(&iface.meta_data));
             }
             // Interface-level extras passthrough.
             record_extras(
@@ -477,19 +473,18 @@ fn flag_unmodeled(
                         )
                         .opt_source(src),
                     );
-                    svc_map.insert(
-                        "meta-data".into(),
-                        meta_data_to_value(&svc.meta_data),
-                    );
+                    svc_map.insert("meta-data".into(), meta_data_to_value(&svc.meta_data));
                 }
                 record_extras(
                     &svc.extras,
                     &mut svc_map,
                     findings,
-                    || format!(
-                        "node '{}' interface {} service '{}'",
-                        n.foreign_id, iface.ip_addr, svc.service_name
-                    ),
+                    || {
+                        format!(
+                            "node '{}' interface {} service '{}'",
+                            n.foreign_id, iface.ip_addr, svc.service_name
+                        )
+                    },
                     src,
                 );
                 if !svc_map.is_empty() {
@@ -500,8 +495,7 @@ fn flag_unmodeled(
                 }
             }
             if !svcs_map.is_empty() {
-                iface_map
-                    .insert("services".into(), serde_norway::Value::Mapping(svcs_map));
+                iface_map.insert("services".into(), serde_norway::Value::Mapping(svcs_map));
             }
             if !iface_map.is_empty() {
                 ifaces_map.insert(
@@ -511,8 +505,10 @@ fn flag_unmodeled(
             }
         }
         if !ifaces_map.is_empty() {
-            node_map
-                .insert("interfaces".into(), serde_norway::Value::Mapping(ifaces_map));
+            node_map.insert(
+                "interfaces".into(),
+                serde_norway::Value::Mapping(ifaces_map),
+            );
         }
         if !node_map.is_empty() {
             nodes_map.insert(
@@ -769,17 +765,17 @@ mod tests {
             .expect("x-onmsctl-unmodeled present on metadata");
         let nodes = unmodeled.get("nodes").expect("nodes key present");
         let web01 = nodes.get("web01").expect("web01 node entry present");
-        assert_eq!(
-            web01.get("location").and_then(|v| v.as_str()),
-            Some("HQ")
-        );
+        assert_eq!(web01.get("location").and_then(|v| v.as_str()), Some("HQ"));
         assert_eq!(web01.get("city").and_then(|v| v.as_str()), Some("NYC"));
         let node_md = web01
             .get("meta-data")
             .and_then(|v| v.as_sequence())
             .expect("node meta-data is a sequence");
         assert_eq!(node_md.len(), 1);
-        assert_eq!(node_md[0].get("key").and_then(|v| v.as_str()), Some("owner"));
+        assert_eq!(
+            node_md[0].get("key").and_then(|v| v.as_str()),
+            Some("owner")
+        );
 
         // Interface entries nested under interfaces.<ip>.
         let ifaces = web01
@@ -833,9 +829,9 @@ mod tests {
         // Note: foreign-id contains dots — keys it as a single key
         // in the nested map, not a dotted path.
         let nodes = unmodeled.get("nodes").and_then(|v| v.as_mapping()).unwrap();
-        let web01 = nodes.get("web01.acme.com").expect(
-            "foreign-id with dots maps cleanly as a single map key",
-        );
+        let web01 = nodes
+            .get("web01.acme.com")
+            .expect("foreign-id with dots maps cleanly as a single map key");
         assert_eq!(
             web01.get("legacy-tag").and_then(|v| v.as_str()),
             Some("tag-1")
@@ -844,7 +840,10 @@ mod tests {
         assert_eq!(web01.get("location").and_then(|v| v.as_str()), Some("HQ"));
 
         // Interface-level extras passthrough.
-        let ifaces = web01.get("interfaces").and_then(|v| v.as_mapping()).unwrap();
+        let ifaces = web01
+            .get("interfaces")
+            .and_then(|v| v.as_mapping())
+            .unwrap();
         let iface = ifaces.get("10.0.0.1").unwrap();
         assert_eq!(
             iface.get("custom-port-mode").and_then(|v| v.as_str()),
@@ -981,23 +980,16 @@ mod tests {
     <future-extension key="b"/>
   </node>
 </model-import>"#;
-        let parsed =
-            crate::convert::xml::parse_requisition(REQ_DUP).expect("xml parses");
+        let parsed = crate::convert::xml::parse_requisition(REQ_DUP).expect("xml parses");
         let node_extras = &parsed.nodes[0].extras;
         let key = serde_norway::Value::String("future-extension".into());
         let value = node_extras.0.get(&key);
         let v = value.expect("future-extension key present");
         match v {
             serde_norway::Value::Sequence(s) => {
-                assert_eq!(
-                    s.len(),
-                    2,
-                    "expected both siblings preserved as sequence"
-                );
+                assert_eq!(s.len(), 2, "expected both siblings preserved as sequence");
             }
-            other => panic!(
-                "expected Value::Sequence preserving both siblings, got {other:#?}"
-            ),
+            other => panic!("expected Value::Sequence preserving both siblings, got {other:#?}"),
         }
     }
 }

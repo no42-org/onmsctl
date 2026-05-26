@@ -24,8 +24,8 @@
 use std::fmt;
 
 use serde::{
-    de::{MapAccess, Visitor},
     Deserialize, Deserializer,
+    de::{MapAccess, Visitor},
 };
 
 // ---------------------------------------------------------------------------
@@ -73,9 +73,7 @@ impl<'de> Deserialize<'de> for Extras {
                 A: MapAccess<'de>,
             {
                 let mut out = serde_norway::Mapping::new();
-                while let Some((k, v)) =
-                    access.next_entry::<String, serde_norway::Value>()?
-                {
+                while let Some((k, v)) = access.next_entry::<String, serde_norway::Value>()? {
                     let key = serde_norway::Value::String(k);
                     match out.remove(&key) {
                         Some(serde_norway::Value::Sequence(mut existing)) => {
@@ -83,10 +81,7 @@ impl<'de> Deserialize<'de> for Extras {
                             out.insert(key, serde_norway::Value::Sequence(existing));
                         }
                         Some(existing) => {
-                            out.insert(
-                                key,
-                                serde_norway::Value::Sequence(vec![existing, v]),
-                            );
+                            out.insert(key, serde_norway::Value::Sequence(vec![existing, v]));
                         }
                         None => {
                             out.insert(key, v);

@@ -25,13 +25,13 @@ use onmsctl_core::{
 };
 
 use crate::api::ProvisioningApi;
+use crate::apply::multi::CollisionCode;
 use crate::apply::{
     ApplyOptions, MultiApplyOptions, MultiApplyOutcome, MultiApplyState, RescanChoice,
     apply_directory, apply_requisition,
 };
-use crate::apply::multi::CollisionCode;
-use crate::export::{export_all_requisitions, export_requisition};
 use crate::convert::{ConversionResult, FindingCode, Severity, convert_directory, explain};
+use crate::export::{export_all_requisitions, export_requisition};
 use crate::model::RequisitionLocal;
 use crate::render::render_apply_diff;
 use crate::wait::wait_for_import_completion;
@@ -454,8 +454,15 @@ async fn run_apply(
                     "note: --explain-rescan has no effect in multi-file mode (use it per-file with --dry-run)"
                 );
             }
-            return run_apply_files(files, dry_run, rescan_existing, stop_on_error, wait_flags, ctx)
-                .await;
+            return run_apply_files(
+                files,
+                dry_run,
+                rescan_existing,
+                stop_on_error,
+                wait_flags,
+                ctx,
+            )
+            .await;
         }
         ApplyDispatch::Single(path) => path,
         // `ApplyDispatch` is `#[non_exhaustive]` — future variants
@@ -490,9 +497,8 @@ async fn run_apply(
             MAX_INPUT_BYTES
         )));
     }
-    let bytes = std::fs::read(&resolved).map_err(|e| {
-        Error::Config(format!("failed to read {}: {e}", resolved.display()))
-    })?;
+    let bytes = std::fs::read(&resolved)
+        .map_err(|e| Error::Config(format!("failed to read {}: {e}", resolved.display())))?;
     let local: RequisitionLocal = serde_norway::from_slice(&bytes)
         .map_err(|e| Error::Config(format!("{}: {e}", resolved.display())))?;
 
@@ -1090,15 +1096,13 @@ async fn run_list_requisitions(ctx: &Context) -> Result<()> {
 
     match ctx.output_format {
         OutputFormat::Json => {
-            let json = serde_json::to_string_pretty(&names).map_err(|e| {
-                Error::Config(format!("serializing requisition list to JSON: {e}"))
-            })?;
+            let json = serde_json::to_string_pretty(&names)
+                .map_err(|e| Error::Config(format!("serializing requisition list to JSON: {e}")))?;
             write_stdout_line(json.as_bytes())?;
         }
         OutputFormat::Yaml => {
-            let yaml = serde_norway::to_string(&names).map_err(|e| {
-                Error::Config(format!("serializing requisition list to YAML: {e}"))
-            })?;
+            let yaml = serde_norway::to_string(&names)
+                .map_err(|e| Error::Config(format!("serializing requisition list to YAML: {e}")))?;
             write_stdout(yaml.as_bytes())?;
         }
         OutputFormat::Table => {
@@ -1131,8 +1135,7 @@ fn format_delete_confirmation_prompt(
             // Render as `YYYY-MM-DDTHH:MM:SSZ` UTC. Negative or
             // zero ms is unusable (pre-epoch / unset); fall through
             // to "never imported" in that case.
-            let t = std::time::UNIX_EPOCH
-                + std::time::Duration::from_millis(ms as u64);
+            let t = std::time::UNIX_EPOCH + std::time::Duration::from_millis(ms as u64);
             format!(", last imported {}", crate::export::format_unix_ts(t))
         }
         _ => String::from(", never imported"),
@@ -1200,17 +1203,15 @@ async fn run_delete_requisition(fs: String, yes: bool, ctx: &Context) -> Result<
         // note and fall through to the idempotent DELETE path.
         match api.get_requisition(&fs).await? {
             Some(req) => {
-                let prompt = format_delete_confirmation_prompt(
-                    &fs,
-                    req.node.len(),
-                    req.last_import,
-                );
+                let prompt =
+                    format_delete_confirmation_prompt(&fs, req.node.len(), req.last_import);
                 eprint!("{prompt}");
                 let _ = std::io::stderr().flush();
                 let mut line = String::new();
-                let read = std::io::stdin().lock().read_line(&mut line).map_err(|e| {
-                    Error::Config(format!("reading confirmation from stdin: {e}"))
-                })?;
+                let read = std::io::stdin()
+                    .lock()
+                    .read_line(&mut line)
+                    .map_err(|e| Error::Config(format!("reading confirmation from stdin: {e}")))?;
                 // EOF (Ctrl-D, closed pipe) → treat as cancellation,
                 // not an I/O fault. Operator intent is "no".
                 if read == 0 {
@@ -1220,9 +1221,7 @@ async fn run_delete_requisition(fs: String, yes: bool, ctx: &Context) -> Result<
                     )));
                 }
                 if !is_delete_confirmation(&line) {
-                    return Err(Error::Config(format!(
-                        "delete cancelled by operator: {fs}"
-                    )));
+                    return Err(Error::Config(format!("delete cancelled by operator: {fs}")));
                 }
                 confirmed_interactively = true;
             }
@@ -1280,20 +1279,17 @@ async fn run_delete_requisition(fs: String, yes: bool, ctx: &Context) -> Result<
     });
     match ctx.output_format {
         OutputFormat::Json => {
-            let json = serde_json::to_string_pretty(&payload).map_err(|e| {
-                Error::Config(format!("serializing delete outcome to JSON: {e}"))
-            })?;
+            let json = serde_json::to_string_pretty(&payload)
+                .map_err(|e| Error::Config(format!("serializing delete outcome to JSON: {e}")))?;
             write_stdout_line(json.as_bytes())?;
         }
         OutputFormat::Yaml => {
-            let yaml = serde_norway::to_string(&payload).map_err(|e| {
-                Error::Config(format!("serializing delete outcome to YAML: {e}"))
-            })?;
+            let yaml = serde_norway::to_string(&payload)
+                .map_err(|e| Error::Config(format!("serializing delete outcome to YAML: {e}")))?;
             write_stdout(yaml.as_bytes())?;
         }
         OutputFormat::Table => {
-            let line =
-                format!("Requisition/{fs}: deleted (pending + deployed snapshots purged)\n");
+            let line = format!("Requisition/{fs}: deleted (pending + deployed snapshots purged)\n");
             write_stdout(line.as_bytes())?;
         }
     }
@@ -1304,9 +1300,7 @@ async fn run_delete_requisition(fs: String, yes: bool, ctx: &Context) -> Result<
     // the stderr note above already covers the operator-visible
     // case.
     if confirmed_interactively && !(pending_absent && deployed_absent) {
-        eprintln!(
-            "Requisition/{fs} deleted (pending + deployed snapshots purged)."
-        );
+        eprintln!("Requisition/{fs} deleted (pending + deployed snapshots purged).");
     }
     Ok(())
 }
@@ -1376,9 +1370,7 @@ async fn run_apply_files(
                         &wait_flags,
                     )
                     .await?;
-                    eprintln!(
-                        "Requisition/{fs}: import completed (last-import-ms={new_ts})"
-                    );
+                    eprintln!("Requisition/{fs}: import completed (last-import-ms={new_ts})");
                 }
             }
         }
@@ -1409,15 +1401,12 @@ async fn run_apply_files(
     Ok(())
 }
 
-
 /// Resolve the provisioning `-f` argument by delegating to the
 /// shared `onmsctl_core::apply_input::resolve_apply_input` helper
 /// with `&["yaml", "yml"]` as the extension filter. Eventconf calls
 /// the same helper with the same filter (see the parity Requirement
 /// in `harden-provisioning-and-eventconf-parity`'s spec deltas).
-fn resolve_apply_input(
-    file: &std::path::Path,
-) -> Result<onmsctl_core::apply_input::ApplyDispatch> {
+fn resolve_apply_input(file: &std::path::Path) -> Result<onmsctl_core::apply_input::ApplyDispatch> {
     onmsctl_core::apply_input::resolve_apply_input(file, &["yaml", "yml"])
 }
 

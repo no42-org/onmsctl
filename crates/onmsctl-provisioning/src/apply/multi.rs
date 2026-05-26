@@ -32,8 +32,8 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use crate::apply::{ApplyOptions, ApplyOutcome, RescanChoice, apply_requisition};
 use crate::api::ProvisioningApi;
+use crate::apply::{ApplyOptions, ApplyOutcome, RescanChoice, apply_requisition};
 use crate::model::RequisitionLocal;
 use onmsctl_core::{Error, Result};
 
@@ -209,9 +209,7 @@ pub async fn apply_directory(
     // here so a future refactor that breaks insertion order also
     // updates this contract or restores an explicit sort.
     debug_assert!(
-        results
-            .windows(2)
-            .all(|w| w[0].path <= w[1].path),
+        results.windows(2).all(|w| w[0].path <= w[1].path),
         "MultiApplyOutcome.results must remain in alphabetical path order"
     );
 
@@ -373,9 +371,13 @@ mod tests {
         // No HTTP mocks defined — if phase 2 runs the test panics on
         // unmatched requests.
         let _ = server;
-        let outcome = apply_directory(&[f1.clone(), f2.clone()], &api, &MultiApplyOptions::default())
-            .await
-            .unwrap();
+        let outcome = apply_directory(
+            &[f1.clone(), f2.clone()],
+            &api,
+            &MultiApplyOptions::default(),
+        )
+        .await
+        .unwrap();
         assert_eq!(outcome.state, MultiApplyState::AbortedPhase1);
         assert_eq!(outcome.collision_findings.len(), 1);
         let f = &outcome.collision_findings[0];
@@ -531,9 +533,13 @@ mod tests {
             .await;
 
         // Continue-on-error default — both files in results, bad is Err.
-        let outcome = apply_directory(&[good.clone(), bad.clone()], &api, &MultiApplyOptions::default())
-            .await
-            .unwrap();
+        let outcome = apply_directory(
+            &[good.clone(), bad.clone()],
+            &api,
+            &MultiApplyOptions::default(),
+        )
+        .await
+        .unwrap();
         assert_eq!(outcome.state, MultiApplyState::Completed);
         assert_eq!(outcome.results.len(), 2);
         // Alphabetical: bad before good.
