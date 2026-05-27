@@ -1341,6 +1341,24 @@ async fn run_apply_files(
     wait_flags: AsyncFlags,
     ctx: &Context,
 ) -> Result<()> {
+    // Empty input is a caller / glob-expansion mistake — a zero-file
+    // run is indistinguishable from a no-op success otherwise, which
+    // hides operator errors (typo'd dir, glob with no matches).
+    if files.is_empty() {
+        return Err(Error::Config(
+            "no input files to apply (the directory or glob expanded to zero \
+             matching YAML files)"
+                .into(),
+        ));
+    }
+
+    // --wait is a Phase-2 polling concern; dry-run skips Phase 2.
+    // Warn rather than reject so existing scripts that pass --wait
+    // unconditionally don't fail on --dry-run preview runs.
+    if dry_run && wait_flags.wait {
+        eprintln!("note: --wait is ignored with --dry-run (no Phase 2 import to wait on)");
+    }
+
     let client = OnmsClient::from_context(ctx)?;
     let api = ProvisioningApi::new(&client);
 
@@ -1351,7 +1369,7 @@ async fn run_apply_files(
 
     // ---- Phase 1: plan ----
     let plan = plan_directory(&files, &api, &opts).await?;
-    render_combined_plan(&plan, dry_run)?;
+    render_combined_plan(&plan, dry_run, ctx.output_format)?;
 
     if plan.is_aborted() {
         // Map Phase-1 abort cause to a structured error. The
@@ -1364,24 +1382,28 @@ async fn run_apply_files(
             .map(|f| f.key.as_str())
             .collect();
         if !hard_collisions.is_empty() {
-            let first = hard_collisions.first().copied().unwrap_or("?");
             return Err(Error::Config(format!(
-                "phase-1 abort: {} hard collision(s) detected (first: '{first}'); \
-                 see stderr for the full list",
-                hard_collisions.len()
+                "phase-1 abort: {} hard collision(s) detected: [{}]",
+                hard_collisions.len(),
+                hard_collisions.join(", ")
             )));
         }
-        let parse_count = plan.parse_errors.len();
+        let parse_paths: Vec<String> = plan
+            .parse_errors
+            .iter()
+            .map(|p| p.path.display().to_string())
+            .collect();
         return Err(Error::Config(format!(
-            "phase-1 abort: {parse_count} parse error(s); see stderr"
+            "phase-1 abort: {} parse error(s) in: [{}]",
+            parse_paths.len(),
+            parse_paths.join(", ")
         )));
     }
 
     if dry_run {
         // Spec: --dry-run exits 0 after Phase 1, after the combined
-        // plan is rendered. No structured stdout — JSON / YAML
-        // consumers that need the plan in a parseable shape should
-        // open an issue; the text plan on stderr is the contract.
+        // plan is rendered. Structured (`-o json|yaml`) dry-run output
+        // is deferred to a follow-up — see deferred-work.md.
         return Ok(());
     }
 
@@ -1425,33 +1447,42 @@ async fn run_apply_files(
 
 /// Render the Phase-1 combined plan to stderr.
 ///
-/// Format (multi-line so the output scales to N files):
+/// Format (multi-line so the output scales to N files; ASCII markers
+/// so the output is grep-friendly on non-UTF-8 terminals):
 ///
 /// ```text
 /// Phase 1 plan (3 files):
-///   ✓ a.yaml -> Requisition/acme-prod: would-create (rescanExisting=true, foreignSource=created)
-///   ✓ b.yaml -> Requisition/site-b: unchanged
-///   ✓ c.yaml -> Requisition/lab-east: would-update (rescanExisting=false, foreignSource=no-change)
+///   ok a.yaml -> Requisition/acme-prod: would-create (rescanExisting=true, foreignSource=created)
+///   ok b.yaml -> Requisition/site-b: unchanged
+///   ok c.yaml -> Requisition/lab-east: would-update (rescanExisting=false, foreignSource=no-change)
+///   Summary: 2 to apply, 1 unchanged
 /// ```
 ///
 /// Aborted Phase 1 (parse error or hard collision) renders the
-/// header as `ABORTED` and lists the parse-error rows / collision
-/// findings below.
-fn render_combined_plan(plan: &MultiApplyPlan, dry_run: bool) -> Result<()> {
+/// header with the input file count + `ABORTED`, lists the
+/// parse-error rows / collision findings below, and emits a summary
+/// of skip counts.
+///
+/// Collision findings are suppressed from stderr under
+/// `-o json | -o yaml` (they ship in the outcome payload instead) so
+/// structured-output consumers don't see the data twice.
+fn render_combined_plan(
+    plan: &MultiApplyPlan,
+    dry_run: bool,
+    output_format: OutputFormat,
+) -> Result<()> {
+    let n = plan.input_count;
+    let plural = if n == 1 { "" } else { "s" };
     if plan.is_aborted() {
-        eprintln!("Phase 1 plan: ABORTED");
+        eprintln!("Phase 1 plan ({n} file{plural}): ABORTED");
     } else {
-        let n = plan.entries.len();
         let suffix = if dry_run { " (dry-run)" } else { "" };
-        eprintln!(
-            "Phase 1 plan ({n} file{}):{suffix}",
-            if n == 1 { "" } else { "s" }
-        );
+        eprintln!("Phase 1 plan ({n} file{plural}):{suffix}");
     }
 
     for entry in &plan.entries {
         eprintln!(
-            "  ✓ {} -> Requisition/{}: {} (rescanExisting={}, foreignSource={})",
+            "  ok {} -> Requisition/{}: {} (rescanExisting={}, foreignSource={})",
             entry.path.display(),
             entry.plan.local.metadata.name,
             plan_state_word(entry.plan.state),
@@ -1467,20 +1498,50 @@ fn render_combined_plan(plan: &MultiApplyPlan, dry_run: bool) -> Result<()> {
             .err()
             .map(String::as_str)
             .unwrap_or("?");
-        eprintln!("  ✗ {} -> (parse error): {msg}", err.path.display());
+        eprintln!("  err {} -> (parse error): {msg}", err.path.display());
     }
 
     // Collision findings — hard errors as "error", soft duplicates
-    // as "warn". These are emitted here (Phase 1) rather than after
-    // Phase 2 so the spec scenario "warning ... continue to Phase 2"
-    // observes the warning BEFORE any non-GET HTTP request.
-    for f in &plan.collision_findings {
-        let sev = if matches!(f.code, CollisionCode::DuplicateMetadataName) {
-            "error"
-        } else {
-            "warn"
-        };
-        eprintln!("collision {sev}: {}", f.message);
+    // as "warn". Emitted here (Phase 1) rather than after Phase 2 so
+    // the spec scenario "warning ... continue to Phase 2" observes the
+    // warning BEFORE any non-GET HTTP request. Suppressed under
+    // structured output formats — render_multi_outcome ships them in
+    // the payload via `collision_findings`, and stderr+payload
+    // duplication is the bug we're avoiding.
+    let suppress_collisions = matches!(output_format, OutputFormat::Json | OutputFormat::Yaml);
+    if !suppress_collisions {
+        for f in &plan.collision_findings {
+            let sev = if matches!(f.code, CollisionCode::DuplicateMetadataName) {
+                "error"
+            } else {
+                "warn"
+            };
+            eprintln!("collision {sev}: {}", f.message);
+        }
+    }
+
+    // Aggregate summary line (proposal AC#2). Success and abort paths
+    // both get one — operators piping to scripts can grep `^  Summary:`
+    // for a fixed shape regardless of outcome.
+    let to_apply = plan
+        .entries
+        .iter()
+        .filter(|e| !matches!(e.plan.state, PlanState::Unchanged))
+        .count();
+    let unchanged = plan
+        .entries
+        .iter()
+        .filter(|e| matches!(e.plan.state, PlanState::Unchanged))
+        .count();
+    if plan.is_aborted() {
+        let parse_count = plan.parse_errors.len();
+        let collision_count = plan.collision_findings.len();
+        eprintln!(
+            "  Summary: ABORTED ({parse_count} parse error(s), \
+             {collision_count} collision finding(s))"
+        );
+    } else {
+        eprintln!("  Summary: {to_apply} to apply, {unchanged} unchanged");
     }
 
     Ok(())
