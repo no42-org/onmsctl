@@ -32,7 +32,7 @@ pub mod multi;
 
 pub use multi::{
     CollisionCode, CollisionFinding, MultiApplyFileResult, MultiApplyOptions, MultiApplyOutcome,
-    MultiApplyState, apply_directory,
+    MultiApplyState,
 };
 
 use crate::api::ProvisioningApi;
@@ -167,6 +167,17 @@ impl RequisitionPlan {
     /// multi-file orchestrator's per-entry `Unchanged` short-circuit
     /// (Group 4).
     pub(super) fn into_short_circuit(self, state: ApplyState) -> ApplyOutcome {
+        // Valid (PlanState, ApplyState) pairs: any plan → DryRun (the
+        // CLI dry-run short-circuit can render any plan as a dry-run
+        // outcome), and Unchanged → Unchanged. Anything else is a
+        // caller bug — Created / Updated only come from execute_plan.
+        debug_assert!(
+            matches!(state, ApplyState::DryRun)
+                || (self.state == PlanState::Unchanged && state == ApplyState::Unchanged),
+            "into_short_circuit: PlanState::{:?} cannot short-circuit to ApplyState::{:?}",
+            self.state,
+            state
+        );
         ApplyOutcome {
             state,
             delta: self.delta,

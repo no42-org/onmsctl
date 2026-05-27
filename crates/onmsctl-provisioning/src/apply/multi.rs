@@ -22,8 +22,8 @@
 //!
 //! Dry-run lives **above** this layer: the CLI calls `plan_directory`,
 //! renders the combined plan to stderr, and either returns (dry-run)
-//! or proceeds to `execute_multi`. Neither `apply_directory` nor the
-//! plan-vs-execute split honors `dry_run` internally.
+//! or proceeds to `execute_multi`. The plan-vs-execute split itself
+//! does not honor `dry_run` internally.
 //!
 //! Collision rules (unchanged from the original implementation):
 //!
@@ -50,7 +50,7 @@ use crate::apply::{
 use crate::model::RequisitionLocal;
 use onmsctl_core::{Error, Result};
 
-/// Caller-facing knobs for [`apply_directory`] / [`execute_multi`].
+/// Caller-facing knobs for [`plan_directory`] / [`execute_multi`].
 ///
 /// `dry_run` is intentionally absent — the multi-file pipeline
 /// honors dry-run at the CLI boundary by calling `plan_directory` +
@@ -160,6 +160,23 @@ pub struct MultiApplyPlanEntry {
 /// file; Phase 2 can proceed via [`execute_multi`]) **or** one of
 /// `parse_errors` / `collision_findings` carries an abort reason.
 /// `is_aborted()` is the load-bearing predicate.
+///
+/// # Abort-cause invariant
+///
+/// On the abort path, `parse_errors` and **hard** `collision_findings`
+/// are mutually exclusive: a parse error short-circuits Phase 1
+/// before the collision check runs, so a plan with non-empty
+/// `parse_errors` always has empty `collision_findings`, and vice
+/// versa. Soft `DuplicateForeignId` findings ride along with a
+/// successful `entries` set, not as an abort cause. The struct shape
+/// does not enforce this — callers that must distinguish abort
+/// causes should check `parse_errors` first.
+///
+/// TODO: A future refactor should replace these two `Vec` fields
+/// with `enum PlanAbort { ParseErrors(Vec<_>), HardCollisions(Vec<_>) }`
+/// and reshape `MultiApplyPlan` to `enum { Ready { entries,
+/// warnings, input_count }, Aborted(PlanAbort) }` so the invariant
+/// is type-level. Deferred from the Group-4 post-merge review.
 #[derive(Debug, Clone)]
 pub struct MultiApplyPlan {
     /// Per-file plan entries in alphabetical path order. Populated
@@ -171,6 +188,11 @@ pub struct MultiApplyPlan {
     /// Cross-file findings raised in Phase 1b. May include warnings
     /// (`DuplicateForeignId`) even on the success path.
     pub collision_findings: Vec<CollisionFinding>,
+    /// Total deduped input file count. Set by [`plan_directory`]
+    /// regardless of abort path so the combined-plan renderer can
+    /// display a consistent "Phase 1 plan (N files):" header on both
+    /// success and abort.
+    pub input_count: usize,
 }
 
 impl MultiApplyPlan {
@@ -204,6 +226,13 @@ pub async fn plan_directory(
     // ---- Phase 1a: read + parse every file ----
     let mut sorted: Vec<PathBuf> = files.to_vec();
     sorted.sort();
+    // Same path appearing twice in the caller-provided list would
+    // otherwise trigger a misleading DuplicateMetadataName collision
+    // listing the same path on both sides ("declared in 2 files: x,
+    // x"). Dedup before parsing so the same-path-twice case is a
+    // no-op, while genuine cross-file collisions still surface.
+    sorted.dedup();
+    let input_count = sorted.len();
 
     let mut parsed: Vec<(PathBuf, RequisitionLocal)> = Vec::new();
     let mut parse_errors: Vec<MultiApplyFileResult> = Vec::new();
@@ -227,6 +256,7 @@ pub async fn plan_directory(
             entries: vec![],
             parse_errors,
             collision_findings: vec![],
+            input_count,
         });
     }
 
@@ -241,6 +271,7 @@ pub async fn plan_directory(
             entries: vec![],
             parse_errors: vec![],
             collision_findings: collisions,
+            input_count,
         });
     }
 
@@ -252,7 +283,18 @@ pub async fn plan_directory(
 
     let mut entries: Vec<MultiApplyPlanEntry> = Vec::with_capacity(parsed.len());
     for (path, local) in parsed {
-        let plan = plan_requisition(&local, api, &per_file_opts).await?;
+        // Surface which file's plan-time GET failed before returning
+        // the bare HTTP error — the operator otherwise sees only the
+        // server's URL and can't attribute the failure to a file. We
+        // log to stderr (rather than wrapping the Error) so the
+        // original variant's exit-code mapping is preserved.
+        let plan = match plan_requisition(&local, api, &per_file_opts).await {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("phase-1 plan failed for {}: {e}", path.display());
+                return Err(e);
+            }
+        };
         entries.push(MultiApplyPlanEntry { path, plan });
     }
 
@@ -260,6 +302,7 @@ pub async fn plan_directory(
         entries,
         parse_errors: vec![],
         collision_findings: collisions,
+        input_count,
     })
 }
 
@@ -286,9 +329,36 @@ pub async fn execute_multi(
         "execute_multi called on an aborted MultiApplyPlan — caller bug"
     );
     if plan.is_aborted() {
-        return Err(Error::Config(
-            "execute_multi called on an aborted MultiApplyPlan".into(),
-        ));
+        let mut bits: Vec<String> = Vec::new();
+        if !plan.parse_errors.is_empty() {
+            let paths: Vec<String> = plan
+                .parse_errors
+                .iter()
+                .map(|p| p.path.display().to_string())
+                .collect();
+            bits.push(format!(
+                "{} parse error(s) [{}]",
+                plan.parse_errors.len(),
+                paths.join(", ")
+            ));
+        }
+        let hard_keys: Vec<&str> = plan
+            .collision_findings
+            .iter()
+            .filter(|f| f.is_hard_error())
+            .map(|f| f.key.as_str())
+            .collect();
+        if !hard_keys.is_empty() {
+            bits.push(format!(
+                "{} hard collision(s) [{}]",
+                hard_keys.len(),
+                hard_keys.join(", ")
+            ));
+        }
+        return Err(Error::Config(format!(
+            "execute_multi called on aborted MultiApplyPlan (caller bug): {}",
+            bits.join("; ")
+        )));
     }
 
     let mut results: Vec<MultiApplyFileResult> = Vec::with_capacity(plan.entries.len());
@@ -334,28 +404,6 @@ pub async fn execute_multi(
             MultiApplyState::Completed
         },
     })
-}
-
-/// Apply every requisition YAML in `files` against the provided
-/// [`ProvisioningApi`]. Thin orchestrator over [`plan_directory`]
-/// and [`execute_multi`] — does **not** honor dry-run. Callers that
-/// need the dry-run / combined-plan rendering boundary should compose
-/// `plan_directory` + their own render + (optionally) `execute_multi`
-/// directly, the way `cmd/mod.rs::run_apply_files` does.
-pub async fn apply_directory(
-    files: &[PathBuf],
-    api: &ProvisioningApi<'_>,
-    opts: &MultiApplyOptions,
-) -> Result<MultiApplyOutcome> {
-    let plan = plan_directory(files, api, opts).await?;
-    if plan.is_aborted() {
-        return Ok(MultiApplyOutcome {
-            results: plan.parse_errors,
-            collision_findings: plan.collision_findings,
-            state: MultiApplyState::AbortedPhase1,
-        });
-    }
-    execute_multi(plan, api, opts).await
 }
 
 /// Read a file and parse it as `RequisitionLocal`. Errors carry the
@@ -450,6 +498,27 @@ mod tests {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
+    /// Test-only thin orchestrator over `plan_directory` + `execute_multi`.
+    /// The production path is `cmd::run_apply_files` which composes the
+    /// two phases with combined-plan rendering between them; tests use
+    /// this helper to assert end-to-end behavior without re-implementing
+    /// the wiring in every case.
+    async fn apply_directory(
+        files: &[PathBuf],
+        api: &ProvisioningApi<'_>,
+        opts: &MultiApplyOptions,
+    ) -> Result<MultiApplyOutcome> {
+        let plan = plan_directory(files, api, opts).await?;
+        if plan.is_aborted() {
+            return Ok(MultiApplyOutcome {
+                results: plan.parse_errors,
+                collision_findings: plan.collision_findings,
+                state: MultiApplyState::AbortedPhase1,
+            });
+        }
+        execute_multi(plan, api, opts).await
+    }
+
     async fn mock_with_client() -> (MockServer, OnmsClient) {
         let server = MockServer::start().await;
         let url = Url::parse(&format!("{}/", server.uri())).unwrap();
@@ -502,9 +571,8 @@ mod tests {
         std::fs::write(&f1, yaml_with_name("acme-prod", "web01")).unwrap();
         std::fs::write(&f2, yaml_with_name("acme-prod", "web02")).unwrap();
 
-        // No HTTP mocks defined — if phase 2 runs the test panics on
-        // unmatched requests.
-        let _ = server;
+        // No HTTP mocks defined — Phase 1 must abort on hard collision
+        // before Phase 1c's GETs run.
         let outcome = apply_directory(
             &[f1.clone(), f2.clone()],
             &api,
@@ -518,6 +586,12 @@ mod tests {
         assert_eq!(f.code, CollisionCode::DuplicateMetadataName);
         assert_eq!(f.key, "acme-prod");
         assert_eq!(f.files.len(), 2);
+        // Positive assertion: zero HTTP requests reached the server,
+        // independent of wiremock's panic-on-unmatched behavior.
+        assert!(
+            server.received_requests().await.unwrap().is_empty(),
+            "Phase 1 must issue no HTTP requests on hard-collision abort"
+        );
     }
 
     #[tokio::test]
@@ -641,8 +715,7 @@ mod tests {
         std::fs::write(&bad, "this is not valid yaml: [[[").unwrap();
 
         // No HTTP mocks defined — Phase 1 must abort before any GET
-        // or non-GET is issued. Wiremock panics on unmatched requests.
-        let _ = server;
+        // or non-GET is issued.
         let outcome = apply_directory(
             &[good.clone(), bad.clone()],
             &api,
@@ -658,6 +731,12 @@ mod tests {
         assert!(outcome.results[0].outcome.is_err());
         // No collision findings — Phase 1b never ran.
         assert!(outcome.collision_findings.is_empty());
+        // Positive assertion: zero HTTP requests reached the server,
+        // independent of wiremock's panic-on-unmatched behavior.
+        assert!(
+            server.received_requests().await.unwrap().is_empty(),
+            "Phase 1 must issue no HTTP requests on parse-error abort"
+        );
     }
 
     #[tokio::test]
