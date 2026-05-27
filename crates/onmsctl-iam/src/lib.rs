@@ -14,5 +14,7 @@ pub mod apply;
 pub mod cmd;
 pub mod model;
 pub mod render;
+pub mod secret;
 
 pub use cmd::IamCmd;
+pub use secret::{SecretString, resolve_password_ref};

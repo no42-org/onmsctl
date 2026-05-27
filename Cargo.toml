@@ -47,6 +47,13 @@ glob = "0.3"
 percent-encoding = "2"
 serde_urlencoded = "0.7"
 
+# Secret zeroing on drop. Keeps cleartext passwords resolved at apply time
+# from lingering in freed heap pages. `zeroize_derive` is intentionally
+# absent — we only use `Zeroizing<String>` (runtime impl), no field-level
+# derive yet. Adding the feature pulls in proc-macro2 / quote / syn for no
+# code path that exercises them.
+zeroize = "1.8"
+
 # Workspace-internal crates. Explicit version (alongside `path`) keeps
 # `cargo-deny check bans` happy — without it the dep registers as a
 # wildcard. The version mirrors `workspace.package.version`.

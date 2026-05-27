@@ -1042,6 +1042,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "wiremock",
+ "zeroize",
 ]
 
 [[package]]

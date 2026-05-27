@@ -107,6 +107,24 @@ impl Serialize for AuthCreds {
     }
 }
 
+/// Read a secret from the OS keyring under `service` + `account`. Returns
+/// the cleartext on success, or [`crate::error::Error::Auth`] carrying the
+/// platform-specific reason on failure — callers need to distinguish "entry
+/// not found" from "backend unavailable" (D-Bus down on a headless Linux
+/// box, locked keychain, etc.), so the underlying error message is
+/// preserved verbatim.
+///
+/// The per-platform backend is selected by feature flags on the `keyring`
+/// dependency in this crate's `Cargo.toml` (see `[target.'cfg(...)']` blocks).
+pub fn read_keyring_secret(service: &str, account: &str) -> crate::error::Result<String> {
+    let entry = keyring::Entry::new(service, account).map_err(|e| {
+        crate::error::Error::Auth(format!("keyring entry construction failed: {e}"))
+    })?;
+    entry
+        .get_password()
+        .map_err(|e| crate::error::Error::Auth(format!("keyring read failed: {e}")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -294,17 +294,11 @@ fn read_secret_file(path: &std::path::Path) -> std::io::Result<String> {
         .to_string())
 }
 
-/// Read a keyring entry, returning the cleartext on success. Returns the
-/// underlying error verbatim so the caller can include it in the user-facing
-/// `Auth` error — operators need to distinguish "entry not found" from
-/// "backend unavailable" (D-Bus down on a headless Linux box, keychain
-/// locked, etc.).
+/// Thin adapter over [`crate::auth::read_keyring_secret`] — keeps the
+/// resolve_basic / resolve_bearer call sites tidy without reconstructing
+/// the service/account string pair at every call.
 fn read_keyring(r: &KeyringRef) -> Result<String> {
-    let entry = keyring::Entry::new(&r.service, &r.account)
-        .map_err(|e| Error::Auth(format!("keyring entry construction failed: {e}")))?;
-    entry
-        .get_password()
-        .map_err(|e| Error::Auth(format!("keyring read failed: {e}")))
+    crate::auth::read_keyring_secret(&r.service, &r.account)
 }
 
 static PLAINTEXT_WARNING_EMITTED: AtomicBool = AtomicBool::new(false);

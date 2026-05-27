@@ -20,6 +20,7 @@ async-trait = { workspace = true }
 percent-encoding = { workspace = true }
 quick-xml = { workspace = true }
 tokio = { workspace = true, features = ["macros"] }
+zeroize = { workspace = true }
 
 [dev-dependencies]
 wiremock = "0.6"
