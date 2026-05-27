@@ -215,6 +215,28 @@ impl OnmsClient {
         Ok(())
     }
 
+    /// `PUT` with an `application/x-www-form-urlencoded` body, discarding the
+    /// response body. Used by v1 `UserRestService.updateUser` (and similar
+    /// Horizon endpoints) that do not accept JSON. The form struct must
+    /// serialize to a flat key=value map — nested values are not representable
+    /// in form-encoding and `serde_urlencoded` will refuse them.
+    pub async fn put_form<F: Serialize>(&self, path: &str, form: &F) -> Result<()> {
+        let url = self.url_for(path)?;
+        let body = serde_urlencoded::to_string(form)
+            .map_err(|e| Error::Config(format!("form encode for PUT {path}: {e}")))?;
+        let req = self
+            .inner
+            .request(Method::PUT, url)
+            .header(
+                CONTENT_TYPE,
+                HeaderValue::from_static("application/x-www-form-urlencoded"),
+            )
+            .body(body);
+        let resp = self.send(req, Method::PUT, path).await?;
+        let _ = resp.bytes().await?;
+        Ok(())
+    }
+
     /// `DELETE` with optional JSON body. Returns unit on success since the
     /// EventConf delete endpoints return either 200 or 204 with no
     /// caller-actionable payload. The body is read and discarded so the
@@ -778,5 +800,119 @@ mod tests {
             extract_schemes("Bearer, Basic realm=\"y\""),
             vec!["Bearer", "Basic"]
         );
+    }
+
+    #[tokio::test]
+    async fn put_form_happy_path_drains_204() {
+        let mock = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/api/v2/users/alice"))
+            .and(header("content-type", "application/x-www-form-urlencoded"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&mock)
+            .await;
+
+        let client = OnmsClient::from_context(&ctx_for(
+            &format!("{}/api/v2/", mock.uri()),
+            AuthCreds::bearer("tok"),
+        ))
+        .unwrap();
+        client
+            .put_form(
+                "users/alice",
+                &Sample {
+                    name: "alice".into(),
+                    count: 17,
+                },
+            )
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn put_form_400_yields_http_status() {
+        let mock = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/api/v2/users/alice"))
+            .respond_with(ResponseTemplate::new(400).set_body_string("invalid form field"))
+            .mount(&mock)
+            .await;
+
+        let client = OnmsClient::from_context(&ctx_for(
+            &format!("{}/api/v2/", mock.uri()),
+            AuthCreds::bearer("tok"),
+        ))
+        .unwrap();
+        let err = client
+            .put_form(
+                "users/alice",
+                &Sample {
+                    name: "alice".into(),
+                    count: 17,
+                },
+            )
+            .await
+            .unwrap_err();
+        match err {
+            Error::HttpStatus { status, body, .. } => {
+                assert_eq!(status, 400);
+                assert!(body.contains("invalid form field"));
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn put_form_sends_basic_auth_header() {
+        let mock = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/api/v2/users/alice"))
+            .and(header("authorization", "Basic YWRtaW46c2VjcmV0"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&mock)
+            .await;
+
+        let client = OnmsClient::from_context(&ctx_for(
+            &format!("{}/api/v2/", mock.uri()),
+            AuthCreds::basic("admin", "secret"),
+        ))
+        .unwrap();
+        client
+            .put_form(
+                "users/alice",
+                &Sample {
+                    name: "alice".into(),
+                    count: 17,
+                },
+            )
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn put_form_respects_base_path_prefix() {
+        let mock = MockServer::start().await;
+        // Mount at the prefixed URL the client should construct.
+        Mock::given(method("PUT"))
+            .and(path("/opennms/rest/users/alice"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&mock)
+            .await;
+
+        let client = OnmsClient::from_context(&ctx_for(
+            &format!("{}/opennms/rest/", mock.uri()),
+            AuthCreds::bearer("tok"),
+        ))
+        .unwrap();
+        client
+            .put_form(
+                "users/alice",
+                &Sample {
+                    name: "alice".into(),
+                    count: 17,
+                },
+            )
+            .await
+            .unwrap();
     }
 }
