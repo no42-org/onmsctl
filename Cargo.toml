@@ -45,12 +45,14 @@ glob = "0.3"
 
 # URL & encoding
 percent-encoding = "2"
+serde_urlencoded = "0.7"
 
 # Workspace-internal crates. Explicit version (alongside `path`) keeps
 # `cargo-deny check bans` happy — without it the dep registers as a
 # wildcard. The version mirrors `workspace.package.version`.
 onmsctl-core = { path = "crates/onmsctl-core", version = "=0.0.1" }
 onmsctl-eventconf = { path = "crates/onmsctl-eventconf", version = "=0.0.1" }
+onmsctl-iam = { path = "crates/onmsctl-iam", version = "=0.0.1" }
 onmsctl-provisioning = { path = "crates/onmsctl-provisioning", version = "=0.0.1" }
 
 [profile.release]

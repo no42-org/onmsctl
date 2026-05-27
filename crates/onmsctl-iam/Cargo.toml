@@ -1,0 +1,27 @@
+[package]
+name = "onmsctl-iam"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "IAM capability for onmsctl: users + roles via v1 UserRestService, declarative `iam apply -f`, lockout protection, passwordRef secrets"
+publish = false
+
+[dependencies]
+onmsctl-core = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_norway = { workspace = true }
+schemars = { workspace = true }
+async-trait = { workspace = true }
+percent-encoding = { workspace = true }
+quick-xml = { workspace = true }
+tokio = { workspace = true, features = ["macros"] }
+
+[dev-dependencies]
+wiremock = "0.6"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tempfile = { workspace = true }

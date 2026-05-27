@@ -999,6 +999,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_norway",
+ "serde_urlencoded",
  "similar",
  "tempfile",
  "thiserror",
@@ -1021,6 +1022,24 @@ dependencies = [
  "serde_norway",
  "tempfile",
  "thiserror",
+ "tokio",
+ "wiremock",
+]
+
+[[package]]
+name = "onmsctl-iam"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "clap",
+ "onmsctl-core",
+ "percent-encoding",
+ "quick-xml",
+ "schemars",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "tempfile",
  "tokio",
  "wiremock",
 ]
