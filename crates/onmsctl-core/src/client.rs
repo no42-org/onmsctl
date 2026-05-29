@@ -26,7 +26,7 @@
 
 use std::time::Duration;
 
-use reqwest::header::{CONTENT_TYPE, HeaderValue};
+use reqwest::header::{ACCEPT, CONTENT_TYPE, HeaderValue};
 use reqwest::{Method, RequestBuilder, StatusCode, Url};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -131,7 +131,14 @@ impl OnmsClient {
     /// JSON response.
     pub async fn get<T: DeserializeOwned>(&self, path: &str, query: &[(&str, &str)]) -> Result<T> {
         let url = self.url_for(path)?;
-        let mut req = self.inner.request(Method::GET, url);
+        // Horizon REST endpoints are `@Produces({XML, JSON, ...})` with XML
+        // listed first, so JAX-RS content negotiation returns XML unless we
+        // explicitly ask for JSON. Without this header a real Horizon replies
+        // with XML and the JSON decode fails as `error decoding response body`.
+        let mut req = self
+            .inner
+            .request(Method::GET, url)
+            .header(ACCEPT, HeaderValue::from_static("application/json"));
         if !query.is_empty() {
             req = req.query(query);
         }
@@ -294,6 +301,7 @@ impl OnmsClient {
             .inner
             .request(method.clone(), url)
             .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
+            .header(ACCEPT, HeaderValue::from_static("application/json"))
             .json(body);
         let resp = self.send(req, method.clone(), path).await?;
         json_or_no_content(resp, method, path).await
@@ -485,6 +493,34 @@ mod tests {
                 count: 17
             }
         );
+    }
+
+    #[tokio::test]
+    async fn get_requests_json_via_accept_header() {
+        // Regression: Horizon REST endpoints are `@Produces({XML, JSON})` with
+        // XML first, so without `Accept: application/json` a real server returns
+        // XML and the JSON decode fails as "error decoding response body". The
+        // matcher requires the header — if the client stops sending it, the mock
+        // won't match and this test fails.
+        let mock = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v2/things"))
+            .and(header("accept", "application/json"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(Sample {
+                name: "first".into(),
+                count: 17,
+            }))
+            .mount(&mock)
+            .await;
+
+        let client = OnmsClient::from_context(&ctx_for(
+            &format!("{}/api/v2/", mock.uri()),
+            AuthCreds::basic("admin", "secret"),
+        ))
+        .unwrap();
+
+        let got: Sample = client.get("things", &[]).await.unwrap();
+        assert_eq!(got.count, 17);
     }
 
     #[tokio::test]
