@@ -286,6 +286,14 @@ Rule violations emit `PR###`-coded findings on stderr. Run
 for any code. PR001 / PR002 / PR003 are Warnings (exit 1), PR004 is
 Info (exit 0), and parse failures exit 2.
 
+XML elements the YAML model doesn't represent are **preserved** under
+`metadata.x-onmsctl-unmodeled` rather than silently dropped, so a
+`convert → apply → export → re-apply` round-trip keeps server-side
+fields onmsctl doesn't model yet. The annotation is stripped before
+the three-level diff and before the body is sent to Horizon, so it
+never changes apply outcome; `apply --diff` collapses it to a one-line
+`metadata.x-onmsctl-unmodeled: N entries` summary.
+
 ### Step 2 — Apply YAML to Horizon
 
 ```sh
@@ -315,6 +323,25 @@ In directory mode, `--wait` polls per-file after each successful
 apply (not as one batch wait). `--diff` is single-file only — for
 directory previews use `--dry-run -o yaml` to see the structured
 outcomes per file.
+
+Phase 1 plans every file first — parse, cross-file collision check,
+and a per-file diff (GET only) — then renders a combined plan to
+stderr before any write happens:
+
+```text
+Phase 1 plan (3 files): (dry-run)
+  ok a.yaml -> Requisition/acme-prod: would-create (rescanExisting=true, foreignSource=created)
+  ok b.yaml -> Requisition/site-b: unchanged
+  ok c.yaml -> Requisition/lab-east: would-update (rescanExisting=false, foreignSource=no-change)
+  Summary: 2 to apply, 1 unchanged
+```
+
+A parse error or a hard `metadata.name` collision aborts the whole
+batch in Phase 1 (the header reads `ABORTED`) before any HTTP write is
+issued. The `Summary:` line keeps a fixed shape on both the success
+and abort paths, so scripts can `grep '^  Summary:'` regardless of
+outcome. Under `-o json | -o yaml` the per-file rows and collision
+findings ship in the structured payload instead of stderr.
 
 ### Step 3 — Iterate
 
