@@ -1,0 +1,180 @@
+{
+  "$defs": {
+    "ApiVersion": {
+      "const": "onmsctl.no42.org/v1alpha1",
+      "description": "API version literal. Must equal 'onmsctl.no42.org/v1alpha1'.",
+      "type": "string"
+    },
+    "FromEnvRef": {
+      "additionalProperties": false,
+      "properties": {
+        "fromEnv": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "fromEnv"
+      ],
+      "type": "object"
+    },
+    "FromFileRef": {
+      "additionalProperties": false,
+      "properties": {
+        "fromFile": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "fromFile"
+      ],
+      "type": "object"
+    },
+    "FromKeyringRef": {
+      "additionalProperties": false,
+      "properties": {
+        "fromKeyring": {
+          "$ref": "#/$defs/KeyringRef"
+        }
+      },
+      "required": [
+        "fromKeyring"
+      ],
+      "type": "object"
+    },
+    "KeyringRef": {
+      "additionalProperties": false,
+      "description": "Service + account tuple identifying a keyring entry. Mirrors\n`onmsctl_core::config::KeyringRef` field-for-field; defined locally so\nonmsctl-core does not have to depend on `schemars` just to advertise\nthis struct in the IAM JSON schema.",
+      "properties": {
+        "account": {
+          "type": "string"
+        },
+        "service": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "service",
+        "account"
+      ],
+      "type": "object"
+    },
+    "KindUser": {
+      "const": "User",
+      "description": "Kind literal. Must equal 'User'.",
+      "type": "string"
+    },
+    "Metadata": {
+      "description": "Document metadata: foreign-key username + optional unmodeled passthrough.\n\nThe `unmodeled` field carries fields Horizon exposes on a user that this\nDTO does not model — same convention as provisioning's `RequisitionLocal::Metadata`\n(commit 9695c90). The annotation round-trips through `export` and is\nstripped before the wire body reaches Horizon and before `l1_compare`.",
+      "properties": {
+        "name": {
+          "description": "Username. Must be non-empty and NOT match `^\\d+$` (numeric-only):\nupstream's `{userCriteria}` path parameter resolves either by\nusername OR by numeric DB ID, and a numeric-string username is\nrouted ambiguously. Enforced at parse time as finding `PR-IAM-003`.",
+          "type": "string"
+        },
+        "x-onmsctl-unmodeled": {
+          "additionalProperties": true,
+          "description": "Server-side fields the DTO does not model. Stripped before apply; ignored by Horizon.",
+          "type": [
+            "object",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "PasswordRef": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FromFileRef",
+          "description": "Read the password from a local file. World-writable mode is refused;\nworld-readable triggers a warning. Group 5 implements the mode checks."
+        },
+        {
+          "$ref": "#/$defs/FromEnvRef",
+          "description": "Read the password from an environment variable."
+        },
+        {
+          "$ref": "#/$defs/FromKeyringRef",
+          "description": "Read the password from the OS keyring under the given service+account."
+        }
+      ],
+      "description": "Reference to where to load the plaintext password from. The YAML shape\nper design.md §D5 is a single-key mapping naming the source:\n\n```yaml\npasswordRef: { fromFile: /run/secrets/alice.pw }\npasswordRef: { fromEnv: ALICE_PW }\npasswordRef: { fromKeyring: { service: onmsctl, account: alice } }\n```\n\nResolution happens at apply time in Group 5; `Create` plans embed the\nresolved value, `Update` plans ignore the ref.\n\nThe enum is **untagged with each variant wrapping a strict\n`deny_unknown_fields` struct**. Serde does not accept\n`deny_unknown_fields` as a per-variant attribute on enum struct\nvariants, so each variant takes a one-field wrapper struct that\ncarries the strict-field attribute itself. This is what gives us\n\"exactly one of the three\" structurally — a mapping carrying two\nsource keys is unknown to every wrapper, so every variant fails.\nserde_norway's externally-tagged YAML representation uses tag syntax\n(`!FromFile /path`) which would diverge from the spec shape, so\nuntagged is the right discriminator strategy."
+    },
+    "UserSpec": {
+      "description": "The mutable IAM body of a User document.\n\n`password: <literal>` is explicitly rejected by [`UserSpec::deserialize`]\nwith finding `PR-IAM-001`; the only password channel is `passwordRef`.\n\n`dutySchedule` is modeled so it round-trips through `export`, but is\n**create-only** on the apply path: an Update plan that sees a diff on\nthis field emits warning `PR-IAM-004` rather than mutating, because the\nform-encoded PUT cannot reliably round-trip a `List<String>` through\nSpring's `BeanWrapper` (`params.getFirst(key)` discards multi-valued\nentries). See design.md §D11.5.",
+      "properties": {
+        "comments": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dutySchedule": {
+          "description": "`List<String>` on the wire side. Create-only via the POST XML body;\nupdates emit a warning instead of mutating. See type-level doc.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "email": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fullName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "passwordRef": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PasswordRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Secret indirection — never a literal password. See design.md §D5."
+        },
+        "roles": {
+          "description": "Closed-set of role strings. Duplicate entries in the input list are\nrejected at parse time (BTreeSet alone would silently merge them).\nSoft validation against [`KNOWN_ROLES`] warns on unknowns; never refuses.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true,
+          "x-onmsctl-list-kind": "set"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "One `kind: User` document, as parsed from local YAML.",
+  "properties": {
+    "apiVersion": {
+      "$ref": "#/$defs/ApiVersion"
+    },
+    "kind": {
+      "$ref": "#/$defs/KindUser"
+    },
+    "metadata": {
+      "$ref": "#/$defs/Metadata"
+    },
+    "spec": {
+      "$ref": "#/$defs/UserSpec"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "spec"
+  ],
+  "title": "UserLocal",
+  "type": "object"
+}

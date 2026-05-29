@@ -88,3 +88,6 @@ schema:  ## Regenerate every committed schemas/*.schema.json from the Rust types
 	cargo run --quiet --release --example gen_schema -p onmsctl-provisioning \
 		> schemas/requisition.schema.json.tmp \
 		&& mv schemas/requisition.schema.json.tmp schemas/requisition.schema.json
+	cargo run --quiet --release --example gen_schema -p onmsctl-iam \
+		> schemas/iam-user.schema.json.tmp \
+		&& mv schemas/iam-user.schema.json.tmp schemas/iam-user.schema.json
