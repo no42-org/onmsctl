@@ -39,6 +39,8 @@
 //! server lacks, remove only roles it has) because `DELETE …/roles/{role}`
 //! of an unheld role returns 400 (verified live 2026-05-31).
 
+pub mod multi;
+
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
