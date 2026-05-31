@@ -169,10 +169,38 @@ struct UserCreateXml {
     role: Vec<String>,
 }
 
+/// Reject text that cannot be represented in XML 1.0. quick-xml escapes the
+/// markup-significant characters (`< > & " '`) but passes C0 control bytes
+/// through verbatim, so a value carrying e.g. a NUL would serialize to a
+/// document the server rejects with an opaque 4xx/5xx. The only C0 controls
+/// legal in XML 1.0 text are tab/LF/CR; everything else below `U+0020` is
+/// refused here with a clear client-side error. (Passwords already have
+/// internal newlines rejected upstream in Group 5; this is the belt for the
+/// remaining control bytes and for the other fields.)
+fn reject_xml_illegal_controls(field: &str, value: &str) -> Result<(), quick_xml::SeError> {
+    use serde::ser::Error as _;
+    if let Some(c) = value
+        .chars()
+        .find(|&c| (c as u32) < 0x20 && c != '\t' && c != '\n' && c != '\r')
+    {
+        return Err(quick_xml::SeError::custom(format!(
+            "{field} contains control character U+{:04X}, which is not representable in XML 1.0; \
+             refusing to build a malformed POST /users body",
+            c as u32
+        )));
+    }
+    Ok(())
+}
+
 /// Build the XML `POST /users` body from typed parts. `password` is the
 /// already-resolved plaintext (from a `passwordRef`, Group 5); pass `None`
 /// to create a user without a password. The caller appends
 /// `?hashPassword=true` to the URL when a password is present.
+///
+/// Every text field is checked for XML-1.0-illegal control characters
+/// before serialization (see [`reject_xml_illegal_controls`]) so a control
+/// byte in a password or comment fails fast client-side instead of emitting
+/// a malformed body the server rejects opaquely.
 pub fn user_create_xml(
     user_id: &str,
     full_name: Option<&str>,
@@ -182,6 +210,23 @@ pub fn user_create_xml(
     duty_schedule: &[String],
     roles: &[String],
 ) -> Result<String, quick_xml::SeError> {
+    reject_xml_illegal_controls("user-id", user_id)?;
+    for (field, value) in [
+        ("full-name", full_name),
+        ("user-comments", comments),
+        ("email", email),
+        ("password", password),
+    ] {
+        if let Some(v) = value {
+            reject_xml_illegal_controls(field, v)?;
+        }
+    }
+    for d in duty_schedule {
+        reject_xml_illegal_controls("duty-schedule", d)?;
+    }
+    for r in roles {
+        reject_xml_illegal_controls("role", r)?;
+    }
     let doc = UserCreateXml {
         user_id: user_id.to_owned(),
         full_name: full_name.map(str::to_owned),
@@ -326,6 +371,21 @@ mod tests {
     fn create_xml_skips_absent_scalars_and_empty_lists() {
         let xml = user_create_xml("bob", None, None, None, None, &[], &[]).unwrap();
         assert_eq!(xml, "<user><user-id>bob</user-id></user>");
+    }
+
+    #[test]
+    fn create_xml_rejects_control_characters() {
+        // A NUL (or other C0 control) in any text field must fail fast
+        // client-side rather than emit a body the server rejects opaquely.
+        let err =
+            user_create_xml("bob", None, None, None, Some("pass\u{0}word"), &[], &[]).unwrap_err();
+        assert!(err.to_string().contains("password"), "{err}");
+        assert!(err.to_string().contains("U+0000"), "{err}");
+
+        // tab / LF / CR are legal XML 1.0 text and must still pass.
+        assert!(
+            user_create_xml("bob", Some("line1\nline2\tend"), None, None, None, &[], &[]).is_ok()
+        );
     }
 
     #[test]

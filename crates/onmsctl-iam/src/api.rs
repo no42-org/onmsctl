@@ -112,17 +112,25 @@ impl<'c> IamApi<'c> {
     }
 
     /// `GET /users/whoami`. Returns the calling identity, or `Ok(None)` when
-    /// the server responds non-2xx (401/403 under token/anonymous auth) or
-    /// returns a user with an empty `user-id`. Transport errors (DNS,
-    /// refused, TLS) still propagate — only an *answered-but-unusable*
-    /// response collapses to `None`. See design §D6.
+    /// the server responds non-2xx (401/403 under token/anonymous auth, or a
+    /// `204` — core maps both to [`Error::HttpStatus`]) or returns a 2xx user
+    /// with an empty `user-id`.
+    ///
+    /// **Caveat (deferred to Group 7):** a `200` with an empty or non-JSON
+    /// body decodes to [`Error::Transport`], not [`Error::HttpStatus`], so it
+    /// currently *propagates* rather than collapsing to `None`. §D6/task 7.2
+    /// say "empty body → None"; the precise `IamWhoamiUnavailable` refusal is
+    /// enforced in the Group 7 lockout code, which treats both `None` and a
+    /// whoami error as "cannot evaluate self-lockout → refuse". The outcome
+    /// (apply aborts) is safe either way; only the surfaced error class
+    /// differs. Genuine transport errors (DNS, refused, TLS) always propagate.
     pub async fn get_whoami(&self) -> Result<Option<OnmsUserWire>> {
         let path = format!("{BASE}/users/whoami");
         match self.client.get::<OnmsUserWire>(&path, &[]).await {
             Ok(u) if u.user_id.is_empty() => Ok(None),
             Ok(u) => Ok(Some(u)),
-            // Any HTTP status error (incl. the 204-decoded-as-error case)
-            // means "no usable identity" for the self-lockout check.
+            // Non-2xx (incl. the 204-decoded-as-error case) → no usable
+            // identity for the self-lockout check.
             Err(Error::HttpStatus { .. }) => Ok(None),
             Err(e) => Err(e),
         }
@@ -138,8 +146,18 @@ impl<'c> IamApi<'c> {
     ///
     /// The "a Create plan must carry a `passwordRef`" policy is enforced one
     /// layer up in the planner (Group 6), which resolves the ref to this
-    /// plaintext; callers never reach here without one.
+    /// plaintext; callers never reach here without one. An **empty** password
+    /// is rejected here defensively (`resolve_password_ref` already refuses
+    /// empty secrets upstream) so the contract is enforced rather than merely
+    /// asserted, and the operator gets a clear error instead of the server's
+    /// `500 'password' cannot be null!`.
     pub async fn post_user(&self, local: &UserLocal, password: &str) -> Result<()> {
+        if password.is_empty() {
+            return Err(Error::Config(
+                "POST /users requires a non-empty password; the resolved passwordRef is empty"
+                    .into(),
+            ));
+        }
         let roles: Vec<String> = local.spec.roles.iter().cloned().collect();
         let duty: Vec<String> = local.spec.duty_schedule.clone().into_iter().collect();
         let xml = user_create_xml(
@@ -377,6 +395,16 @@ mod tests {
             .await;
         let api = IamApi::new(&client);
         api.post_user(&sample_local("any"), "pw").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn post_user_rejects_empty_password() {
+        // Defensive guard: an empty resolved password fails fast client-side
+        // (no HTTP issued) rather than letting the server 500.
+        let (_mock, client) = mock_with_client().await;
+        let api = IamApi::new(&client);
+        let err = api.post_user(&sample_local("x"), "").await.unwrap_err();
+        assert!(matches!(err, Error::Config(_)), "{err:?}");
     }
 
     #[tokio::test]
