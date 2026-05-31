@@ -222,6 +222,38 @@ pub enum Error {
     #[error("user '{name}' does not exist on the server")]
     UserNotFound { name: String },
 
+    /// **IAM-001** — an `iam apply` would leave a protected role (default
+    /// `ROLE_ADMIN`) with zero holders on the server. Refused before any
+    /// write. Overridable with `--allow-admin-lockout --yes`. Dedicated exit
+    /// code 13 so ops automation can branch on "admin lockout averted".
+    #[error(
+        "IAM-001: this apply would remove the last holder of protected role(s) [{roles}]; \
+         refusing to avoid locking everyone out. Re-run with `--allow-admin-lockout --yes` \
+         if this is intentional."
+    )]
+    IamLockout { roles: String },
+
+    /// **IAM-002** — an `iam apply` would strip the **calling** user's own
+    /// protected role (or delete their account). Refused with **no override**
+    /// — switch to another context (`--context`) to proceed. Exit code 14.
+    #[error(
+        "IAM-002: this apply would strip your own protected role or delete your account \
+         ('{user}'); refusing (no override). Switch contexts with `--context` to proceed."
+    )]
+    IamSelfLockout { user: String },
+
+    /// The self-lockout invariant (IAM-002) could not be evaluated because
+    /// `GET /users/whoami` did not yield a usable caller identity (non-2xx or
+    /// empty body — e.g. anonymous-token auth). The apply refuses rather than
+    /// skip the check silently. Operators in this situation are limited to
+    /// `--dry-run` / read-only workflows. Exit code 15.
+    #[error(
+        "could not determine the calling user via GET /users/whoami (non-2xx or empty body); \
+         refusing the apply because the self-lockout invariant (IAM-002) cannot be evaluated. \
+         Use a basic-auth context, or restrict to --dry-run / read-only workflows."
+    )]
+    IamWhoamiUnavailable,
+
     // -- Wrapped foreign errors --
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
@@ -263,6 +295,12 @@ impl Error {
             // Read-only refusal: distinct so ops scripts can branch on
             // "policy refused" vs config misuse.
             Error::ReadOnlyRefused { .. } => 12,
+            // IAM lockout invariants: distinct codes so automation can tell
+            // "admin lockout averted" / "self lockout averted" / "couldn't
+            // identify caller" apart.
+            Error::IamLockout { .. } => 13,
+            Error::IamSelfLockout { .. } => 14,
+            Error::IamWhoamiUnavailable => 15,
             // Generic/internal errors collapse to 2 (analogous to misuse).
             _ => 2,
         }
@@ -349,6 +387,23 @@ mod tests {
         assert_eq!(Error::PartialSuccess { failed: 3 }.exit_code(), 1);
         assert_eq!(Error::Config("x".into()).exit_code(), 2);
         assert_eq!(Error::NoContext.exit_code(), 2);
+        // IAM lockout invariants — stable codes 13/14/15.
+        assert_eq!(Error::UserNotFound { name: "x".into() }.exit_code(), 1);
+        assert_eq!(
+            Error::IamLockout {
+                roles: "ROLE_ADMIN".into()
+            }
+            .exit_code(),
+            13
+        );
+        assert_eq!(
+            Error::IamSelfLockout {
+                user: "admin".into()
+            }
+            .exit_code(),
+            14
+        );
+        assert_eq!(Error::IamWhoamiUnavailable.exit_code(), 15);
     }
 
     #[test]

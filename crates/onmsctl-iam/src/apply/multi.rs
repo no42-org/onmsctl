@@ -25,7 +25,7 @@ use std::path::PathBuf;
 use onmsctl_core::{Error, Result};
 
 use crate::api::IamApi;
-use crate::apply::{Finding, UserPlan, UserReconcile, check_input_uniqueness, plan_user};
+use crate::apply::{Finding, UserPlan, UserReconcile, check_input_uniqueness, lockout, plan_user};
 use crate::model::local::UserLocal;
 use crate::model::wire::OnmsUserWire;
 use crate::secret::resolve_password_ref;
@@ -48,6 +48,14 @@ pub struct ApplyOptions {
     /// Soft role-validation set (default [`crate::model::KNOWN_ROLES`],
     /// overridable per context).
     pub known_roles: BTreeSet<String>,
+    /// Roles whose holder set must not be emptied (IAM-001). Default
+    /// `[ROLE_ADMIN]`; an empty set disables the admin-lockout check.
+    /// Per-context `iam.protected-roles` resolves into this (wired at the CLI
+    /// layer, Group 8).
+    pub protected_roles: BTreeSet<String>,
+    /// `--allow-admin-lockout --yes` — skips the IAM-001 admin-lockout refusal
+    /// only. IAM-002 self-lockout has no override.
+    pub allow_admin_lockout: bool,
 }
 
 /// Top-level state of an apply run.
@@ -301,9 +309,33 @@ pub async fn apply_users(
     let planned = plan_users(&locals, api, &opts.known_roles).await?;
     let server_users = planned.server_users.clone();
 
-    // ---- Group 7 hook: lockout invariants (IAM-001 / IAM-002) run here,
-    // after plan and before execute, consuming `server_users`. Not yet
-    // implemented; tracked in Group 7. ----
+    // ---- lockout invariants (IAM-001 / IAM-002), §D6 / tasks 7.1–7.3 ----
+    //
+    // Enforced on the real-apply path only. `--dry-run` deliberately does NOT
+    // gate on lockout (and does not require `whoami`): dry-run is a review
+    // workflow that must stay usable in read-only / anonymous-token contexts
+    // (design §D6), which is also why §D8 classifies `apply --dry-run` as a
+    // Read. This resolves the §D4-vs-§D6 tension in favour of a usable
+    // dry-run; the real apply below still refuses.
+    if !opts.dry_run {
+        let flat: Vec<&UserPlan> = planned
+            .reconciles
+            .iter()
+            .flat_map(|(_, r)| r.plans.iter())
+            .collect();
+        lockout::check_admin_lockout(
+            &flat,
+            &server_users,
+            &opts.protected_roles,
+            opts.allow_admin_lockout,
+        )?;
+        // Only fetch the caller identity when an action could actually
+        // self-lock; benign applies need no `whoami` round trip.
+        if lockout::self_lockout_possible(&flat, &opts.protected_roles) {
+            let whoami = api.get_whoami().await?.map(|u| u.user_id);
+            lockout::check_self_lockout(&flat, whoami.as_deref(), &opts.protected_roles)?;
+        }
+    }
 
     // ---- dry-run short-circuit ----
     if opts.dry_run {
@@ -386,7 +418,19 @@ mod tests {
             dry_run,
             keep_going,
             known_roles: known(),
+            protected_roles: BTreeSet::from(["ROLE_ADMIN".to_string()]),
+            allow_admin_lockout: false,
         }
+    }
+
+    async fn mount_whoami(server: &MockServer, user_id: &str) {
+        Mock::given(method("GET"))
+            .and(path("/rest/users/whoami"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "user-id": user_id
+            })))
+            .mount(server)
+            .await;
     }
 
     /// A passwordRef pointing at a 0600 temp file (deterministic, no env race).
@@ -529,14 +573,158 @@ mod tests {
     async fn role_set_diff_adds_and_removes() {
         let (server, client) = mock_client().await;
         mount_users_list(&server, serde_json::json!([]), 0).await;
-        // server [ADMIN, REST]; local [REST, USER] → Add USER, Remove ADMIN.
+        // server [DASHBOARD, REST]; local [DASHBOARD, USER] → Add USER, Remove
+        // REST. Non-protected roles keep this focused on delta mechanics
+        // without entangling the lockout invariant.
         Mock::given(method("GET"))
             .and(path("/rest/users/alice"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "user-id": "alice", "full-name": "Full Name", "role": ["ROLE_ADMIN", "ROLE_REST"]
+                "user-id": "alice", "full-name": "Full Name", "role": ["ROLE_DASHBOARD", "ROLE_REST"]
             })))
             .mount(&server)
             .await;
+        Mock::given(method("PUT"))
+            .and(path("/rest/users/alice/roles/ROLE_USER"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path("/rest/users/alice/roles/ROLE_REST"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+        let api = IamApi::new(&client);
+        let docs = vec![(
+            PathBuf::from("a.yaml"),
+            local("alice", &["ROLE_DASHBOARD", "ROLE_USER"], None),
+        )];
+        let report = apply_users(&docs, &api, &opts(false, false)).await.unwrap();
+        assert_eq!(report.users[0].result, UserResult::Applied);
+    }
+
+    // ---- Group 7 lockout, end-to-end through apply_users ----
+
+    /// A user (sole admin) being demoted from ROLE_ADMIN → IAM-001 before any
+    /// write; whoami is never reached (admin check runs first).
+    #[tokio::test]
+    async fn admin_lockout_refused_end_to_end() {
+        let (server, client) = mock_client().await;
+        mount_users_list(
+            &server,
+            serde_json::json!([{"user-id": "alice", "role": ["ROLE_ADMIN"]}]),
+            1,
+        )
+        .await;
+        Mock::given(method("GET"))
+            .and(path("/rest/users/alice"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "user-id": "alice", "full-name": "Full Name", "role": ["ROLE_ADMIN"]
+            })))
+            .mount(&server)
+            .await;
+        // No write mocks — must refuse before executing.
+        let api = IamApi::new(&client);
+        let docs = vec![(
+            PathBuf::from("a.yaml"),
+            local("alice", &["ROLE_USER"], None),
+        )];
+        let err = apply_users(&docs, &api, &opts(false, false))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::IamLockout { .. }));
+    }
+
+    /// The caller (alice) demoting their own ROLE_ADMIN, with a second admin
+    /// surviving (so IAM-001 passes) → IAM-002, no override.
+    #[tokio::test]
+    async fn self_lockout_refused_end_to_end() {
+        let (server, client) = mock_client().await;
+        mount_users_list(
+            &server,
+            serde_json::json!([
+                {"user-id": "alice", "role": ["ROLE_ADMIN"]},
+                {"user-id": "bob", "role": ["ROLE_ADMIN"]}
+            ]),
+            2,
+        )
+        .await;
+        Mock::given(method("GET"))
+            .and(path("/rest/users/alice"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "user-id": "alice", "full-name": "Full Name", "role": ["ROLE_ADMIN"]
+            })))
+            .mount(&server)
+            .await;
+        mount_whoami(&server, "alice").await;
+        let api = IamApi::new(&client);
+        let docs = vec![(
+            PathBuf::from("a.yaml"),
+            local("alice", &["ROLE_USER"], None),
+        )];
+        let err = apply_users(&docs, &api, &opts(false, false))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::IamSelfLockout { user } if user == "alice"));
+    }
+
+    /// A risky (protected RoleRemove) apply where whoami is unavailable (401)
+    /// → IamWhoamiUnavailable. Two admins so IAM-001 passes and we reach the
+    /// self-lockout check.
+    #[tokio::test]
+    async fn whoami_unavailable_refused_end_to_end() {
+        let (server, client) = mock_client().await;
+        mount_users_list(
+            &server,
+            serde_json::json!([
+                {"user-id": "alice", "role": ["ROLE_ADMIN"]},
+                {"user-id": "bob", "role": ["ROLE_ADMIN"]}
+            ]),
+            2,
+        )
+        .await;
+        Mock::given(method("GET"))
+            .and(path("/rest/users/alice"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "user-id": "alice", "full-name": "Full Name", "role": ["ROLE_ADMIN"]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/rest/users/whoami"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+        let api = IamApi::new(&client);
+        let docs = vec![(
+            PathBuf::from("a.yaml"),
+            local("alice", &["ROLE_USER"], None),
+        )];
+        let err = apply_users(&docs, &api, &opts(false, false))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::IamWhoamiUnavailable));
+    }
+
+    /// `--allow-admin-lockout` skips IAM-001; with a non-self caller the
+    /// demotion of the sole admin then proceeds to execute.
+    #[tokio::test]
+    async fn allow_admin_lockout_override_proceeds() {
+        let (server, client) = mock_client().await;
+        mount_users_list(
+            &server,
+            serde_json::json!([{"user-id": "alice", "role": ["ROLE_ADMIN"]}]),
+            1,
+        )
+        .await;
+        Mock::given(method("GET"))
+            .and(path("/rest/users/alice"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "user-id": "alice", "full-name": "Full Name", "role": ["ROLE_ADMIN"]
+            })))
+            .mount(&server)
+            .await;
+        mount_whoami(&server, "root").await;
+        // Plan = RoleAdd(ROLE_USER) + RoleRemove(ROLE_ADMIN); mock both.
         Mock::given(method("PUT"))
             .and(path("/rest/users/alice/roles/ROLE_USER"))
             .respond_with(ResponseTemplate::new(204))
@@ -550,9 +738,12 @@ mod tests {
         let api = IamApi::new(&client);
         let docs = vec![(
             PathBuf::from("a.yaml"),
-            local("alice", &["ROLE_REST", "ROLE_USER"], None),
+            local("alice", &["ROLE_USER"], None),
         )];
-        let report = apply_users(&docs, &api, &opts(false, false)).await.unwrap();
+        let mut o = opts(false, false);
+        o.allow_admin_lockout = true;
+        let report = apply_users(&docs, &api, &o).await.unwrap();
+        assert_eq!(report.state, ApplyState::Completed);
         assert_eq!(report.users[0].result, UserResult::Applied);
     }
 
