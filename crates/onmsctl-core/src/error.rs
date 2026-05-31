@@ -213,6 +213,15 @@ pub enum Error {
         kind: PostUploadLookupKind,
     },
 
+    /// A IAM operation targeted a user that does not exist on the server.
+    /// Raised by `iam user set-password` (and similar update flows) after a
+    /// pre-flight `GET /users/{name}` returns 404, so the operator gets a
+    /// clear "no such user" rather than an ambiguous 404 from a form-encoded
+    /// PUT. Shares exit code 1 with [`Error::HttpStatus`] — the request was
+    /// understood; the target is absent.
+    #[error("user '{name}' does not exist on the server")]
+    UserNotFound { name: String },
+
     // -- Wrapped foreign errors --
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
@@ -239,6 +248,7 @@ impl Error {
             Error::HttpStatus { .. } => 1,
             Error::PartialSuccess { .. } => 1,
             Error::PostUploadLookupFailed { .. } => 1,
+            Error::UserNotFound { .. } => 1,
             Error::Dns(_) => 4,
             Error::ConnRefused(_) => 5,
             Error::Timeout(_) => 6,

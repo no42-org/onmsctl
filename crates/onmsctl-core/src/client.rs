@@ -244,6 +244,24 @@ impl OnmsClient {
         Ok(())
     }
 
+    /// `POST` with an `application/xml` body, discarding the response body.
+    /// Used by v1 `UserRestService.addUser`, which only consumes XML — a JSON
+    /// POST to `/users` returns `415 Unsupported Media Type` (verified against
+    /// a live Horizon). The caller serializes the document (e.g. via
+    /// `quick-xml`) and passes the full string; any query string (such as
+    /// `?hashPassword=true`) rides on `path`.
+    pub async fn post_xml(&self, path: &str, body: String) -> Result<()> {
+        let url = self.url_for(path)?;
+        let req = self
+            .inner
+            .request(Method::POST, url)
+            .header(CONTENT_TYPE, HeaderValue::from_static("application/xml"))
+            .body(body);
+        let resp = self.send(req, Method::POST, path).await?;
+        let _ = resp.bytes().await?;
+        Ok(())
+    }
+
     /// `DELETE` with optional JSON body. Returns unit on success since the
     /// EventConf delete endpoints return either 200 or 204 with no
     /// caller-actionable payload. The body is read and discarded so the
