@@ -369,6 +369,15 @@ fn deserialize_unique_roles<'de, D: Deserializer<'de>>(d: D) -> Result<BTreeSet<
     let vec: Vec<String> = Vec::deserialize(d)?;
     let mut set = BTreeSet::new();
     for r in vec {
+        // An empty role string would reach the `/users/{name}/roles/{role}`
+        // endpoint as a trailing-empty path segment (`.../roles/`), which the
+        // server routes ambiguously rather than rejecting. Refuse at parse
+        // time. (Review finding, 2026-05-31.)
+        if r.is_empty() {
+            return Err(DeError::custom(
+                "spec.roles contains an empty role string; remove it or name a role",
+            ));
+        }
         if !set.insert(r.clone()) {
             return Err(DeError::custom(format!(
                 "duplicate role {r:?} in spec.roles; declare each role at most once"
@@ -525,6 +534,22 @@ spec:
         let err = parse_user(yaml).unwrap_err().to_string();
         assert!(err.contains("duplicate role"));
         assert!(err.contains("ROLE_USER"));
+    }
+
+    #[test]
+    fn rejects_empty_role_string() {
+        let yaml = r#"
+apiVersion: onmsctl.no42.org/v1alpha1
+kind: User
+metadata:
+  name: alice
+spec:
+  roles:
+    - ROLE_USER
+    - ""
+"#;
+        let err = parse_user(yaml).unwrap_err().to_string();
+        assert!(err.contains("empty role"), "got: {err}");
     }
 
     #[test]
