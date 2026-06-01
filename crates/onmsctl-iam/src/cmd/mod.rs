@@ -55,16 +55,17 @@ pub struct ApplyArgs {
     /// Plan and render without issuing any write.
     #[arg(long)]
     dry_run: bool,
-    /// Show the per-user diff (currently the same as the plan summary).
+    /// Show the per-user planned actions (the per-user diff). Without this or
+    /// `--dry-run`, apply prints only the one-line summary + findings.
     #[arg(long)]
     diff: bool,
     /// Continue past a per-user Phase-2 failure instead of stopping. Does NOT
     /// bypass plan-phase refusals (IAM-001/002, PR-IAM-002/003/005).
     #[arg(long)]
     keep_going: bool,
-    /// Permit emptying a protected role's holder set (IAM-001). Only takes
-    /// effect together with `--yes`.
-    #[arg(long)]
+    /// Permit emptying a protected role's holder set (IAM-001). Requires
+    /// `--yes`.
+    #[arg(long, requires = "yes")]
     allow_admin_lockout: bool,
     /// Confirm destructive / override actions (required with
     /// `--allow-admin-lockout`).
@@ -307,6 +308,9 @@ async fn run_user_create(args: CreateArgs, ctx: &Context) -> Result<()> {
     let client = OnmsClient::from_context(ctx)?;
     let api = IamApi::new(&client);
     let secret = resolve_password(&args.password, "create")?;
+    for role in &args.roles {
+        warn_if_unknown_role(role);
+    }
     let spec = crate::model::local::UserSpec {
         full_name: args.full_name,
         email: args.email,
@@ -344,6 +348,7 @@ async fn run_role_add(name: &str, role: &str, ctx: &Context) -> Result<()> {
     if role.is_empty() {
         return Err(Error::Config("role must not be empty".into()));
     }
+    warn_if_unknown_role(role);
     let client = OnmsClient::from_context(ctx)?;
     let api = IamApi::new(&client);
     api.put_user_role(name, role).await?;
@@ -380,8 +385,16 @@ async fn run_user_delete(name: &str, yes: bool, ctx: &Context) -> Result<()> {
         };
         confirm_with_message(&blast)?;
     }
-    api.delete_user(name).await?;
-    eprintln!("deleted user '{name}'");
+    // Idempotent delete: a 404 means the user is already absent. The non-`--yes`
+    // path short-circuits on the pre-confirm GET; the `--yes` (automation) path
+    // skips that GET, so tolerate the 404 here too rather than failing the run.
+    match api.delete_user(name).await {
+        Ok(()) => eprintln!("deleted user '{name}'"),
+        Err(Error::HttpStatus { status: 404, .. }) => {
+            eprintln!("note: user '{name}' not present (DELETE 404); nothing to do.");
+        }
+        Err(e) => return Err(e),
+    }
     Ok(())
 }
 
@@ -432,12 +445,18 @@ async fn run_apply(args: ApplyArgs, ctx: &Context) -> Result<()> {
         keep_going: args.keep_going,
         known_roles: KNOWN_ROLES.iter().map(|s| s.to_string()).collect(),
         protected_roles: std::collections::BTreeSet::from(["ROLE_ADMIN".to_string()]),
-        // The IAM-001 override needs both flags (task 7.3).
+        // The IAM-001 override needs both flags (task 7.3). clap's
+        // `requires = "yes"` already rejects `--allow-admin-lockout` alone, so
+        // this `&& yes` is belt-and-suspenders.
         allow_admin_lockout: args.allow_admin_lockout && args.yes,
     };
 
     let report = apply_users(&docs, &api, &opts).await?;
-    render_apply_report(&report, ctx.output_format);
+    // Per-user actions are the "diff": shown for `--dry-run` (review) or when
+    // explicitly requested with `--diff`. A plain apply prints only the
+    // summary line + findings. (spec.md §"`--diff` SHALL render per-user
+    // diffs in the plan phase".)
+    render_apply_report(&report, args.dry_run || args.diff);
 
     match report.state {
         ApplyState::AbortedInput => Err(Error::Config(
@@ -507,6 +526,16 @@ fn resolve_password(src: &PasswordSource, verb: &str) -> Result<SecretString> {
         }));
     }
     if src.password_stdin {
+        // Refuse on a TTY: there is no no-echo handling here, so reading an
+        // interactively-typed password would echo the secret to the screen.
+        // `--password-stdin` is for piped/redirected input only.
+        if std::io::stdin().is_terminal() {
+            return Err(Error::Config(
+                "--password-stdin reads piped input; it must not be a terminal (the secret would \
+                 echo). Pipe the password in, e.g. `printf %s \"$PW\" | onmsctl ... --password-stdin`"
+                    .into(),
+            ));
+        }
         let mut buf = String::new();
         std::io::stdin()
             .read_to_string(&mut buf)
@@ -514,6 +543,14 @@ fn resolve_password(src: &PasswordSource, verb: &str) -> Result<SecretString> {
         let pw = buf.trim_end_matches(['\n', '\r']).to_string();
         if pw.is_empty() {
             return Err(Error::Config("password from stdin is empty".into()));
+        }
+        // An internal newline cannot round-trip the form/XML wire paths (same
+        // rule as the FromFile resolver) — refuse rather than fold it in.
+        if pw.contains(['\n', '\r']) {
+            return Err(Error::Config(
+                "password from stdin contains an internal newline; provide a single-line password"
+                    .into(),
+            ));
         }
         return Ok(SecretString::new(pw));
     }
@@ -536,7 +573,13 @@ fn load_documents(paths: &[PathBuf]) -> Result<Vec<(PathBuf, UserLocal)>> {
             {
                 let entry = entry.map_err(|e| Error::Config(format!("reading dir entry: {e}")))?;
                 let path = entry.path();
-                if path.extension().is_some_and(|x| x == "yaml" || x == "yml") {
+                // Only regular files with a (case-insensitive) yaml/yml
+                // extension — skips subdirectories (incl. one named `*.yaml`)
+                // and tolerates `*.YAML` / `*.Yml`.
+                let is_yaml = path.extension().and_then(|x| x.to_str()).is_some_and(|x| {
+                    x.eq_ignore_ascii_case("yaml") || x.eq_ignore_ascii_case("yml")
+                });
+                if is_yaml && path.is_file() {
                     files.push(path);
                 }
             }
@@ -593,6 +636,17 @@ fn confirm_with_message(message: &str) -> Result<()> {
 /// after trimming.
 fn is_confirmation(line: &str) -> bool {
     matches!(line.trim().to_ascii_lowercase().as_str(), "yes" | "y")
+}
+
+/// Emit the `PR-IAM-006` soft-validation warning for a role outside the
+/// built-in known set, so the imperative `create` / `role add` paths warn on
+/// a typo just like the declarative `apply` planner does.
+fn warn_if_unknown_role(role: &str) {
+    if !KNOWN_ROLES.contains(&role) {
+        eprintln!(
+            "[PR-IAM-006] warning: role {role:?} is not in the known-roles set; applying anyway"
+        );
+    }
 }
 
 fn print_stdout(s: &str) {
@@ -691,6 +745,15 @@ mod tests {
             }
             other => panic!("unexpected: {other:?}"),
         }
+    }
+
+    #[test]
+    fn allow_admin_lockout_requires_yes() {
+        // Passing the override without --yes is a parse error, not a silent
+        // downgrade.
+        assert!(parse(&["apply", "-f", "u.yaml", "--allow-admin-lockout"]).is_err());
+        // With --yes it parses.
+        assert!(parse(&["apply", "-f", "u.yaml", "--allow-admin-lockout", "--yes"]).is_ok());
     }
 
     #[test]

@@ -9,7 +9,7 @@
 //! human-readable summary of an [`ApplyReport`]. The full per-user `--diff`
 //! renderer (design §D / tasks 9.1–9.6) builds on these and lands in Group 9.
 
-use onmsctl_core::{OutputFormat, TableRow};
+use onmsctl_core::TableRow;
 use serde::Serialize;
 
 use crate::apply::multi::{ApplyReport, UserResult};
@@ -89,11 +89,12 @@ pub fn describe_finding(f: &Finding) -> String {
     format!("[{}] {}: {}", f.code, sev, f.message)
 }
 
-/// Emit a human-readable summary of an apply run to stderr (per-user actions
-/// and findings) plus a one-line tally. Structured (`-o json|yaml`) apply
-/// output is a Group 9 follow-up; `format` is accepted now so the signature
-/// is stable.
-pub fn render_apply_report(report: &ApplyReport, _format: OutputFormat) {
+/// Emit a human-readable summary of an apply run to stderr plus a one-line
+/// tally. Findings and per-user failures always print; the per-user planned
+/// actions (the "diff") print only when `show_actions` is set — i.e. under
+/// `--dry-run` or `--diff` (spec: `--diff` SHALL render per-user diffs in the
+/// plan phase). Structured (`-o json|yaml`) apply output is a Group 9 follow-up.
+pub fn render_apply_report(report: &ApplyReport, show_actions: bool) {
     for f in &report.input_findings {
         eprintln!("{}", describe_finding(f));
     }
@@ -104,8 +105,10 @@ pub fn render_apply_report(report: &ApplyReport, _format: OutputFormat) {
         for e in &user.errors {
             eprintln!("{}", describe_finding(e));
         }
-        for plan in &user.planned {
-            eprintln!("{}", describe_plan(plan));
+        if show_actions {
+            for plan in &user.planned {
+                eprintln!("{}", describe_plan(plan));
+            }
         }
         if let Some(msg) = &user.failure {
             eprintln!("  {}: FAILED — {msg}", user.name);
