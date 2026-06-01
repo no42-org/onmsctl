@@ -105,7 +105,10 @@ pub fn render_apply_report(report: &ApplyReport, show_actions: bool) {
         for e in &user.errors {
             eprintln!("{}", describe_finding(e));
         }
-        if show_actions {
+        // Show the planned actions under --dry-run/--diff, and always for a
+        // FAILED user so the operator can see what was being attempted even on
+        // a plain apply.
+        if show_actions || user.result == UserResult::Failed {
             for plan in &user.planned {
                 eprintln!("{}", describe_plan(plan));
             }

@@ -36,6 +36,11 @@ pub enum IamCmd {
     /// Print the calling user (`GET /users/whoami`).
     Whoami,
     /// Reconcile declared users from YAML against the server (declarative).
+    ///
+    /// Lockout protection uses the built-in defaults `protected-roles =
+    /// [ROLE_ADMIN]` and the built-in known-roles set; per-context
+    /// `iam.protected-roles` / `iam.known-roles` overrides are not yet read
+    /// from the context (tracked as a follow-up).
     Apply(ApplyArgs),
     /// Manage users (imperative verbs, roles, password, export).
     #[command(subcommand)]
@@ -308,7 +313,10 @@ async fn run_user_create(args: CreateArgs, ctx: &Context) -> Result<()> {
     let client = OnmsClient::from_context(ctx)?;
     let api = IamApi::new(&client);
     let secret = resolve_password(&args.password, "create")?;
-    for role in &args.roles {
+    // Dedup before warning so a duplicated `--role` warns once, matching the
+    // declarative planner (which iterates a BTreeSet).
+    let roles: std::collections::BTreeSet<String> = args.roles.into_iter().collect();
+    for role in &roles {
         warn_if_unknown_role(role);
     }
     let spec = crate::model::local::UserSpec {
@@ -316,7 +324,7 @@ async fn run_user_create(args: CreateArgs, ctx: &Context) -> Result<()> {
         email: args.email,
         comments: args.comments,
         duty_schedule: args.duty_schedule,
-        roles: args.roles.into_iter().collect(),
+        roles,
         password_ref: None,
     };
     let local = build_local(&args.name, spec)?;
@@ -561,30 +569,27 @@ fn resolve_password(src: &PasswordSource, verb: &str) -> Result<SecretString> {
     )))
 }
 
-/// Read every YAML document under the given file / directory paths into
-/// `(path, UserLocal)` pairs. Directories contribute their `*.yaml` / `*.yml`
-/// entries (non-recursive). One document per file.
+/// Read every YAML document under the given `-f` arguments into
+/// `(path, UserLocal)` pairs. Each `-f` is resolved through the shared
+/// `onmsctl_core::apply_input::resolve_apply_input` dispatcher (file /
+/// directory / glob), matching provisioning and spec.md's "route through the
+/// shared dispatcher" requirement. One document per file (non-recursive dirs;
+/// pass a `**` glob for recursion).
 fn load_documents(paths: &[PathBuf]) -> Result<Vec<(PathBuf, UserLocal)>> {
+    use onmsctl_core::apply_input::{ApplyDispatch, resolve_apply_input};
+
     let mut files: Vec<PathBuf> = Vec::new();
     for p in paths {
-        if p.is_dir() {
-            for entry in std::fs::read_dir(p)
-                .map_err(|e| Error::Config(format!("reading directory {}: {e}", p.display())))?
-            {
-                let entry = entry.map_err(|e| Error::Config(format!("reading dir entry: {e}")))?;
-                let path = entry.path();
-                // Only regular files with a (case-insensitive) yaml/yml
-                // extension — skips subdirectories (incl. one named `*.yaml`)
-                // and tolerates `*.YAML` / `*.Yml`.
-                let is_yaml = path.extension().and_then(|x| x.to_str()).is_some_and(|x| {
-                    x.eq_ignore_ascii_case("yaml") || x.eq_ignore_ascii_case("yml")
-                });
-                if is_yaml && path.is_file() {
-                    files.push(path);
-                }
+        match resolve_apply_input(p, &["yaml", "yml"])? {
+            ApplyDispatch::Single(f) => files.push(f),
+            ApplyDispatch::Multi(fs) => files.extend(fs),
+            // `ApplyDispatch` is #[non_exhaustive]; a future variant (e.g.
+            // Stdin) isn't supported by `iam apply` yet.
+            other => {
+                return Err(Error::Config(format!(
+                    "unsupported apply input dispatch: {other:?}"
+                )));
             }
-        } else {
-            files.push(p.clone());
         }
     }
     files.sort();
@@ -642,6 +647,11 @@ fn is_confirmation(line: &str) -> bool {
 /// built-in known set, so the imperative `create` / `role add` paths warn on
 /// a typo just like the declarative `apply` planner does.
 fn warn_if_unknown_role(role: &str) {
+    // An empty role is a hard error handled downstream (parse / `role add`
+    // guard); don't pre-empt it with a misleading "unknown role" warning.
+    if role.is_empty() {
+        return;
+    }
     if !KNOWN_ROLES.contains(&role) {
         eprintln!(
             "[PR-IAM-006] warning: role {role:?} is not in the known-roles set; applying anyway"
