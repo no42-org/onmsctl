@@ -33,7 +33,9 @@ use onmsctl_core::{Error, OnmsClient, Result};
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 
 use crate::model::local::UserLocal;
-use crate::model::wire::{OnmsUserListWire, OnmsUserWire, UpdateForm, user_create_xml};
+use crate::model::wire::{
+    OnmsUserListWire, OnmsUserWire, SetPasswordForm, UpdateForm, user_create_xml,
+};
 
 /// Characters percent-encoded inside a `{name}` / `{role}` path segment.
 /// Mirrors provisioning's `PATH_SEGMENT`: encode everything beyond RFC 3986
@@ -179,6 +181,18 @@ impl<'c> IamApi<'c> {
     pub async fn put_user_form(&self, name: &str, form: &UpdateForm) -> Result<()> {
         let path = format!("{BASE}/users/{}", encode(name));
         self.client.put_form(&path, form).await
+    }
+
+    /// Rotate a user's password (task 5.8). Pre-flights with `GET
+    /// /users/{name}` (task 4.6) so a missing user yields a clear
+    /// [`Error::UserNotFound`] instead of an ambiguous form-PUT 404, then
+    /// `PUT /users/{name}` with `password=<plaintext>&hashPassword=true`.
+    pub async fn set_password(&self, name: &str, plaintext: &str) -> Result<()> {
+        self.require_user(name).await?;
+        let path = format!("{BASE}/users/{}", encode(name));
+        self.client
+            .put_form(&path, &SetPasswordForm::new(plaintext))
+            .await
     }
 
     /// `DELETE /users/{name}`.
@@ -440,6 +454,41 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, Error::HttpStatus { status: 404, .. }));
+    }
+
+    #[tokio::test]
+    async fn set_password_preflights_then_puts_form() {
+        let (mock, client) = mock_with_client().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/users/alice"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "user-id": "alice"
+            })))
+            .mount(&mock)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/rest/users/alice"))
+            .and(header("content-type", "application/x-www-form-urlencoded"))
+            .and(body_string_contains("password=n3w-pw"))
+            .and(body_string_contains("hashPassword=true"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&mock)
+            .await;
+        let api = IamApi::new(&client);
+        api.set_password("alice", "n3w-pw").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn set_password_missing_user_is_user_not_found() {
+        let (mock, client) = mock_with_client().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/users/ghost"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&mock)
+            .await;
+        let api = IamApi::new(&client);
+        let err = api.set_password("ghost", "pw").await.unwrap_err();
+        assert!(matches!(err, Error::UserNotFound { name } if name == "ghost"));
     }
 
     #[tokio::test]

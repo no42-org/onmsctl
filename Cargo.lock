@@ -977,6 +977,7 @@ dependencies = [
  "clap_complete",
  "onmsctl-core",
  "onmsctl-eventconf",
+ "onmsctl-iam",
  "onmsctl-provisioning",
  "serde",
  "serde_norway",

@@ -135,6 +135,29 @@ impl UpdateForm {
     }
 }
 
+/// Body for the form-encoded `PUT /users/{name}` set-password call (task 5.8).
+/// Emits `password=<plaintext>&hashPassword=true` so the server hashes it and
+/// sets `passwordSalt=true` internally (verified live). The client never
+/// sends `passwordSalt` or a precomputed hash. `hash_password` is always
+/// `true` — the field exists so the wire shape is explicit, not configurable.
+#[derive(Clone, Debug, Serialize)]
+pub struct SetPasswordForm {
+    pub password: String,
+    #[serde(rename = "hashPassword")]
+    pub hash_password: bool,
+}
+
+impl SetPasswordForm {
+    /// Build a set-password body for `plaintext`, always requesting
+    /// server-side hashing.
+    pub fn new(plaintext: &str) -> Self {
+        Self {
+            password: plaintext.to_owned(),
+            hash_password: true,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // XML create body — POST /users
 // ---------------------------------------------------------------------------

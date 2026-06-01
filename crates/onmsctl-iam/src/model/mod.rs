@@ -21,4 +21,4 @@ pub use local::{
     API_VERSION, ApiVersion, FromEnvRef, FromFileRef, FromKeyringRef, KIND_USER, KNOWN_ROLES,
     KeyringRef, KindUser, Metadata, PasswordRef, UserLocal, UserSpec,
 };
-pub use wire::{OnmsUserListWire, OnmsUserWire, UpdateForm, user_create_xml};
+pub use wire::{OnmsUserListWire, OnmsUserWire, SetPasswordForm, UpdateForm, user_create_xml};
