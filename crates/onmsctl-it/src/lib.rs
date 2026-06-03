@@ -30,6 +30,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use anyhow::{Context as _, Result, anyhow};
 use onmsctl_core::{AuthCreds, Context, OnmsClient, OutputFormat, Url};
 use onmsctl_eventconf::EventConfApi;
+use onmsctl_iam::api::IamApi;
 
 /// Prefix every integration-test-owned resource name SHALL carry. The
 /// cleanup sweep matches on this prefix, so naming a resource without
@@ -152,6 +153,31 @@ impl Harness {
         api.delete_sources(&ids)
             .await
             .map_err(|e| anyhow!("delete_sources: {e}"))?;
+        Ok(n)
+    }
+
+    /// Delete every IAM user whose username starts with [`RESOURCE_PREFIX`].
+    /// Mirrors [`cleanup_event_sources`](Self::cleanup_event_sources): tests
+    /// SHOULD call it before setup (clear a crashed prior run) and after
+    /// teardown. Real accounts (no prefix) are never touched.
+    pub async fn cleanup_users(&self) -> Result<usize> {
+        let api = IamApi::new(&self.client);
+        let list = api
+            .list_users()
+            .await
+            .map_err(|e| anyhow!("list_users: {e}"))?;
+        let names: Vec<String> = list
+            .users
+            .into_iter()
+            .map(|u| u.user_id)
+            .filter(|n| n.starts_with(RESOURCE_PREFIX))
+            .collect();
+        let n = names.len();
+        for name in names {
+            api.delete_user(&name)
+                .await
+                .map_err(|e| anyhow!("delete_user({name}): {e}"))?;
+        }
         Ok(n)
     }
 }
