@@ -1,0 +1,33 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/no42-org/onmsctl/main/schemas/iam-user.schema.json
+#
+# kind: User example covering every modeled field
+# (per task 10.5 of the add-iam-capability change).
+#
+# Pair with `onmsctl iam apply -f examples/iam-user.yaml --dry-run --diff`
+# to see the per-user plan against a live Horizon.
+apiVersion: onmsctl.no42.org/v1alpha1
+kind: User
+metadata:
+  name: alice
+spec:
+  fullName: Alice Example
+  email: alice@example.org
+  comments: Created via onmsctl GitOps
+  # Roles are a set: duplicates are rejected at parse time, and apply
+  # computes exact add/remove deltas against the server. Roles outside the
+  # built-in known set emit a PR-IAM-006 warning (not a refusal).
+  roles:
+    - ROLE_USER
+    - ROLE_PROVISION
+  # Create-only: settable on the initial POST, but never emitted on a
+  # form-encoded update (§D11.5). A dutySchedule change on an existing user
+  # warns (PR-IAM-004) instead of mutating.
+  dutySchedule: "MoTuWeThFr0800-1700"
+  # The password is NEVER stored inline — a literal `password:` key is
+  # rejected at parse time (PR-IAM-001). Reference an external secret
+  # instead; exactly one source. passwordRef is honored on Create only.
+  #
+  #   passwordRef: { fromEnv: ALICE_PW }
+  #   passwordRef: { fromKeyring: { service: onmsctl, account: alice } }
+  passwordRef:
+    fromFile: /run/secrets/alice.pw

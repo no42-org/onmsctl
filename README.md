@@ -475,6 +475,146 @@ snapshots return 404), the verb is a no-op and skips the prompt.
 
 ---
 
+## IAM (users + roles)
+
+Manage Horizon users and their roles — both declaratively (`iam apply
+-f`, the GitOps loop) and imperatively (`iam user ...`, ad-hoc verbs).
+Targets the `/rest/users` REST surface on Horizon 35+.
+
+### `whoami`
+
+```sh
+onmsctl iam whoami        # prints the calling user (GET /users/whoami)
+```
+
+`whoami` is also the safety check the apply path uses before any
+self-affecting change (see *Lockout protection* below).
+
+### Declarative apply (`iam apply -f`)
+
+```sh
+# Preview — plan only, no writes. --diff renders the per-user plan to
+# stderr; the structured outcome goes to stdout. Safe in any context,
+# including --read-only (a dry-run apply classifies as a Read verb).
+onmsctl iam apply -f examples/iam-user.yaml --dry-run --diff
+
+# Real apply. Continue-on-error per user with --keep-going; stop on the
+# first per-user failure by default.
+onmsctl iam apply -f ./users/ --keep-going
+
+# Directory mode — every *.yaml / *.yml under each -f path. A duplicate
+# metadata.name across documents aborts before any write (PR-IAM-002).
+onmsctl iam apply -f ./users/ --dry-run
+```
+
+Each `-f` resolves through the shared apply-input dispatcher (file,
+directory, or glob), the same one `requisition apply` uses. Apply plans
+every user first (per-user GET + one `GET /users` lockout snapshot),
+renders a combined summary —
+
+```text
+Summary: 1 create, 2 update, 3 role-delta, 4 unchanged, 0 skipped
+```
+
+— then executes in the order creates → updates → role deltas. Roles
+reconcile as a **set**: declaring `roles: [B, C]` against a server that
+holds `[A, B]` grants `C` and revokes `A`, leaving `B`. An omitted
+scalar field never clears the server value (merge semantics, not
+replace). A role outside the built-in known set warns (`PR-IAM-006`)
+but still applies.
+
+The `dutySchedule` field is **create-only** (§D11.5): settable on the
+initial create, but a change to it on an existing user warns
+(`PR-IAM-004`) instead of mutating — other fields in the same plan
+still apply.
+
+### `passwordRef` — passwords are create-only and never inline
+
+A literal `password:` key in user YAML is **rejected at parse time**
+(`PR-IAM-001`). Reference an external secret instead, with exactly one
+source:
+
+```yaml
+spec:
+  passwordRef:
+    fromFile: /run/secrets/alice.pw    # mode-checked, ≤4 KiB, no symlinks
+  # passwordRef: { fromEnv: ALICE_PW }
+  # passwordRef: { fromKeyring: { service: onmsctl, account: alice } }
+```
+
+`passwordRef` is honored on **Create only** — `apply` never rotates an
+existing user's password (it can't read the current one to diff). Rotate
+explicitly with `iam user set-password` (below). Horizon hashes the
+plaintext server-side (`?hashPassword=true`); onmsctl never sends a
+precomputed hash, and the resolved secret is held in a `zeroize`-wrapped
+string that redacts in every diff and debug path.
+
+### Lockout protection
+
+Apply refuses any plan that would lock administration out of the server:
+
+- **`IAM-001` (admin lockout, exit 13):** emptying a protected role's
+  holder set — by default `ROLE_ADMIN` — when it was non-empty before.
+  Override with **both** `--allow-admin-lockout` **and** `--yes` (the
+  flag alone is a parse error, not a silent no-op).
+- **`IAM-002` (self lockout, exit 14):** removing a protected role from,
+  or deleting, the **calling** user (resolved via `whoami`). **No
+  override** — re-run as a different admin.
+
+If a self-affecting action is planned but `whoami` is unavailable (token
+auth without an associated user, or a non-2xx response), apply refuses
+with `IamWhoamiUnavailable` (exit 15) rather than skip the check.
+`--keep-going` controls per-user execution failures only; it never
+bypasses a plan-phase refusal (`IAM-001/002`, `PR-IAM-002`).
+
+> **Note:** per-context `iam.protected-roles` / `iam.known-roles`
+> overrides are not yet read from the context — apply uses the built-in
+> `[ROLE_ADMIN]` / known-roles defaults. Tracked as a follow-up.
+
+### Imperative quick-reference
+
+```sh
+# read
+onmsctl iam user list                    # -o table | -o yaml | -o json
+onmsctl iam user get alice
+onmsctl iam user export                   # all users as declarative YAML
+onmsctl iam user export --name alice      # one user to stdout
+
+# write
+onmsctl iam user create alice --full-name "Alice Example" \
+    --email alice@example.org --role ROLE_USER --from-env ALICE_PW
+onmsctl iam user update alice --email alice@corp.example
+onmsctl iam user delete alice --yes       # --yes skips the TTY prompt
+onmsctl iam user role add alice ROLE_PROVISION
+onmsctl iam user role remove alice ROLE_PROVISION --yes
+
+# rotate a password (one source; mutually exclusive)
+printf %s "$NEW_PW" | onmsctl iam user set-password alice --password-stdin
+onmsctl iam user set-password alice --from-file /run/secrets/alice.pw
+onmsctl iam user set-password alice --from-keyring onmsctl/alice
+```
+
+`create` and `set-password` take exactly one password source:
+`--from-file`, `--from-env`, `--from-keyring <service>/<account>`, or
+`--password-stdin` (piped input only — it refuses on a TTY so the secret
+can't echo). `delete` and `role remove` prompt for confirmation on a TTY
+and refuse without `--yes` in non-interactive contexts. `delete --yes`
+is idempotent: a 404 reports "nothing to do".
+
+### Migration map: legacy `users.xml` → `onmsctl`
+
+| Pre-onmsctl | `onmsctl` |
+|---|---|
+| Hand-edit `$OPENNMS_HOME/etc/users.xml`, reload | `onmsctl iam apply -f users/` (one `kind: User` document per user; apply reconciles scalar fields + role set against the live server) |
+| Add a user via the web UI | `onmsctl iam user create <name> --from-env … --role …`, or add a YAML doc and `iam apply -f` |
+| Rotate a password in the UI | `onmsctl iam user set-password <name> --password-stdin` |
+| Remove a `<user>` element + reload | `onmsctl iam user delete <name> --yes` (idempotent; 404 → no-op) |
+
+The example [`examples/iam-user.yaml`](examples/iam-user.yaml) covers
+every modeled field with inline notes.
+
+---
+
 ## Aliases and read-only contexts
 
 ### Top-level verb aliases
