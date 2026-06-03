@@ -501,6 +501,7 @@ mod tests {
                     bearer: None,
                 },
                 read_only: false,
+                iam: Default::default(),
             }],
         }
     }
@@ -523,6 +524,7 @@ mod tests {
                     }),
                 },
                 read_only: false,
+                iam: Default::default(),
             }],
         }
     }
@@ -573,6 +575,7 @@ mod tests {
                     bearer: None,
                 },
                 read_only: false,
+                iam: Default::default(),
             }],
         };
         redact_secrets(&mut cfg);

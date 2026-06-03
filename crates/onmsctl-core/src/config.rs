@@ -81,6 +81,7 @@ impl ConfigFile {
                 )));
             }
             c.auth.validate(&c.name)?;
+            c.iam.validate(&c.name)?;
         }
         if let Some(cur) = &self.current_context
             && self.find_context(cur).is_none()
@@ -105,6 +106,53 @@ pub struct NamedContext {
     /// configs without this field continue to parse.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub read_only: bool,
+    /// Per-context IAM capability settings (design §D8/§D13). Optional and
+    /// additive — an absent `iam:` block parses as all-defaults.
+    #[serde(default, skip_serializing_if = "IamConfig::is_empty")]
+    pub iam: IamConfig,
+}
+
+/// Per-context IAM settings consumed by `onmsctl iam apply`. Every field is
+/// optional and falls back to a built-in default applied by the command (the
+/// `onmsctl-core` crate intentionally does not know the IAM defaults — those
+/// live in `onmsctl-iam`). Listing a field here **replaces** the default, it
+/// does not extend it.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct IamConfig {
+    /// Roles whose holder set `iam apply` refuses to empty (IAM-001).
+    /// `None` → the built-in default `[ROLE_ADMIN]`; an explicit **empty**
+    /// list disables the admin-lockout check entirely.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protected_roles: Option<Vec<String>>,
+    /// Soft role-validation set (PR-IAM-006 unknown-role warnings). `None` →
+    /// the built-in `KNOWN_ROLES`; an explicit list replaces it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub known_roles: Option<Vec<String>>,
+}
+
+impl IamConfig {
+    /// `true` when no IAM field is set, so the block serializes away rather
+    /// than emitting an empty `iam: {}` in `config view`.
+    fn is_empty(&self) -> bool {
+        self.protected_roles.is_none() && self.known_roles.is_none()
+    }
+
+    fn validate(&self, ctx_name: &str) -> Result<()> {
+        for (field, roles) in [
+            ("protected-roles", &self.protected_roles),
+            ("known-roles", &self.known_roles),
+        ] {
+            if let Some(roles) = roles
+                && roles.iter().any(|r| r.trim().is_empty())
+            {
+                return Err(Error::Config(format!(
+                    "context '{ctx_name}': iam.{field} contains an empty role string"
+                )));
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -428,6 +476,95 @@ contexts:
             }
             other => panic!("unexpected {other:?}"),
         }
+    }
+
+    #[test]
+    fn parses_per_context_iam_block() {
+        let yaml = r#"
+current-context: prod
+contexts:
+  - name: prod
+    server:
+      url: https://prod.example.com/opennms
+    auth:
+      basic:
+        username: admin
+        password: p
+    iam:
+      protected-roles: [ROLE_ADMIN, ROLE_REST]
+      known-roles: [ROLE_ADMIN, ROLE_USER]
+"#;
+        let f = write_config(yaml);
+        let cfg = load(f.path()).unwrap();
+        let ctx = cfg.find_context("prod").unwrap();
+        assert_eq!(
+            ctx.iam.protected_roles.as_deref(),
+            Some(["ROLE_ADMIN".to_string(), "ROLE_REST".to_string()].as_slice())
+        );
+        assert_eq!(
+            ctx.iam.known_roles.as_deref(),
+            Some(["ROLE_ADMIN".to_string(), "ROLE_USER".to_string()].as_slice())
+        );
+    }
+
+    #[test]
+    fn absent_iam_block_defaults_to_empty() {
+        // A context without an `iam:` block parses fine (back-compat) and
+        // leaves both fields unset so the command applies its built-in
+        // defaults.
+        let cfg = cfg_with_basic_plaintext_named();
+        let ctx = cfg.find_context("dev").unwrap();
+        assert!(ctx.iam.protected_roles.is_none());
+        assert!(ctx.iam.known_roles.is_none());
+        assert!(ctx.iam.is_empty());
+    }
+
+    #[test]
+    fn rejects_empty_iam_role_string() {
+        let yaml = r#"
+contexts:
+  - name: dev
+    server: { url: "http://a" }
+    auth: { basic: { username: u, password: p } }
+    iam:
+      protected-roles: ["ROLE_ADMIN", ""]
+"#;
+        let f = write_config(yaml);
+        let err = load(f.path()).unwrap_err();
+        match err {
+            Error::Config(m) => {
+                assert!(m.contains("iam.protected-roles"));
+                assert!(m.contains("empty role"));
+                assert!(m.contains("'dev'"));
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_unknown_field_in_iam_block() {
+        let yaml = r#"
+contexts:
+  - name: dev
+    server: { url: "http://a" }
+    auth: { basic: { username: u, password: p } }
+    iam:
+      protectd-roles: [ROLE_ADMIN]
+"#;
+        let f = write_config(yaml);
+        let err = load(f.path()).unwrap_err();
+        assert!(matches!(err, Error::Yaml(_)));
+    }
+
+    fn cfg_with_basic_plaintext_named() -> ConfigFile {
+        let yaml = r#"
+current-context: dev
+contexts:
+  - name: dev
+    server: { url: "http://a" }
+    auth: { basic: { username: u, password: p } }
+"#;
+        serde_norway::from_str(yaml).unwrap()
     }
 
     #[test]

@@ -575,9 +575,23 @@ with `IamWhoamiUnavailable` (exit 15) rather than skip the check.
 `--keep-going` controls per-user execution failures only; it never
 bypasses a plan-phase refusal (`IAM-001/002`, `PR-IAM-002`).
 
-> **Note:** per-context `iam.protected-roles` / `iam.known-roles`
-> overrides are not yet read from the context — apply uses the built-in
-> `[ROLE_ADMIN]` / known-roles defaults. Tracked as a follow-up.
+**Per-context overrides.** A context may tune the defaults under an
+`iam:` block:
+
+```yaml
+contexts:
+  - name: prod
+    server:
+      url: https://horizon.prod.example/opennms
+    iam:
+      protected-roles: [ROLE_ADMIN, ROLE_REST]   # default: [ROLE_ADMIN]
+      known-roles: [ROLE_ADMIN, ROLE_USER, ...]  # replaces the built-in set
+```
+
+`protected-roles` replaces the `[ROLE_ADMIN]` default (an explicit
+empty list disables the admin-lockout check); `known-roles` replaces
+the built-in `PR-IAM-006` validation set. Both apply to `iam apply` and
+to the imperative `create` / `role add` warnings.
 
 ### Imperative quick-reference
 

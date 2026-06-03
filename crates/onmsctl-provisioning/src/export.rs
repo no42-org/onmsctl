@@ -251,6 +251,7 @@ mod tests {
             output_format: OutputFormat::Table,
             verbose: false,
             read_only: false,
+            iam: Default::default(),
         };
         let client = OnmsClient::from_context(&ctx).unwrap();
         (server, client)

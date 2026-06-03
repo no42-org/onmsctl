@@ -115,6 +115,7 @@ impl Harness {
             output_format: OutputFormat::Table,
             verbose,
             read_only: false,
+            iam: Default::default(),
         }
     }
 

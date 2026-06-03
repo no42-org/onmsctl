@@ -37,10 +37,10 @@ pub enum IamCmd {
     Whoami,
     /// Reconcile declared users from YAML against the server (declarative).
     ///
-    /// Lockout protection uses the built-in defaults `protected-roles =
-    /// [ROLE_ADMIN]` and the built-in known-roles set; per-context
-    /// `iam.protected-roles` / `iam.known-roles` overrides are not yet read
-    /// from the context (tracked as a follow-up).
+    /// Lockout protection defaults to `protected-roles = [ROLE_ADMIN]` and the
+    /// built-in known-roles set. Both are overridable per context via
+    /// `iam.protected-roles` / `iam.known-roles` (an explicit empty
+    /// `protected-roles` list disables the admin-lockout check).
     Apply(ApplyArgs),
     /// Manage users (imperative verbs, roles, password, export).
     #[command(subcommand)]
@@ -316,8 +316,9 @@ async fn run_user_create(args: CreateArgs, ctx: &Context) -> Result<()> {
     // Dedup before warning so a duplicated `--role` warns once, matching the
     // declarative planner (which iterates a BTreeSet).
     let roles: std::collections::BTreeSet<String> = args.roles.into_iter().collect();
+    let known = resolved_known_roles(ctx);
     for role in &roles {
-        warn_if_unknown_role(role);
+        warn_if_unknown_role(role, &known);
     }
     let spec = crate::model::local::UserSpec {
         full_name: args.full_name,
@@ -356,7 +357,7 @@ async fn run_role_add(name: &str, role: &str, ctx: &Context) -> Result<()> {
     if role.is_empty() {
         return Err(Error::Config("role must not be empty".into()));
     }
-    warn_if_unknown_role(role);
+    warn_if_unknown_role(role, &resolved_known_roles(ctx));
     let client = OnmsClient::from_context(ctx)?;
     let api = IamApi::new(&client);
     api.put_user_role(name, role).await?;
@@ -451,8 +452,10 @@ async fn run_apply(args: ApplyArgs, ctx: &Context) -> Result<()> {
     let opts = ApplyOptions {
         dry_run: args.dry_run,
         keep_going: args.keep_going,
-        known_roles: KNOWN_ROLES.iter().map(|s| s.to_string()).collect(),
-        protected_roles: std::collections::BTreeSet::from(["ROLE_ADMIN".to_string()]),
+        // Per-context `iam.protected-roles` / `iam.known-roles` override the
+        // built-in defaults (task 7.4 / design §D8, §D13).
+        known_roles: resolved_known_roles(ctx),
+        protected_roles: resolved_protected_roles(ctx),
         // The IAM-001 override needs both flags (task 7.3). clap's
         // `requires = "yes"` already rejects `--allow-admin-lockout` alone, so
         // this `&& yes` is belt-and-suspenders.
@@ -643,16 +646,37 @@ fn is_confirmation(line: &str) -> bool {
     matches!(line.trim().to_ascii_lowercase().as_str(), "yes" | "y")
 }
 
+/// Resolve the effective known-roles set: per-context `iam.known-roles`
+/// **replaces** the built-in [`KNOWN_ROLES`] when present (design §D13).
+fn resolved_known_roles(ctx: &Context) -> std::collections::BTreeSet<String> {
+    match &ctx.iam.known_roles {
+        Some(roles) => roles.iter().cloned().collect(),
+        None => KNOWN_ROLES.iter().map(|s| s.to_string()).collect(),
+    }
+}
+
+/// Resolve the effective protected-roles set: per-context
+/// `iam.protected-roles` overrides the built-in `[ROLE_ADMIN]` default; an
+/// explicit empty list disables the IAM-001 admin-lockout check (task 7.4 /
+/// design §D8).
+fn resolved_protected_roles(ctx: &Context) -> std::collections::BTreeSet<String> {
+    match &ctx.iam.protected_roles {
+        Some(roles) => roles.iter().cloned().collect(),
+        None => std::collections::BTreeSet::from(["ROLE_ADMIN".to_string()]),
+    }
+}
+
 /// Emit the `PR-IAM-006` soft-validation warning for a role outside the
-/// built-in known set, so the imperative `create` / `role add` paths warn on
-/// a typo just like the declarative `apply` planner does.
-fn warn_if_unknown_role(role: &str) {
+/// effective known set, so the imperative `create` / `role add` paths warn on
+/// a typo just like the declarative `apply` planner does. `known` is the
+/// context-resolved set (see [`resolved_known_roles`]).
+fn warn_if_unknown_role(role: &str, known: &std::collections::BTreeSet<String>) {
     // An empty role is a hard error handled downstream (parse / `role add`
     // guard); don't pre-empt it with a misleading "unknown role" warning.
     if role.is_empty() {
         return;
     }
-    if !KNOWN_ROLES.contains(&role) {
+    if !known.contains(role) {
         eprintln!(
             "[PR-IAM-006] warning: role {role:?} is not in the known-roles set; applying anyway"
         );
@@ -801,5 +825,69 @@ mod tests {
         assert!(is_confirmation(" y "));
         assert!(!is_confirmation("no"));
         assert!(!is_confirmation(""));
+    }
+
+    fn ctx_with_iam(iam: onmsctl_core::config::IamConfig) -> Context {
+        Context {
+            name: "t".into(),
+            url: onmsctl_core::Url::parse("http://localhost:8980/opennms").unwrap(),
+            creds: onmsctl_core::AuthCreds::basic("u", "p"),
+            insecure_skip_tls_verify: false,
+            output_format: onmsctl_core::OutputFormat::Table,
+            verbose: false,
+            read_only: false,
+            iam,
+        }
+    }
+
+    #[test]
+    fn protected_roles_default_is_role_admin() {
+        let ctx = ctx_with_iam(Default::default());
+        assert_eq!(
+            resolved_protected_roles(&ctx),
+            std::collections::BTreeSet::from(["ROLE_ADMIN".to_string()])
+        );
+    }
+
+    #[test]
+    fn protected_roles_context_override_replaces_default() {
+        let ctx = ctx_with_iam(onmsctl_core::config::IamConfig {
+            protected_roles: Some(vec!["ROLE_ADMIN".into(), "ROLE_REST".into()]),
+            known_roles: None,
+        });
+        let got = resolved_protected_roles(&ctx);
+        assert_eq!(
+            got,
+            std::collections::BTreeSet::from(["ROLE_ADMIN".to_string(), "ROLE_REST".to_string()])
+        );
+    }
+
+    #[test]
+    fn empty_protected_roles_disables_the_check() {
+        let ctx = ctx_with_iam(onmsctl_core::config::IamConfig {
+            protected_roles: Some(vec![]),
+            known_roles: None,
+        });
+        assert!(resolved_protected_roles(&ctx).is_empty());
+    }
+
+    #[test]
+    fn known_roles_default_is_the_builtin_set() {
+        let ctx = ctx_with_iam(Default::default());
+        let got = resolved_known_roles(&ctx);
+        assert!(got.contains("ROLE_ADMIN"));
+        assert_eq!(got.len(), KNOWN_ROLES.len());
+    }
+
+    #[test]
+    fn known_roles_context_override_replaces_builtin() {
+        let ctx = ctx_with_iam(onmsctl_core::config::IamConfig {
+            protected_roles: None,
+            known_roles: Some(vec!["ROLE_CUSTOM".into()]),
+        });
+        assert_eq!(
+            resolved_known_roles(&ctx),
+            std::collections::BTreeSet::from(["ROLE_CUSTOM".to_string()])
+        );
     }
 }

@@ -25,7 +25,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::auth::AuthCreds;
-use crate::config::{AuthSpec, BasicSpec, BearerSpec, ConfigFile, KeyringRef};
+use crate::config::{AuthSpec, BasicSpec, BearerSpec, ConfigFile, IamConfig, KeyringRef};
 use crate::error::{Error, Result};
 use crate::format::OutputFormat;
 
@@ -150,6 +150,11 @@ pub struct Context {
     /// any classified [`crate::CmdKind::Write`] command and refuses
     /// locally without issuing HTTP.
     pub read_only: bool,
+    /// Per-context IAM settings (design §D8). `onmsctl iam apply` reads
+    /// `protected-roles` / `known-roles` from here, falling back to the
+    /// built-in defaults when a field is absent. There is no flag/env
+    /// override for these — they are context-only.
+    pub iam: IamConfig,
 }
 
 impl Context {
@@ -199,6 +204,9 @@ impl Context {
             output_format: overrides.output.unwrap_or_default(),
             verbose: overrides.verbose,
             read_only,
+            // Context-only (no flag/env override); cloned straight from the
+            // active context.
+            iam: active.iam.clone(),
         })
     }
 }
@@ -351,6 +359,7 @@ mod tests {
                     },
                 ),
                 read_only: false,
+                iam: Default::default(),
             }],
         }
     }
@@ -374,6 +383,7 @@ mod tests {
                     },
                 ),
                 read_only: false,
+                iam: Default::default(),
             }],
         }
     }
@@ -448,6 +458,7 @@ mod tests {
                         },
                     ),
                     read_only: false,
+                    iam: Default::default(),
                 },
                 NamedContext {
                     name: "prod".into(),
@@ -465,6 +476,7 @@ mod tests {
                         },
                     ),
                     read_only: false,
+                    iam: Default::default(),
                 },
             ],
         };
@@ -506,6 +518,7 @@ mod tests {
                     },
                 ),
                 read_only: false,
+                iam: Default::default(),
             }],
         };
         let o = Overrides {
@@ -540,6 +553,7 @@ mod tests {
                     keyring: None,
                 }),
                 read_only: false,
+                iam: Default::default(),
             }],
         };
         let ctx = Context::resolve(&cfg, &Overrides::default()).unwrap();
@@ -559,6 +573,33 @@ mod tests {
             Error::Config(m) => assert!(m.contains("invalid server URL")),
             other => panic!("unexpected {other:?}"),
         }
+    }
+
+    #[test]
+    fn resolve_carries_per_context_iam_block() {
+        use crate::config::IamConfig;
+        let mut cfg = cfg_with_basic_plaintext("p");
+        cfg.contexts[0].iam = IamConfig {
+            protected_roles: Some(vec!["ROLE_ADMIN".into(), "ROLE_REST".into()]),
+            known_roles: Some(vec!["ROLE_USER".into()]),
+        };
+        let ctx = Context::resolve(&cfg, &Overrides::default()).unwrap();
+        assert_eq!(
+            ctx.iam.protected_roles.as_deref(),
+            Some(["ROLE_ADMIN".to_string(), "ROLE_REST".to_string()].as_slice())
+        );
+        assert_eq!(
+            ctx.iam.known_roles.as_deref(),
+            Some(["ROLE_USER".to_string()].as_slice())
+        );
+    }
+
+    #[test]
+    fn resolve_defaults_iam_to_empty_when_absent() {
+        let cfg = cfg_with_basic_plaintext("p");
+        let ctx = Context::resolve(&cfg, &Overrides::default()).unwrap();
+        assert!(ctx.iam.protected_roles.is_none());
+        assert!(ctx.iam.known_roles.is_none());
     }
 
     #[test]
