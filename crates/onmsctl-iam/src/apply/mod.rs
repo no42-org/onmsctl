@@ -34,6 +34,9 @@
 //!   `500 'password' cannot be null!`, so this is a hard per-user error.
 //! - `PR-IAM-006` — a declared role is outside the known-roles set; a
 //!   warning only (operators may extend roles server-side), per task 3.10.
+//! - `PR-IAM-008` — an **existing** user declares a `passwordRef`; apply never
+//!   rotates passwords, so the ref is ignored. A warning pointing at
+//!   `iam user set-password` (the passwordRef-on-update note from the spec).
 //!
 //! Role deltas are computed as **exact** set differences (add only roles the
 //! server lacks, remove only roles it has) because `DELETE …/roles/{role}`
@@ -234,6 +237,21 @@ pub fn plan_user(
                 ));
             }
 
+            // passwordRef is create-only: `apply` never rotates an existing
+            // user's password. Surface that the declared ref was ignored and
+            // point at the dedicated rotation verb (spec: passwordRef-on-update
+            // informational note).
+            if local.spec.password_ref.is_some() {
+                out.warnings.push(Finding::warning(
+                    "PR-IAM-008",
+                    format!(
+                        "user {name:?}: passwordRef is ignored on an existing user \
+                         (apply never rotates passwords); run \
+                         `onmsctl iam user set-password {name}` to rotate"
+                    ),
+                ));
+            }
+
             // Exact role delta. Add only roles the server lacks; remove only
             // roles it has (DELETE of an unheld role returns 400).
             let server_roles: BTreeSet<&String> = srv.roles.iter().collect();
@@ -387,7 +405,10 @@ mod tests {
 
     #[test]
     fn unchanged_when_identical() {
-        let local = local_user("alice", &["ROLE_USER"], true);
+        // No passwordRef: the realistic existing-user case (export omits it).
+        // A passwordRef on an existing user now warns PR-IAM-008, covered by
+        // its own test.
+        let local = local_user("alice", &["ROLE_USER"], false);
         let srv = server_user("alice", Some("Full Name"), &["ROLE_USER"]);
         let r = plan_user(&local, Some(&srv), &known());
         assert_eq!(
@@ -501,6 +522,31 @@ mod tests {
                 name: "alice".into()
             }]
         );
+    }
+
+    #[test]
+    fn passwordref_on_existing_user_warns_pr_iam_008() {
+        // An existing user that declares a passwordRef: apply never rotates,
+        // so the ref is ignored and a PR-IAM-008 note points at set-password.
+        let local = local_user("alice", &["ROLE_USER"], true); // with_password = true
+        let srv = server_user("alice", Some("Full Name"), &["ROLE_USER"]);
+        let r = plan_user(&local, Some(&srv), &known());
+        let f = r
+            .warnings
+            .iter()
+            .find(|f| f.code == "PR-IAM-008")
+            .expect("expected PR-IAM-008 warning");
+        assert!(f.message.contains("set-password"));
+        // It is a warning, not a hard error, and does not by itself add a plan.
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn passwordref_absent_on_existing_user_emits_no_pr_iam_008() {
+        let local = local_user("alice", &["ROLE_USER"], false); // no passwordRef
+        let srv = server_user("alice", Some("Full Name"), &["ROLE_USER"]);
+        let r = plan_user(&local, Some(&srv), &known());
+        assert!(!r.warnings.iter().any(|f| f.code == "PR-IAM-008"));
     }
 
     // ---- check_input_uniqueness ----
