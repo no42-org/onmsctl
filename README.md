@@ -479,7 +479,7 @@ snapshots return 404), the verb is a no-op and skips the prompt.
 
 Manage Horizon users and their roles — both declaratively (`iam apply
 -f`, the GitOps loop) and imperatively (`iam user ...`, ad-hoc verbs).
-Targets the `/rest/users` REST surface on Horizon 35+.
+Targets the `users` REST surface on Horizon 35+.
 
 ### `whoami`
 
@@ -493,9 +493,9 @@ self-affecting change (see *Lockout protection* below).
 ### Declarative apply (`iam apply -f`)
 
 ```sh
-# Preview — plan only, no writes. --diff renders the per-user plan to
-# stderr; the structured outcome goes to stdout. Safe in any context,
-# including --read-only (a dry-run apply classifies as a Read verb).
+# Preview — plan only, no writes. --diff renders the per-user plan and
+# the summary to stderr. Safe in any context, including --read-only
+# (a dry-run apply classifies as a Read verb).
 onmsctl iam apply -f examples/iam-user.yaml --dry-run --diff
 
 # Real apply. Continue-on-error per user with --keep-going; stop on the
@@ -510,10 +510,10 @@ onmsctl iam apply -f ./users/ --dry-run
 Each `-f` resolves through the shared apply-input dispatcher (file,
 directory, or glob), the same one `requisition apply` uses. Apply plans
 every user first (per-user GET + one `GET /users` lockout snapshot),
-renders a combined summary —
+renders a combined summary to stderr —
 
 ```text
-Summary: 1 create, 2 update, 3 role-delta, 4 unchanged, 0 skipped
+plan: 1 create, 2 update, 3 role-delta, 4 unchanged, 0 skipped
 ```
 
 — then executes in the order creates → updates → role deltas. Roles
@@ -527,6 +527,11 @@ The `dutySchedule` field is **create-only** (§D11.5): settable on the
 initial create, but a change to it on an existing user warns
 (`PR-IAM-004`) instead of mutating — other fields in the same plan
 still apply.
+
+A purely numeric `metadata.name` is refused at parse time (`PR-IAM-003`,
+no override): the upstream `{userCriteria}` path segment is ambiguous
+between a username and a database ID. Rename such accounts server-side
+before declaring them in YAML.
 
 ### `passwordRef` — passwords are create-only and never inline
 
@@ -542,10 +547,13 @@ spec:
   # passwordRef: { fromKeyring: { service: onmsctl, account: alice } }
 ```
 
-`passwordRef` is honored on **Create only** — `apply` never rotates an
-existing user's password (it can't read the current one to diff). Rotate
-explicitly with `iam user set-password` (below). Horizon hashes the
-plaintext server-side (`?hashPassword=true`); onmsctl never sends a
+A Create with no `passwordRef` is **refused** (`PR-IAM-005`) — a new
+user must carry a password source; the server rejects a passwordless
+create. `passwordRef` is honored on **Create only** — `apply` never
+rotates an existing user's password (it can't read the current one to
+diff). Rotate explicitly with `iam user set-password` (below). Horizon
+hashes the plaintext server-side (`?hashPassword=true`); onmsctl never
+sends a
 precomputed hash, and the resolved secret is held in a `zeroize`-wrapped
 string that redacts in every diff and debug path.
 
