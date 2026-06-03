@@ -449,13 +449,24 @@ async fn run_apply(args: ApplyArgs, ctx: &Context) -> Result<()> {
         ));
     }
 
+    // Per-context `iam.protected-roles` / `iam.known-roles` override the
+    // built-in defaults (task 7.4 / design §D8, §D13).
+    let protected_roles = resolved_protected_roles(ctx);
+    // An empty protected-roles set turns off the IAM-001/IAM-002 admin-lockout
+    // invariants entirely (a deliberate, documented escape hatch). Surface
+    // that loudly — disabling a safety check should never be silent.
+    if protected_roles.is_empty() {
+        eprintln!(
+            "warning: iam.protected-roles is empty for context '{}' — the IAM-001/IAM-002 \
+             admin-lockout checks are DISABLED for this apply",
+            ctx.name
+        );
+    }
     let opts = ApplyOptions {
         dry_run: args.dry_run,
         keep_going: args.keep_going,
-        // Per-context `iam.protected-roles` / `iam.known-roles` override the
-        // built-in defaults (task 7.4 / design §D8, §D13).
         known_roles: resolved_known_roles(ctx),
-        protected_roles: resolved_protected_roles(ctx),
+        protected_roles,
         // The IAM-001 override needs both flags (task 7.3). clap's
         // `requires = "yes"` already rejects `--allow-admin-lockout` alone, so
         // this `&& yes` is belt-and-suspenders.

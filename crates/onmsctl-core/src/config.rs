@@ -143,12 +143,25 @@ impl IamConfig {
             ("protected-roles", &self.protected_roles),
             ("known-roles", &self.known_roles),
         ] {
-            if let Some(roles) = roles
-                && roles.iter().any(|r| r.trim().is_empty())
-            {
-                return Err(Error::Config(format!(
-                    "context '{ctx_name}': iam.{field} contains an empty role string"
-                )));
+            let Some(roles) = roles else { continue };
+            for r in roles {
+                if r.trim().is_empty() {
+                    return Err(Error::Config(format!(
+                        "context '{ctx_name}': iam.{field} contains an empty role string"
+                    )));
+                }
+                // Role names are matched verbatim against the server's roles
+                // (and the built-in protected/known sets), so a leading or
+                // trailing space would make the entry silently never match —
+                // e.g. " ROLE_ADMIN " would quietly disable the IAM-001
+                // admin-lockout check. Reject it loudly instead of storing a
+                // value that validation trims but enforcement does not.
+                if r != r.trim() {
+                    return Err(Error::Config(format!(
+                        "context '{ctx_name}': iam.{field} role {r:?} has leading or trailing \
+                         whitespace; remove it (role names are matched verbatim)"
+                    )));
+                }
             }
         }
         Ok(())
@@ -535,6 +548,30 @@ contexts:
             Error::Config(m) => {
                 assert!(m.contains("iam.protected-roles"));
                 assert!(m.contains("empty role"));
+                assert!(m.contains("'dev'"));
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_whitespace_padded_iam_role_string() {
+        // A stray space must be a loud config error, not a silently-never-
+        // matching role that would disable the IAM-001 lockout check.
+        let yaml = r#"
+contexts:
+  - name: dev
+    server: { url: "http://a" }
+    auth: { basic: { username: u, password: p } }
+    iam:
+      protected-roles: [" ROLE_ADMIN "]
+"#;
+        let f = write_config(yaml);
+        let err = load(f.path()).unwrap_err();
+        match err {
+            Error::Config(m) => {
+                assert!(m.contains("iam.protected-roles"));
+                assert!(m.contains("whitespace"));
                 assert!(m.contains("'dev'"));
             }
             other => panic!("unexpected {other:?}"),
