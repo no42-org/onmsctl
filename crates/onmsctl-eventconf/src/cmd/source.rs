@@ -262,6 +262,54 @@ impl onmsctl_core::Classify for SourceCmd {
 }
 
 impl SourceCmd {
+    /// `true` for verbs that perform a pure-local transform and issue no HTTP
+    /// — currently only `convert`. The binary dispatches these via
+    /// [`run_local`](Self::run_local) **without** resolving a [`Context`], so
+    /// they need no config file, server URL, or credentials and cannot be
+    /// blocked by a locked or unreachable secret store (SMOKE-002, the
+    /// eventconf twin of `requisition convert`).
+    pub fn is_local_only(&self) -> bool {
+        matches!(self, SourceCmd::Convert { .. })
+    }
+
+    /// Run a pure-local verb (see [`is_local_only`](Self::is_local_only))
+    /// without a [`Context`]. Returns an error if invoked on a server verb —
+    /// the binary guards this by checking `is_local_only` first.
+    pub async fn run_local(self) -> Result<()> {
+        match self {
+            SourceCmd::Convert {
+                inputs,
+                output,
+                output_dir,
+                name,
+                format,
+                force,
+                max_bytes,
+                max_findings,
+                explain,
+            } => {
+                let exit_code = run_convert(ConvertCli {
+                    inputs,
+                    output,
+                    output_dir,
+                    name,
+                    format,
+                    force,
+                    max_bytes,
+                    max_findings,
+                    explain,
+                })?;
+                if exit_code != 0 {
+                    std::process::exit(exit_code);
+                }
+                Ok(())
+            }
+            _ => Err(Error::Config(
+                "internal: run_local invoked on a command that requires a server context".into(),
+            )),
+        }
+    }
+
     pub async fn run(self, ctx: &Context) -> Result<()> {
         let client = OnmsClient::from_context(ctx)?;
         let api = EventConfApi::new(&client);
@@ -1026,6 +1074,31 @@ mod tests {
     <severity>Warning</severity>
   </event>
 </events>"#;
+
+    #[test]
+    fn only_convert_is_local_only() {
+        // SMOKE-002: convert is the sole pure-local source verb; it is
+        // dispatched without a credential-resolving Context.
+        let convert = SourceCmd::Convert {
+            inputs: vec![],
+            output: None,
+            output_dir: None,
+            name: None,
+            format: "text".into(),
+            force: false,
+            max_bytes: "16M".into(),
+            max_findings: 0,
+            explain: None,
+        };
+        assert!(convert.is_local_only());
+        assert!(!SourceCmd::Names.is_local_only());
+    }
+
+    #[tokio::test]
+    async fn run_local_refuses_a_server_verb() {
+        let err = SourceCmd::Names.run_local().await.unwrap_err();
+        assert!(matches!(err, Error::Config(_)));
+    }
 
     #[test]
     fn validate_upload_xml_accepts_duplicate_uei() {
