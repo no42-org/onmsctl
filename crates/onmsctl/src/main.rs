@@ -239,9 +239,16 @@ async fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
         TopCmd::Requisition(cmd) => {
-            let ctx = resolve_context(&merged)?;
-            refuse_if_read_only(&ctx, cmd.kind())?;
-            cmd.run(&ctx).await?;
+            // Pure-local verbs (`convert`) issue no HTTP — run them without
+            // resolving a Context, so an absent config or a locked/unreachable
+            // keyring can't block an offline transform (SMOKE-002).
+            if cmd.is_local_only() {
+                cmd.run_local().await?;
+            } else {
+                let ctx = resolve_context(&merged)?;
+                refuse_if_read_only(&ctx, cmd.kind())?;
+                cmd.run(&ctx).await?;
+            }
             Ok(())
         }
         TopCmd::Iam(cmd) => {

@@ -367,6 +367,33 @@ impl Classify for RequisitionCmd {
 }
 
 impl RequisitionCmd {
+    /// `true` for verbs that perform a pure-local transform and issue no HTTP
+    /// — currently only `convert`. The binary dispatches these via
+    /// [`run_local`](Self::run_local) **without** resolving a [`Context`], so
+    /// they need no config file, server URL, or credentials and cannot be
+    /// blocked by a locked or unreachable secret store (SMOKE-002: `convert`
+    /// used to hang when the keyring was inaccessible in macOS dark wake).
+    pub fn is_local_only(&self) -> bool {
+        matches!(self, RequisitionCmd::Convert { .. })
+    }
+
+    /// Run a pure-local verb (see [`is_local_only`](Self::is_local_only))
+    /// without a [`Context`]. Returns an error if invoked on a server verb —
+    /// the binary guards this by checking `is_local_only` first.
+    pub async fn run_local(self) -> Result<()> {
+        match self {
+            RequisitionCmd::Convert {
+                from,
+                foreign_sources_dir,
+                out,
+                explain,
+            } => run_convert(from, foreign_sources_dir, out, explain).await,
+            _ => Err(Error::Config(
+                "internal: run_local invoked on a command that requires a server context".into(),
+            )),
+        }
+    }
+
     /// Dispatch the parsed verb against a resolved [`Context`].
     pub async fn run(self, ctx: &Context) -> Result<()> {
         match self {
@@ -1691,6 +1718,28 @@ mod tests {
         assert!(nonempty_string("").is_err());
         assert!(nonempty_string("   ").is_err());
         assert_eq!(nonempty_string("foo").unwrap(), "foo");
+    }
+
+    #[test]
+    fn only_convert_is_local_only() {
+        // SMOKE-002: convert is the sole pure-local verb; it is dispatched
+        // without a credential-resolving Context.
+        let convert = RequisitionCmd::Convert {
+            from: None,
+            foreign_sources_dir: None,
+            out: None,
+            explain: None,
+        };
+        assert!(convert.is_local_only());
+        // A representative server verb must NOT be local-only.
+        assert!(!RequisitionCmd::List.is_local_only());
+    }
+
+    #[tokio::test]
+    async fn run_local_refuses_a_server_verb() {
+        // Guard: run_local must never silently run a server command.
+        let err = RequisitionCmd::List.run_local().await.unwrap_err();
+        assert!(matches!(err, Error::Config(_)));
     }
 
     // ---- requisition delete confirmation prompt ----
