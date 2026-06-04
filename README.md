@@ -217,6 +217,13 @@ exit code is non-zero if any file failed, but later files still run.
 `--diff` is single-file-only, but a glob that matches exactly one
 file collapses to single-file mode so `--diff` still applies.
 
+> **Note — partial parity with `requisition apply -f`.** Both verbs share
+> the same file / directory / glob input dispatch, but `source apply -f`
+> does **not** (yet) render the Phase-1 combined plan that
+> `requisition apply -f` does, and has no `--stop-on-error` flag — it is
+> always continue-on-error. For a multi-file preview, use `--dry-run`
+> per file rather than a single combined-plan summary.
+
 `metadata.name` becomes the server's stored source name verbatim;
 Horizon derives `vendor` server-side as the prefix before the first `.`
 (so `metadata.name: cisco.foo` → source name `cisco.foo`, vendor `cisco`).
