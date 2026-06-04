@@ -208,6 +208,15 @@ impl OnmsClient {
         self.mutate_drain(Method::PUT, path, body).await
     }
 
+    /// `POST` with a JSON body, discarding the response body. Same rationale
+    /// as [`Self::patch_drain`]: Horizon's provisioning collection POSTs
+    /// (`/rest/requisitions`, `/rest/foreignSources`) reply `202 Accepted`
+    /// with an **empty** body, which [`Self::post`]'s JSON decode treats as a
+    /// transport error.
+    pub async fn post_drain<B: Serialize>(&self, path: &str, body: &B) -> Result<()> {
+        self.mutate_drain(Method::POST, path, body).await
+    }
+
     /// Shared body for the `*_drain` mutation helpers — apply auth, send,
     /// drain the body so the connection can return to the pool, return `()`.
     async fn mutate_drain<B: Serialize>(&self, method: Method, path: &str, body: &B) -> Result<()> {

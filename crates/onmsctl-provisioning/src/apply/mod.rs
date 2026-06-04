@@ -564,7 +564,7 @@ mod tests {
             .mount(&server)
             .await;
         Mock::given(method("POST"))
-            .and(path("/rest/requisitions/acme-prod"))
+            .and(path("/rest/requisitions"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
             .mount(&server)
             .await;
@@ -657,13 +657,13 @@ mod tests {
         // run fails the `outcome.state == DryRun` assertion first
         // rather than masking it behind an HTTP error in `unwrap()`.
         Mock::given(method("POST"))
-            .and(path("/rest/requisitions/acme-prod"))
+            .and(path("/rest/requisitions"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
             .expect(0)
             .mount(&server)
             .await;
         Mock::given(method("POST"))
-            .and(path("/rest/foreignSources/acme-prod"))
+            .and(path("/rest/foreignSources"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
             .expect(0)
             .mount(&server)
@@ -726,12 +726,12 @@ mod tests {
             .mount(&server)
             .await;
         Mock::given(method("POST"))
-            .and(path("/rest/foreignSources/acme-prod"))
+            .and(path("/rest/foreignSources"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
             .mount(&server)
             .await;
         Mock::given(method("POST"))
-            .and(path("/rest/requisitions/acme-prod"))
+            .and(path("/rest/requisitions"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
             .mount(&server)
             .await;
@@ -792,7 +792,7 @@ mod tests {
             .mount(&server)
             .await;
         Mock::given(method("POST"))
-            .and(path("/rest/requisitions/acme-prod"))
+            .and(path("/rest/requisitions"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
             .mount(&server)
             .await;
@@ -833,7 +833,7 @@ mod tests {
             .mount(&server)
             .await;
         Mock::given(method("POST"))
-            .and(path("/rest/requisitions/acme-prod"))
+            .and(path("/rest/requisitions"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
             .mount(&server)
             .await;
@@ -897,7 +897,7 @@ mod tests {
             .mount(&server)
             .await;
         Mock::given(method("POST"))
-            .and(path("/rest/requisitions/acme-prod"))
+            .and(path("/rest/requisitions"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
             .mount(&server)
             .await;
@@ -946,14 +946,14 @@ mod tests {
             .await;
         // FS POST returns 500 — design D7 requires we abort here.
         Mock::given(method("POST"))
-            .and(path("/rest/foreignSources/acme-prod"))
+            .and(path("/rest/foreignSources"))
             .respond_with(ResponseTemplate::new(500))
             .mount(&server)
             .await;
         // Requisition POST and import must NOT be issued — assert
         // via .expect(0) so wiremock panics on drop if they fire.
         Mock::given(method("POST"))
-            .and(path("/rest/requisitions/acme-prod"))
+            .and(path("/rest/requisitions"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
             .expect(0)
             .mount(&server)
@@ -1008,7 +1008,7 @@ mod tests {
             .mount(&server)
             .await;
         Mock::given(method("POST"))
-            .and(path("/rest/requisitions/acme-prod"))
+            .and(path("/rest/requisitions"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
             .mount(&server)
             .await;
@@ -1078,7 +1078,7 @@ mod tests {
             .mount(&server)
             .await;
         Mock::given(method("POST"))
-            .and(path("/rest/requisitions/acme-prod"))
+            .and(path("/rest/requisitions"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
             .mount(&server)
             .await;

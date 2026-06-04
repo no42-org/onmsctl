@@ -1055,6 +1055,7 @@ dependencies = [
  "onmsctl-core",
  "onmsctl-eventconf",
  "onmsctl-iam",
+ "onmsctl-provisioning",
  "serde_norway",
  "tempfile",
  "tokio",

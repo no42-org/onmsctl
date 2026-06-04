@@ -619,17 +619,18 @@ mod tests {
                 .respond_with(ResponseTemplate::new(404))
                 .mount(&server)
                 .await;
-            Mock::given(method("POST"))
-                .and(path(format!("/rest/requisitions/{name}")))
-                .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
-                .mount(&server)
-                .await;
             Mock::given(method("PUT"))
                 .and(path(format!("/rest/requisitions/{name}/import")))
                 .respond_with(ResponseTemplate::new(200))
                 .mount(&server)
                 .await;
         }
+        // Shared collection create POST (SMOKE-001: POST → /rest/requisitions).
+        Mock::given(method("POST"))
+            .and(path("/rest/requisitions"))
+            .respond_with(ResponseTemplate::new(202).set_body_json(json!({})))
+            .mount(&server)
+            .await;
         Mock::given(method("GET"))
             .and(path("/rest/foreignSources/default"))
             .respond_with(ResponseTemplate::new(200).set_body_json(empty_default_fs()))
@@ -775,7 +776,7 @@ mod tests {
         // Phase 2: a fails (500), no mocks for b / c — wiremock
         // unmatched-request panic if Phase 2 reaches them.
         Mock::given(method("POST"))
-            .and(path("/rest/requisitions/a-req"))
+            .and(path("/rest/requisitions"))
             .respond_with(ResponseTemplate::new(500))
             .mount(&server)
             .await;
@@ -869,17 +870,19 @@ mod tests {
                 .respond_with(ResponseTemplate::new(404))
                 .mount(&server)
                 .await;
-            Mock::given(method("POST"))
-                .and(path(format!("/rest/requisitions/{name}")))
-                .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
-                .mount(&server)
-                .await;
+            // Per-name import mock; the create POST is a single shared
+            // collection mock mounted below (SMOKE-001: POST → /rest/requisitions).
             Mock::given(method("PUT"))
                 .and(path(format!("/rest/requisitions/{name}/import")))
                 .respond_with(ResponseTemplate::new(200))
                 .mount(&server)
                 .await;
         }
+        Mock::given(method("POST"))
+            .and(path("/rest/requisitions"))
+            .respond_with(ResponseTemplate::new(202).set_body_json(json!({})))
+            .mount(&server)
+            .await;
         Mock::given(method("GET"))
             .and(path("/rest/foreignSources/default"))
             .respond_with(ResponseTemplate::new(200).set_body_json(empty_default_fs()))

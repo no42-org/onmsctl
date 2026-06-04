@@ -31,6 +31,7 @@ use anyhow::{Context as _, Result, anyhow};
 use onmsctl_core::{AuthCreds, Context, OnmsClient, OutputFormat, Url};
 use onmsctl_eventconf::EventConfApi;
 use onmsctl_iam::api::IamApi;
+use onmsctl_provisioning::api::ProvisioningApi;
 
 /// Prefix every integration-test-owned resource name SHALL carry. The
 /// cleanup sweep matches on this prefix, so naming a resource without
@@ -178,6 +179,27 @@ impl Harness {
             api.delete_user(&name)
                 .await
                 .map_err(|e| anyhow!("delete_user({name}): {e}"))?;
+        }
+        Ok(n)
+    }
+
+    /// Delete every requisition whose name starts with [`RESOURCE_PREFIX`],
+    /// purging both pending and deployed snapshots. Mirrors the other cleanup
+    /// sweeps; real requisitions (no prefix) are never touched.
+    pub async fn cleanup_requisitions(&self) -> Result<usize> {
+        let api = ProvisioningApi::new(&self.client);
+        let names: Vec<String> = api
+            .list_requisition_names()
+            .await
+            .map_err(|e| anyhow!("list_requisition_names: {e}"))?
+            .into_iter()
+            .filter(|n| n.starts_with(RESOURCE_PREFIX))
+            .collect();
+        let n = names.len();
+        for name in names {
+            // Best-effort dual-snapshot purge; 404 on either side is fine.
+            let _ = api.delete_pending_requisition(&name).await;
+            let _ = api.delete_deployed_requisition(&name).await;
         }
         Ok(n)
     }

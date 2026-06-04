@@ -114,16 +114,17 @@ impl<'c> ProvisioningApi<'c> {
         }
     }
 
-    /// `POST /rest/requisitions/{fs}` (the path segment is part of the
-    /// URL but Horizon also takes the foreign-source name from the
-    /// body's `foreign-source` field — they must agree). Horizon's
-    /// response on success is typically empty or a status string, so
-    /// we drain the body.
+    /// `POST /rest/requisitions` — create-or-replace. The foreign-source
+    /// name is carried in the body's `foreign-source` field, NOT as a path
+    /// segment: Horizon's collection endpoint returns **405 Method Not
+    /// Allowed** for `POST /rest/requisitions/{fs}` (verified against a live
+    /// Horizon), and **202 Accepted** for the bare collection POST. Horizon's
+    /// success response is typically empty, so we drain the body.
     pub async fn post_requisition(&self, req: &RequisitionServer) -> Result<()> {
-        let path = format!("{BASE}/requisitions/{}", encode(&req.foreign_source));
+        let path = format!("{BASE}/requisitions");
         // OpenNMS provisioning legacy REST uses POST for create-or-replace.
-        self.client.post::<_, serde_json::Value>(&path, req).await?;
-        Ok(())
+        // The 202 response carries an empty body, so drain rather than decode.
+        self.client.post_drain(&path, req).await
     }
 
     /// `PUT /rest/requisitions/{fs}/import?rescanExisting=<bool>`.
@@ -449,12 +450,13 @@ impl<'c> ProvisioningApi<'c> {
         self.client.get(&path, &[]).await
     }
 
-    /// `POST /rest/foreignSources/{fs}`. Same create-or-replace
-    /// semantic as the requisition POST.
+    /// `POST /rest/foreignSources` — create-or-replace, name in the body's
+    /// `name` field. Same collection-POST contract as `post_requisition`:
+    /// `POST /rest/foreignSources/{fs}` returns 405; the bare collection POST
+    /// is the accepted endpoint.
     pub async fn post_foreign_source(&self, fs: &ForeignSourceServer) -> Result<()> {
-        let path = format!("{BASE}/foreignSources/{}", encode(&fs.name));
-        self.client.post::<_, serde_json::Value>(&path, fs).await?;
-        Ok(())
+        let path = format!("{BASE}/foreignSources");
+        self.client.post_drain(&path, fs).await
     }
 
     /// `DELETE /rest/foreignSources/{fs}`. Removes any custom FS
@@ -568,15 +570,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn post_requisition_uses_foreign_source_path() {
+    async fn post_requisition_targets_collection_endpoint() {
+        // SMOKE-001 regression guard: the create POST goes to the bare
+        // `/rest/requisitions` collection (name in the body), NOT
+        // `/rest/requisitions/{fs}` — the latter returns 405 on a live
+        // Horizon. The `path(...)` matcher is exact, so a `/{fs}` segment
+        // would miss the mock and the request would 404/unmatched.
         let (mock, client) = mock_with_client().await;
         Mock::given(method("POST"))
-            .and(path("/rest/requisitions/acme-prod"))
+            .and(path("/rest/requisitions"))
             .and(body_json(serde_json::json!({
                 "foreign-source": "acme-prod",
                 "node": []
             })))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .respond_with(ResponseTemplate::new(202).set_body_json(serde_json::json!({})))
             .mount(&mock)
             .await;
         let api = ProvisioningApi::new(&client);

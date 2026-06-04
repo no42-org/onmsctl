@@ -13,6 +13,7 @@ publish = false
 onmsctl-core = { workspace = true }
 onmsctl-eventconf = { workspace = true }
 onmsctl-iam = { workspace = true }
+onmsctl-provisioning = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 anyhow = { workspace = true }
 tempfile = { workspace = true }
