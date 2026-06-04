@@ -396,6 +396,13 @@ impl RequisitionCmd {
 
     /// Dispatch the parsed verb against a resolved [`Context`].
     pub async fn run(self, ctx: &Context) -> Result<()> {
+        // Pure-local verbs (`convert`) have a single dispatch point in
+        // `run_local`; route them there so server callers and the binary
+        // can't diverge. The binary already branches before resolving a
+        // Context, so this is a safety net for any other `run` caller.
+        if self.is_local_only() {
+            return self.run_local().await;
+        }
         match self {
             RequisitionCmd::Apply {
                 file,
@@ -431,12 +438,10 @@ impl RequisitionCmd {
                 out,
                 include_defaults,
             } => run_export(fs, out, include_defaults, ctx).await,
-            RequisitionCmd::Convert {
-                from,
-                foreign_sources_dir,
-                out,
-                explain,
-            } => run_convert(from, foreign_sources_dir, out, explain).await,
+            // Convert is handled by the early `is_local_only` return above.
+            RequisitionCmd::Convert { .. } => {
+                unreachable!("convert is dispatched via run_local")
+            }
             RequisitionCmd::Node(cmd) => cmd.run(ctx).await,
             RequisitionCmd::Interface(cmd) => cmd.run(ctx).await,
             RequisitionCmd::Service(cmd) => cmd.run(ctx).await,

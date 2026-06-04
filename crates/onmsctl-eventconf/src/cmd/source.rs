@@ -311,6 +311,12 @@ impl SourceCmd {
     }
 
     pub async fn run(self, ctx: &Context) -> Result<()> {
+        // Pure-local verbs (`convert`) have a single dispatch point in
+        // `run_local`; route them there before building a client so server
+        // callers and the binary can't diverge.
+        if self.is_local_only() {
+            return self.run_local().await;
+        }
         let client = OnmsClient::from_context(ctx)?;
         let api = EventConfApi::new(&client);
         match self {
@@ -575,31 +581,9 @@ impl SourceCmd {
                     }
                 }
             }
-            SourceCmd::Convert {
-                inputs,
-                output,
-                output_dir,
-                name,
-                format,
-                force,
-                max_bytes,
-                max_findings,
-                explain,
-            } => {
-                let exit_code = run_convert(ConvertCli {
-                    inputs,
-                    output,
-                    output_dir,
-                    name,
-                    format,
-                    force,
-                    max_bytes,
-                    max_findings,
-                    explain,
-                })?;
-                if exit_code != 0 {
-                    std::process::exit(exit_code);
-                }
+            // Convert is handled by the early `is_local_only` return above.
+            SourceCmd::Convert { .. } => {
+                unreachable!("convert is dispatched via run_local")
             }
         }
         Ok(())
