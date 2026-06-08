@@ -865,6 +865,7 @@ mod tests {
         let ctx = ctx_with_iam(onmsctl_core::config::IamConfig {
             protected_roles: Some(vec!["ROLE_ADMIN".into(), "ROLE_REST".into()]),
             known_roles: None,
+            ..Default::default()
         });
         let got = resolved_protected_roles(&ctx);
         assert_eq!(
@@ -878,6 +879,7 @@ mod tests {
         let ctx = ctx_with_iam(onmsctl_core::config::IamConfig {
             protected_roles: Some(vec![]),
             known_roles: None,
+            ..Default::default()
         });
         assert!(resolved_protected_roles(&ctx).is_empty());
     }
@@ -895,6 +897,7 @@ mod tests {
         let ctx = ctx_with_iam(onmsctl_core::config::IamConfig {
             protected_roles: None,
             known_roles: Some(vec!["ROLE_CUSTOM".into()]),
+            ..Default::default()
         });
         assert_eq!(
             resolved_known_roles(&ctx),
