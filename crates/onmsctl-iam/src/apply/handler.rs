@@ -148,8 +148,13 @@ fn join_findings(findings: &[Finding]) -> String {
         .join("; ")
 }
 
-/// The representative action for a user's planned reconcile.
+/// The representative action for a user's planned reconcile. An empty plan set
+/// is `None` explicitly (not by vacuous `all()`), so a future caller passing
+/// `&[]` gets a defined answer rather than a quiet vacuous-truth result.
 fn action_of(plans: &[UserPlan]) -> Action {
+    if plans.is_empty() {
+        return Action::None;
+    }
     if plans.iter().any(|p| matches!(p, UserPlan::Create { .. })) {
         Action::Create
     } else if plans.iter().all(|p| matches!(p, UserPlan::Unchanged { .. })) {
@@ -159,13 +164,23 @@ fn action_of(plans: &[UserPlan]) -> Action {
     }
 }
 
-/// Attach any warnings to `details` so `-o json|yaml` preserves them.
+/// Attach warnings to the outcome: the full text goes in `details` (for
+/// `-o json|yaml`), and a short code hint is appended to `message` so warnings
+/// are not invisible under the default `-o table` (e.g. PR-IAM-008
+/// "passwordRef ignored — password NOT rotated" must not vanish silently).
 fn with_warnings(mut o: ApplyOutcome, warnings: &[Finding]) -> ApplyOutcome {
     if !warnings.is_empty() {
         let list: Vec<String> = warnings
             .iter()
             .map(|f| format!("{}: {}", f.code, f.message))
             .collect();
+        let codes: Vec<&str> = warnings.iter().map(|f| f.code).collect();
+        let hint = format!("{} warning(s): {}", warnings.len(), codes.join(", "));
+        o.message = if o.message.is_empty() {
+            hint
+        } else {
+            format!("{} ({hint})", o.message)
+        };
         o.details = Some(serde_json::json!({ "warnings": list }));
     }
     o
@@ -313,6 +328,19 @@ mod tests {
         assert_eq!(outcomes[0].kind, "User");
         assert_eq!(outcomes[0].name, "alice");
         assert_eq!(outcomes[0].status, OutcomeStatus::Created);
+
+        // The resolved secret must actually reach the POST body (guards the
+        // secret path — a dropped/empty password would still return 201).
+        let reqs = server.received_requests().await.unwrap();
+        let post = reqs
+            .iter()
+            .find(|r| r.method.as_str() == "POST" && r.url.path() == "/rest/users")
+            .expect("a POST to /rest/users");
+        let body = String::from_utf8_lossy(&post.body);
+        assert!(
+            body.contains("s3cr3t"),
+            "POST body must carry the resolved password; got: {body}"
+        );
     }
 
     #[tokio::test]
@@ -373,5 +401,17 @@ mod tests {
         assert_eq!(plan.preview.len(), 1);
         // Demotion is an Update (role delta), not a create.
         assert_eq!(plan.preview[0].action, Action::Update);
+
+        // "without writing": dry-run must issue only reads, and must NOT call
+        // whoami (lockout/self-lockout are skipped under --dry-run).
+        let reqs = server.received_requests().await.unwrap();
+        assert!(
+            reqs.iter().all(|r| r.method.as_str() == "GET"),
+            "dry-run must issue no writes"
+        );
+        assert!(
+            reqs.iter().all(|r| !r.url.path().ends_with("/whoami")),
+            "dry-run must not call whoami"
+        );
     }
 }
