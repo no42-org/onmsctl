@@ -77,9 +77,11 @@ pub fn parse_documents(source: &str, text: &str) -> Result<Vec<RawDoc>> {
     let mut docs = Vec::new();
     for de in serde_norway::Deserializer::from_str(text) {
         let value = serde_norway::Value::deserialize(de).map_err(|e| {
+            // 0-based to match `RawDoc::index` / `peek_kind`'s "document N".
+            // `docs.len()` is the index the failing document would receive.
             Error::Config(format!(
                 "{source}: invalid YAML in document {}: {e}",
-                docs.len() + 1
+                docs.len()
             ))
         })?;
         if value.is_null() {

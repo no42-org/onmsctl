@@ -67,6 +67,18 @@ pub async fn apply_documents(
             .expect("kind validated against the registry in the gate above");
         let bucket = &groups[kind];
         let plan = handler.plan(bucket, params, ctx).await?;
+        // Report integrity depends on one preview row per document: dry-run
+        // emits the preview verbatim and not-attempted accounting derives from
+        // it. A handler that returns a mismatched preview would silently drop
+        // or invent report rows.
+        debug_assert_eq!(
+            plan.preview.len(),
+            bucket.len(),
+            "KindHandler for {kind:?} returned {} preview rows for a {}-document bucket; \
+             the preview must carry exactly one entry per document",
+            plan.preview.len(),
+            bucket.len()
+        );
         planned.push((kind.clone(), plan));
     }
 
@@ -86,7 +98,10 @@ pub async fn apply_documents(
     }
 
     // -- Capture per-bucket previews up front so not-attempted accounting can
-    //    name the documents in buckets that never run. --
+    //    name the documents in buckets that never run. INVARIANT: this vec is
+    //    built from `planned` in order, and the execute loop below consumes
+    //    `planned` via `into_iter().enumerate()`, so index `i` aligns across
+    //    `planned`, `bucket_previews`, and `order`. Keep them in lockstep. --
     let bucket_previews: Vec<Vec<ApplyOutcome>> =
         planned.iter().map(|(_, p)| p.preview.clone()).collect();
 
@@ -482,6 +497,38 @@ metadata: {name: bob}
         assert_eq!(outcomes[2].kind, "Requisition");
         assert_eq!(outcomes[2].name, "r1");
         assert_eq!(*log.lock().unwrap(), vec!["User:u1", "EventSource:e1"]);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn transport_error_under_continue_on_error_attempts_every_bucket() {
+        // A bucket-level Err (transport fault) under --continue-on-error must
+        // produce Failed rows for that bucket AND let later buckets run.
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let mut reg = Registry::new();
+        reg.register(RANK_USER, Fake::new("User", log.clone()));
+        reg.register(
+            RANK_EVENT_SOURCE,
+            Fake::new("EventSource", log.clone()).err_execute_for("e1"),
+        );
+        reg.register(RANK_REQUISITION, Fake::new("Requisition", log.clone()));
+        let params = ApplyParams {
+            continue_on_error: true,
+            ..Default::default()
+        };
+        let outcomes = apply_documents(&reg, docs(THREE_KINDS), &params, &test_ctx())
+            .await
+            .unwrap();
+        assert_eq!(outcomes.len(), 3);
+        assert_eq!(outcomes[0].status, OutcomeStatus::Created);
+        assert_eq!(outcomes[1].status, OutcomeStatus::Failed);
+        assert_eq!(outcomes[1].name, "e1");
+        assert_eq!(outcomes[2].status, OutcomeStatus::Created);
+        assert_eq!(outcomes[2].kind, "Requisition");
+        // Every bucket was attempted despite the middle transport fault.
+        assert_eq!(
+            *log.lock().unwrap(),
+            vec!["User:u1", "EventSource:e1", "Requisition:r1"]
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
