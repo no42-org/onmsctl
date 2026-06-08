@@ -22,9 +22,14 @@ pub mod config;
 pub mod context;
 pub mod error;
 pub mod format;
+pub mod kind;
 pub mod render;
 
 pub use apply::{ApplyOptions, ApplyTarget, Diff, Outcome, run_apply};
+pub use kind::{
+    Action, ApplyOutcome, ApplyParams, KindHandler, OutcomeStatus, Plan, PlanItem, RawDoc,
+    Registry, apply_documents, parse_documents,
+};
 pub use async_flags::{AsyncFlags, parse_duration};
 pub use auth::AuthCreds;
 pub use client::OnmsClient;
