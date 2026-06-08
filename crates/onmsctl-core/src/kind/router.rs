@@ -21,20 +21,10 @@ use crate::context::Context;
 use crate::error::{Error, Result};
 
 use super::envelope::RawDoc;
-use super::handler::PlanItem;
-use super::outcome::{Action, ApplyOutcome, OutcomeStatus};
+use super::outcome::ApplyOutcome;
 use super::registry::Registry;
 
-/// Knobs for [`apply_documents`], mapped from the `apply` CLI flags.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct ApplyParams {
-    /// Stop after the plan phase; issue no mutating HTTP.
-    pub dry_run: bool,
-    /// Print each bucket's rendered diff to stderr before reconciling.
-    pub show_diff: bool,
-    /// Attempt every bucket instead of halting after the first failing one.
-    pub continue_on_error: bool,
-}
+pub use super::handler::ApplyParams;
 
 /// Apply a set of documents through the registry. Returns one
 /// [`ApplyOutcome`] per document. Per-document logical failures are reported
@@ -76,11 +66,11 @@ pub async fn apply_documents(
             .handler(kind)
             .expect("kind validated against the registry in the gate above");
         let bucket = &groups[kind];
-        let plan = handler.plan(bucket, ctx).await?;
+        let plan = handler.plan(bucket, params, ctx).await?;
         planned.push((kind.clone(), plan));
     }
 
-    // -- Dry-run: report predicted actions per document; issue no mutations. --
+    // -- Dry-run: emit each handler's preview verbatim; issue no mutations. --
     if params.dry_run {
         let mut outcomes = Vec::new();
         for (_, plan) in &planned {
@@ -90,17 +80,15 @@ pub async fn apply_documents(
             {
                 eprintln!("{diff}");
             }
-            for item in &plan.items {
-                outcomes.push(dry_run_outcome(item));
-            }
+            outcomes.extend(plan.preview.iter().cloned());
         }
         return Ok(outcomes);
     }
 
-    // -- Capture per-bucket plan items up front so not-attempted accounting can
+    // -- Capture per-bucket previews up front so not-attempted accounting can
     //    name the documents in buckets that never run. --
-    let bucket_items: Vec<Vec<PlanItem>> =
-        planned.iter().map(|(_, p)| p.items.clone()).collect();
+    let bucket_previews: Vec<Vec<ApplyOutcome>> =
+        planned.iter().map(|(_, p)| p.preview.clone()).collect();
 
     // -- Execute phase: bucket by bucket, stop after the first failing bucket
     //    unless continue-on-error. --
@@ -116,8 +104,8 @@ pub async fn apply_documents(
         let handler = registry
             .handler(&kind)
             .expect("kind validated against the registry in the gate above");
-        let items = plan.items.clone();
-        match handler.execute(plan, ctx).await {
+        let preview = plan.preview.clone();
+        match handler.execute(plan, params, ctx).await {
             Ok(bucket_outcomes) => {
                 let any_failed = bucket_outcomes.iter().any(|o| o.status.is_failure());
                 outcomes.extend(bucket_outcomes);
@@ -130,11 +118,11 @@ pub async fn apply_documents(
                 // Bucket-level transport fault: preserve the report (Decision 1
                 // → Option 2) by marking each document in the bucket Failed,
                 // symmetric with the Ok(Failed) path.
-                for item in &items {
+                for p in &preview {
                     outcomes.push(ApplyOutcome::failed(
-                        item.kind.clone(),
-                        item.name.clone(),
-                        item.action,
+                        p.kind.clone(),
+                        p.name.clone(),
+                        p.action,
                         e.to_string(),
                         "re-run `onmsctl apply -f` after resolving the error",
                     ));
@@ -149,12 +137,12 @@ pub async fn apply_documents(
 
     // -- Account for documents in buckets not attempted after a halt. --
     if let Some(i) = stopped_at {
-        for items in bucket_items.iter().skip(i + 1) {
-            for item in items {
+        for preview in bucket_previews.iter().skip(i + 1) {
+            for p in preview {
                 outcomes.push(ApplyOutcome::skipped(
-                    item.kind.clone(),
-                    item.name.clone(),
-                    item.action,
+                    p.kind.clone(),
+                    p.name.clone(),
+                    p.action,
                     "not attempted (stopped on a prior failure)",
                 ));
             }
@@ -162,17 +150,6 @@ pub async fn apply_documents(
     }
 
     Ok(outcomes)
-}
-
-/// Map a planned item to its `--dry-run` outcome: a true no-op is `Unchanged`,
-/// any other action is `Skipped` with a "would …" message (the predicted verb
-/// is preserved in the `action` field for diffing against a real run).
-fn dry_run_outcome(item: &PlanItem) -> ApplyOutcome {
-    let (status, message) = match item.action {
-        Action::None => (OutcomeStatus::Unchanged, "in sync".to_string()),
-        other => (OutcomeStatus::Skipped, format!("dry-run: would {other}")),
-    };
-    ApplyOutcome::new(item.kind.clone(), item.name.clone(), item.action, status, message)
 }
 
 fn known_kinds_list(registry: &Registry) -> String {
@@ -188,6 +165,7 @@ mod tests {
     use crate::format::OutputFormat;
     use crate::kind::envelope::parse_documents;
     use crate::kind::handler::{KindHandler, Plan};
+    use crate::kind::outcome::{Action, OutcomeStatus};
     use crate::kind::precedence::{RANK_EVENT_SOURCE, RANK_REQUISITION, RANK_USER};
     use async_trait::async_trait;
     use std::sync::{Arc, Mutex};
@@ -255,40 +233,45 @@ mod tests {
         fn kind(&self) -> &'static str {
             self.kind
         }
-        async fn plan(&self, docs: &[RawDoc], _ctx: &Context) -> Result<Plan> {
-            let mut items = Vec::new();
+        async fn plan(&self, docs: &[RawDoc], _params: &ApplyParams, _ctx: &Context) -> Result<Plan> {
+            let mut preview = Vec::new();
             for doc in docs {
                 let name = doc_name(doc);
                 if self.fail_plan.as_deref() == Some(name.as_str()) {
                     return Err(Error::Config(format!("plan rejected {name}")));
                 }
-                items.push(PlanItem::new(self.kind, name, Action::Create));
+                preview.push(ApplyOutcome::would(self.kind, name, Action::Create));
             }
-            Ok(Plan::new(items, Box::new(())))
+            Ok(Plan::new(preview, Box::new(())))
         }
-        async fn execute(&self, plan: Plan, _ctx: &Context) -> Result<Vec<ApplyOutcome>> {
+        async fn execute(
+            &self,
+            plan: Plan,
+            _params: &ApplyParams,
+            _ctx: &Context,
+        ) -> Result<Vec<ApplyOutcome>> {
             let mut outcomes = Vec::new();
-            for item in &plan.items {
+            for p in &plan.preview {
                 self.log
                     .lock()
                     .unwrap()
-                    .push(format!("{}:{}", item.kind, item.name));
-                if self.err_execute.as_deref() == Some(item.name.as_str()) {
+                    .push(format!("{}:{}", p.kind, p.name));
+                if self.err_execute.as_deref() == Some(p.name.as_str()) {
                     return Err(Error::Timeout("simulated transport fault".into()));
                 }
-                if self.fail_execute.as_deref() == Some(item.name.as_str()) {
+                if self.fail_execute.as_deref() == Some(p.name.as_str()) {
                     outcomes.push(ApplyOutcome::failed(
-                        item.kind.clone(),
-                        item.name.clone(),
-                        item.action,
+                        p.kind.clone(),
+                        p.name.clone(),
+                        p.action,
                         "execute boom",
                         "fix it",
                     ));
                 } else {
                     outcomes.push(ApplyOutcome::new(
-                        item.kind.clone(),
-                        item.name.clone(),
-                        item.action,
+                        p.kind.clone(),
+                        p.name.clone(),
+                        p.action,
                         OutcomeStatus::Created,
                         "created",
                     ));
@@ -360,21 +343,26 @@ metadata: {name: bob}
             fn kind(&self) -> &'static str {
                 "User"
             }
-            async fn plan(&self, docs: &[RawDoc], _ctx: &Context) -> Result<Plan> {
+            async fn plan(&self, docs: &[RawDoc], _params: &ApplyParams, _ctx: &Context) -> Result<Plan> {
                 *self.plan_calls.lock().unwrap() += 1;
-                let items = docs
+                let preview = docs
                     .iter()
-                    .map(|d| PlanItem::new("User", doc_name(d), Action::Create))
+                    .map(|d| ApplyOutcome::would("User", doc_name(d), Action::Create))
                     .collect();
-                Ok(Plan::new(items, Box::new(())))
+                Ok(Plan::new(preview, Box::new(())))
             }
-            async fn execute(&self, plan: Plan, _ctx: &Context) -> Result<Vec<ApplyOutcome>> {
+            async fn execute(
+                &self,
+                plan: Plan,
+                _params: &ApplyParams,
+                _ctx: &Context,
+            ) -> Result<Vec<ApplyOutcome>> {
                 let mut outcomes = Vec::new();
-                for item in &plan.items {
-                    self.log.lock().unwrap().push(item.name.clone());
+                for p in &plan.preview {
+                    self.log.lock().unwrap().push(p.name.clone());
                     outcomes.push(ApplyOutcome::new(
                         "User",
-                        item.name.clone(),
+                        p.name.clone(),
                         Action::Create,
                         OutcomeStatus::Created,
                         "created",

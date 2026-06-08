@@ -22,36 +22,34 @@ use crate::context::Context;
 use crate::error::Result;
 
 use super::envelope::RawDoc;
-use super::outcome::{Action, ApplyOutcome};
+use super::outcome::ApplyOutcome;
 
-/// A router-visible summary of one document's planned reconciliation. The
-/// router uses these to render `--dry-run` previews and to report
-/// not-attempted documents after a stop-on-error halt — without consulting the
-/// opaque payload. One per document in the bucket.
-#[derive(Clone, Debug)]
-pub struct PlanItem {
-    pub kind: String,
-    pub name: String,
-    pub action: Action,
-}
-
-impl PlanItem {
-    pub fn new(kind: impl Into<String>, name: impl Into<String>, action: Action) -> Self {
-        Self {
-            kind: kind.into(),
-            name: name.into(),
-            action,
-        }
-    }
+/// Knobs for an apply run, mapped from the `apply` CLI flags and threaded to
+/// each handler. A handler needs `dry_run` to decide whether to enforce
+/// real-apply-only invariants (e.g. IAM admin-lockout, which is deliberately
+/// not gated under `--dry-run`), and `continue_on_error` to control its own
+/// intra-bucket per-item failure handling.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ApplyParams {
+    /// Stop after the plan phase; issue no mutating HTTP.
+    pub dry_run: bool,
+    /// Print each bucket's rendered diff to stderr before reconciling.
+    pub show_diff: bool,
+    /// Attempt every item/bucket instead of halting after the first failure.
+    pub continue_on_error: bool,
 }
 
 /// The product of a handler's read-only plan phase for one kind-bucket.
-/// Carries the router-visible per-document `items` (for dry-run + not-attempted
-/// reporting), an optional rendered `diff` for `--diff`, and an opaque
-/// `payload` the same handler downcasts in `execute`. Keeping the payload
-/// `Box<dyn Any>` is what lets `KindHandler` stay object-safe.
+/// Carries the router-visible per-document `preview` outcomes (used verbatim
+/// for `--dry-run`, and as the source of `kind`/`name`/`action` for
+/// not-attempted reporting after a stop-on-error halt), an optional rendered
+/// `diff` for `--diff`, and an opaque `payload` the same handler downcasts in
+/// `execute`. The handler owns its preview semantics — typically
+/// [`ApplyOutcome::would`] per document, but a plan-failed document may preview
+/// as `Failed`. Keeping the payload `Box<dyn Any>` is what lets `KindHandler`
+/// stay object-safe.
 pub struct Plan {
-    pub items: Vec<PlanItem>,
+    pub preview: Vec<ApplyOutcome>,
     /// Pre-rendered diff for `--diff`, when the handler produced one.
     pub diff: Option<String>,
     /// Handler-private execution payload, downcast in `execute`.
@@ -59,10 +57,10 @@ pub struct Plan {
 }
 
 impl Plan {
-    /// A plan carrying per-document summaries and an execution payload.
-    pub fn new(items: Vec<PlanItem>, payload: Box<dyn Any + Send>) -> Self {
+    /// A plan carrying per-document preview outcomes and an execution payload.
+    pub fn new(preview: Vec<ApplyOutcome>, payload: Box<dyn Any + Send>) -> Self {
         Self {
-            items,
+            preview,
             diff: None,
             payload,
         }
@@ -87,13 +85,21 @@ pub trait KindHandler: Send + Sync {
     /// Read-only plan for an entire bucket of documents of this kind:
     /// deserialize and validate them, run any cross-document invariants, fetch
     /// live state, and decide per-document actions. MUST NOT mutate server
-    /// state. An error here aborts the whole apply at the router gate.
-    async fn plan(&self, docs: &[RawDoc], ctx: &Context) -> Result<Plan>;
+    /// state. An error here aborts the whole apply at the router gate — so
+    /// gate-class refusals that carry a dedicated exit code (e.g. IAM
+    /// admin-lockout) belong here, not in `execute`. Real-apply-only invariants
+    /// SHOULD be skipped when `params.dry_run` is set.
+    async fn plan(&self, docs: &[RawDoc], params: &ApplyParams, ctx: &Context) -> Result<Plan>;
 
     /// Execute the planned writes for the bucket, returning one
     /// [`ApplyOutcome`] per document/resource. Per-document logical failures
     /// SHOULD be returned as outcomes with `Failed` status (the leaf may
-    /// continue past them under its own `--keep-going`); `Err` is reserved for
-    /// an unrecoverable transport fault affecting the whole bucket.
-    async fn execute(&self, plan: Plan, ctx: &Context) -> Result<Vec<ApplyOutcome>>;
+    /// continue past them under `params.continue_on_error`); `Err` is reserved
+    /// for an unrecoverable transport fault affecting the whole bucket.
+    async fn execute(
+        &self,
+        plan: Plan,
+        params: &ApplyParams,
+        ctx: &Context,
+    ) -> Result<Vec<ApplyOutcome>>;
 }

@@ -135,6 +135,24 @@ impl ApplyOutcome {
     ) -> Self {
         Self::new(kind, name, action, OutcomeStatus::Skipped, message)
     }
+
+    /// The standard `--dry-run` preview for a planned action: a true no-op is
+    /// `Unchanged`, any other action is `Skipped` with a "would …" message (the
+    /// predicted verb stays in `action` for diffing against a real run). The
+    /// canonical Decision-2 behaviour, shared by all handlers; a handler may
+    /// build a different preview (e.g. a `Failed` row for a plan error).
+    pub fn would(kind: impl Into<String>, name: impl Into<String>, action: Action) -> Self {
+        match action {
+            Action::None => Self::new(kind, name, action, OutcomeStatus::Unchanged, "in sync"),
+            other => Self::new(
+                kind,
+                name,
+                action,
+                OutcomeStatus::Skipped,
+                format!("dry-run: would {other}"),
+            ),
+        }
+    }
 }
 
 impl TableRow for ApplyOutcome {
