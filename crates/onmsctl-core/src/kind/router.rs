@@ -69,16 +69,17 @@ pub async fn apply_documents(
         let plan = handler.plan(bucket, params, ctx).await?;
         // Report integrity depends on one preview row per document: dry-run
         // emits the preview verbatim and not-attempted accounting derives from
-        // it. A handler that returns a mismatched preview would silently drop
-        // or invent report rows.
-        debug_assert_eq!(
-            plan.preview.len(),
-            bucket.len(),
-            "KindHandler for {kind:?} returned {} preview rows for a {}-document bucket; \
-             the preview must carry exactly one entry per document",
-            plan.preview.len(),
-            bucket.len()
-        );
+        // it. A mismatched preview would silently drop or invent report rows,
+        // so enforce it at RUNTIME (not just `debug_assert`, which compiles out
+        // in release) — a handler-contract violation must fail loudly.
+        if plan.preview.len() != bucket.len() {
+            return Err(Error::Config(format!(
+                "internal: KindHandler for {kind:?} returned {} preview rows for a \
+                 {}-document bucket; the preview must carry exactly one entry per document",
+                plan.preview.len(),
+                bucket.len()
+            )));
+        }
         planned.push((kind.clone(), plan));
     }
 
@@ -122,6 +123,14 @@ pub async fn apply_documents(
         let preview = plan.preview.clone();
         match handler.execute(plan, params, ctx).await {
             Ok(bucket_outcomes) => {
+                debug_assert_eq!(
+                    bucket_outcomes.len(),
+                    preview.len(),
+                    "KindHandler for {kind:?} returned {} execute outcomes for a \
+                     {}-document bucket; expected one per document",
+                    bucket_outcomes.len(),
+                    preview.len()
+                );
                 let any_failed = bucket_outcomes.iter().any(|o| o.status.is_failure());
                 outcomes.extend(bucket_outcomes);
                 if any_failed && !params.continue_on_error {
@@ -528,6 +537,45 @@ metadata: {name: bob}
         assert_eq!(
             *log.lock().unwrap(),
             vec!["User:u1", "EventSource:e1", "Requisition:r1"]
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn plan_error_propagates_with_its_exit_code() {
+        // D6 regression guard: a gate-class plan Err (e.g. IAM lockout, here
+        // simulated by a transport error with exit code 6) must propagate
+        // verbatim through apply_documents — the router must NOT wrap/swallow
+        // it into a generic error, or the dedicated exit code (13/14/15 for
+        // IAM) would be lost.
+        struct Gated;
+        #[async_trait]
+        impl KindHandler for Gated {
+            fn kind(&self) -> &'static str {
+                "User"
+            }
+            async fn plan(&self, _docs: &[RawDoc], _p: &ApplyParams, _c: &Context) -> Result<Plan> {
+                Err(Error::Timeout("simulated gate refusal".into()))
+            }
+            async fn execute(
+                &self,
+                _plan: Plan,
+                _p: &ApplyParams,
+                _c: &Context,
+            ) -> Result<Vec<ApplyOutcome>> {
+                unreachable!("execute must not run after a plan-gate error")
+            }
+        }
+        let mut reg = Registry::new();
+        reg.register(RANK_USER, Box::new(Gated));
+        let d = docs("kind: User\nmetadata: {name: u1}\n");
+        let err = match apply_documents(&reg, d, &ApplyParams::default(), &test_ctx()).await {
+            Ok(_) => panic!("expected the plan-gate error to propagate"),
+            Err(e) => e,
+        };
+        assert_eq!(
+            err.exit_code(),
+            6,
+            "router must propagate the plan error's exit code verbatim"
         );
     }
 

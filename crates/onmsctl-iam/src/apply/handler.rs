@@ -60,7 +60,10 @@ impl KindHandler for UserHandler {
             let local: UserLocal = serde_norway::from_value(d.value.clone()).map_err(|e| {
                 Error::Config(format!("{}: invalid `kind: User` document: {e}", d.label()))
             })?;
-            parsed.push((PathBuf::from(&d.source), local));
+            // Use the `source#index` label, not the bare source, so a duplicate
+            // PR-IAM-002 message distinguishes two docs in one multi-doc file
+            // (otherwise it lists the same path twice).
+            parsed.push((PathBuf::from(d.label()), local));
         }
 
         // -- Cross-document uniqueness (PR-IAM-002) → gate. --
@@ -340,6 +343,53 @@ mod tests {
         assert!(
             body.contains("s3cr3t"),
             "POST body must carry the resolved password; got: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn passwordref_on_existing_user_surfaces_pr_iam_008_in_outcome() {
+        // An existing, in-sync user that declares a passwordRef → PR-IAM-008
+        // warning (apply never rotates). It must surface in the outcome
+        // message (table-visible hint) and details, not vanish.
+        let server = MockServer::start().await;
+        mount_users_list(
+            &server,
+            serde_json::json!([{"user-id":"alice","full-name":"Full Name","role":["ROLE_USER"]}]),
+            1,
+        )
+        .await;
+        Mock::given(method("GET"))
+            .and(path("/rest/users/alice"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "user-id": "alice", "full-name": "Full Name", "role": ["ROLE_USER"]
+            })))
+            .mount(&server)
+            .await;
+        // No write mocks: an in-sync user must not mutate.
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        write!(f, "pw").unwrap();
+        let docs = user_doc("alice", Some(f.path()));
+        let ctx = ctx_for(&server);
+        let params = ApplyParams::default();
+
+        let handler = UserHandler;
+        let plan = handler.plan(&docs, &params, &ctx).await.unwrap();
+        assert!(
+            plan.preview[0].message.contains("PR-IAM-008"),
+            "preview should hint the warning; got: {}",
+            plan.preview[0].message
+        );
+
+        let outcomes = handler.execute(plan, &params, &ctx).await.unwrap();
+        assert_eq!(outcomes[0].status, OutcomeStatus::Unchanged);
+        assert!(
+            outcomes[0].message.contains("PR-IAM-008"),
+            "outcome message must surface the warning; got: {}",
+            outcomes[0].message
+        );
+        assert!(
+            outcomes[0].details.is_some(),
+            "full warning text must live in details for -o json|yaml"
         );
     }
 
