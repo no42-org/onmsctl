@@ -260,6 +260,26 @@ pub async fn plan_directory(
         });
     }
 
+    // Phases 1b + 1c operate on already-parsed documents — see
+    // [`plan_parsed`], which the kind-router's ProvisioningHandler also
+    // calls with documents it parsed from `RawDoc` values.
+    plan_parsed(parsed, api, opts).await
+}
+
+/// Phases 1b + 1c of [`plan_directory`]: cross-file collision checks then
+/// per-document `plan_requisition` (GET only). Takes already-parsed
+/// `(source, RequisitionLocal)` pairs so it can serve both the file-reading
+/// `plan_directory` and the kind-router's `ProvisioningHandler` (which parses
+/// from `RawDoc` values). No mutating HTTP is issued. A hard collision
+/// (duplicate `metadata.name`) returns a `MultiApplyPlan` whose `is_aborted()`
+/// is true; a plan-time GET failure propagates as `Err`.
+pub async fn plan_parsed(
+    parsed: Vec<(PathBuf, RequisitionLocal)>,
+    api: &ProvisioningApi<'_>,
+    opts: &MultiApplyOptions,
+) -> Result<MultiApplyPlan> {
+    let input_count = parsed.len();
+
     // ---- Phase 1b: cross-file collision checks ----
     let collisions = check_collisions(&parsed);
 
