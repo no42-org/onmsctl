@@ -155,7 +155,9 @@ async fn apply_updates_when_events_change() {
     // Second apply, different event set — Updated.
     let second = make_local(&name, &[("Warning", "alpha"), ("Minor", "gamma")], true);
     assert_eq!(
-        apply_one(&second, ApplyParams::default(), &ctx).await.status,
+        apply_one(&second, ApplyParams::default(), &ctx)
+            .await
+            .status,
         OutcomeStatus::Updated
     );
 
@@ -257,14 +259,18 @@ async fn apply_disabled_state_results_in_disabled_source() {
     // Seed enabled.
     let enabled = make_local(&name, &[("Warning", "seed")], true);
     assert_eq!(
-        apply_one(&enabled, ApplyParams::default(), &ctx).await.status,
+        apply_one(&enabled, ApplyParams::default(), &ctx)
+            .await
+            .status,
         OutcomeStatus::Created
     );
 
     // Apply same shape but disabled — Updated.
     let disabled = make_local(&name, &[("Warning", "seed")], false);
     assert_eq!(
-        apply_one(&disabled, ApplyParams::default(), &ctx).await.status,
+        apply_one(&disabled, ApplyParams::default(), &ctx)
+            .await
+            .status,
         OutcomeStatus::Updated
     );
 

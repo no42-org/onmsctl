@@ -69,12 +69,13 @@ impl KindHandler for ProvisioningHandler {
         //    distinguishable in findings. --
         let mut parsed: Vec<(PathBuf, RequisitionLocal)> = Vec::with_capacity(docs.len());
         for d in docs {
-            let local: RequisitionLocal = serde_norway::from_value(d.value.clone()).map_err(|e| {
-                Error::Config(format!(
-                    "{}: invalid `kind: Requisition` document: {e}",
-                    d.label()
-                ))
-            })?;
+            let local: RequisitionLocal =
+                serde_norway::from_value(d.value.clone()).map_err(|e| {
+                    Error::Config(format!(
+                        "{}: invalid `kind: Requisition` document: {e}",
+                        d.label()
+                    ))
+                })?;
             parsed.push((PathBuf::from(d.label()), local));
         }
 
@@ -104,11 +105,7 @@ impl KindHandler for ProvisioningHandler {
             .iter()
             .filter(|f| f.code != CollisionCode::DuplicateMetadataName)
             .collect();
-        let preview = plan
-            .entries
-            .iter()
-            .map(|e| preview_for(e, &soft))
-            .collect();
+        let preview = plan.entries.iter().map(|e| preview_for(e, &soft)).collect();
 
         Ok(Plan::new(preview, Box::new(ProvExecPayload { plan })))
     }
@@ -119,10 +116,9 @@ impl KindHandler for ProvisioningHandler {
         _params: &ApplyParams,
         ctx: &Context,
     ) -> Result<Vec<ApplyOutcome>> {
-        let payload = plan
-            .payload
-            .downcast::<ProvExecPayload>()
-            .map_err(|_| Error::Config("internal: ProvisioningHandler payload type mismatch".into()))?;
+        let payload = plan.payload.downcast::<ProvExecPayload>().map_err(|_| {
+            Error::Config("internal: ProvisioningHandler payload type mismatch".into())
+        })?;
         let opts = multi_opts();
         let client = OnmsClient::from_context(ctx)?;
         let api = ProvisioningApi::new(&client);
@@ -169,15 +165,27 @@ fn outcome_of(r: MultiApplyFileResult) -> ApplyOutcome {
         .unwrap_or_else(|| "<unknown>".to_string());
     match r.outcome {
         Ok(po) => match po.state {
-            ApplyState::Unchanged => {
-                ApplyOutcome::new(KIND, name, Action::None, OutcomeStatus::Unchanged, "in sync")
-            }
-            ApplyState::Created => {
-                ApplyOutcome::new(KIND, name, Action::Create, OutcomeStatus::Created, "created")
-            }
-            ApplyState::Updated => {
-                ApplyOutcome::new(KIND, name, Action::Update, OutcomeStatus::Updated, "updated")
-            }
+            ApplyState::Unchanged => ApplyOutcome::new(
+                KIND,
+                name,
+                Action::None,
+                OutcomeStatus::Unchanged,
+                "in sync",
+            ),
+            ApplyState::Created => ApplyOutcome::new(
+                KIND,
+                name,
+                Action::Create,
+                OutcomeStatus::Created,
+                "created",
+            ),
+            ApplyState::Updated => ApplyOutcome::new(
+                KIND,
+                name,
+                Action::Update,
+                OutcomeStatus::Updated,
+                "updated",
+            ),
             // execute_multi never runs dry-run; defensive.
             ApplyState::DryRun => {
                 ApplyOutcome::new(KIND, name, Action::None, OutcomeStatus::Skipped, "dry-run")

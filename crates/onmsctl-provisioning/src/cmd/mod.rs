@@ -19,7 +19,9 @@ use std::io::{ErrorKind, Write};
 use std::path::PathBuf;
 
 use clap::Subcommand;
-use onmsctl_core::{AsyncFlags, Classify, CmdKind, Context, Error, OnmsClient, OutputFormat, Result};
+use onmsctl_core::{
+    AsyncFlags, Classify, CmdKind, Context, Error, OnmsClient, OutputFormat, Result,
+};
 
 use crate::api::ProvisioningApi;
 use crate::convert::{ConversionResult, FindingCode, Severity, convert_directory, explain};

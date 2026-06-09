@@ -26,9 +26,7 @@
 use onmsctl_core::{Error, OnmsClient, Result};
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 
-use crate::model::server::{
-    ForeignSourceServer, InterfaceServer, NodeServer, RequisitionServer,
-};
+use crate::model::server::{ForeignSourceServer, InterfaceServer, NodeServer, RequisitionServer};
 
 /// Characters that must be percent-encoded inside a path segment.
 /// Anything beyond RFC 3986's "unreserved" set (`A-Z`, `a-z`, `0-9`,

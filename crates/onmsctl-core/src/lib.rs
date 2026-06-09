@@ -26,10 +26,6 @@ pub mod kind;
 pub mod render;
 
 pub use apply::Diff;
-pub use kind::{
-    Action, ApplyOutcome, ApplyParams, KindHandler, OutcomeStatus, Plan, RawDoc, Registry,
-    apply_documents, parse_documents,
-};
 pub use async_flags::{AsyncFlags, parse_duration};
 pub use auth::AuthCreds;
 pub use client::OnmsClient;
@@ -37,6 +33,10 @@ pub use cmd::{Classify, CmdKind};
 pub use context::{Context, Overrides};
 pub use error::{Error, Result};
 pub use format::OutputFormat;
+pub use kind::{
+    Action, ApplyOutcome, ApplyParams, KindHandler, OutcomeStatus, Plan, RawDoc, Registry,
+    apply_documents, parse_documents,
+};
 pub use render::{TableRow, render_list, render_one};
 
 /// Re-export of `reqwest::Url`. Capabilities use this to construct

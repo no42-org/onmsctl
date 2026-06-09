@@ -160,7 +160,10 @@ fn action_of(plans: &[UserPlan]) -> Action {
     }
     if plans.iter().any(|p| matches!(p, UserPlan::Create { .. })) {
         Action::Create
-    } else if plans.iter().all(|p| matches!(p, UserPlan::Unchanged { .. })) {
+    } else if plans
+        .iter()
+        .all(|p| matches!(p, UserPlan::Unchanged { .. }))
+    {
         Action::None
     } else {
         Action::Update
@@ -201,7 +204,10 @@ fn preview_for(name: &str, rec: &UserReconcile) -> ApplyOutcome {
         );
         return with_warnings(o, &rec.warnings);
     }
-    with_warnings(ApplyOutcome::would(KIND_USER, name, action_of(&rec.plans)), &rec.warnings)
+    with_warnings(
+        ApplyOutcome::would(KIND_USER, name, action_of(&rec.plans)),
+        &rec.warnings,
+    )
 }
 
 /// Map an execute-phase per-user outcome to an `ApplyOutcome`.
@@ -215,7 +221,11 @@ fn outcome_of(uo: UserOutcome) -> ApplyOutcome {
             "in sync",
         ),
         UserResult::Applied => {
-            if uo.planned.iter().any(|p| matches!(p, UserPlan::Create { .. })) {
+            if uo
+                .planned
+                .iter()
+                .any(|p| matches!(p, UserPlan::Create { .. }))
+            {
                 ApplyOutcome::new(
                     KIND_USER,
                     uo.name.clone(),

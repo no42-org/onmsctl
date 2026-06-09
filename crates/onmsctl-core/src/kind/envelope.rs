@@ -125,7 +125,8 @@ mod tests {
 
     #[test]
     fn peek_kind_reads_the_discriminator() {
-        let docs = parse_documents("a.yaml", "apiVersion: v1\nkind: Requisition\nmetadata: {}").unwrap();
+        let docs =
+            parse_documents("a.yaml", "apiVersion: v1\nkind: Requisition\nmetadata: {}").unwrap();
         assert_eq!(docs.len(), 1);
         assert_eq!(docs[0].peek_kind().unwrap(), "Requisition");
     }

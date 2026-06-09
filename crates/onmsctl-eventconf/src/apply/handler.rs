@@ -70,7 +70,10 @@ impl KindHandler for EventSourceHandler {
             // errors as the legacy path. (Parse-error line numbers refer to
             // this normalized form, not the user's original source bytes.)
             let yaml = serde_norway::to_string(&d.value).map_err(|e| {
-                Error::Config(format!("{}: could not re-serialize document: {e}", d.label()))
+                Error::Config(format!(
+                    "{}: could not re-serialize document: {e}",
+                    d.label()
+                ))
             })?;
             let local = EventSourceLocal::from_yaml(yaml.as_bytes()).map_err(|e| match e {
                 Error::Config(msg) => Error::Config(format!("{}: {msg}", d.label())),
@@ -113,18 +116,21 @@ impl KindHandler for EventSourceHandler {
         _params: &ApplyParams,
         ctx: &Context,
     ) -> Result<Vec<ApplyOutcome>> {
-        let payload = plan
-            .payload
-            .downcast::<EventExecPayload>()
-            .map_err(|_| Error::Config("internal: EventSourceHandler payload type mismatch".into()))?;
+        let payload = plan.payload.downcast::<EventExecPayload>().map_err(|_| {
+            Error::Config("internal: EventSourceHandler payload type mismatch".into())
+        })?;
 
         let mut outcomes = Vec::with_capacity(payload.sources.len());
         for (local, action) in payload.sources {
             let name = local.metadata.name.clone();
             let outcome = match action {
-                ExecAction::Unchanged => {
-                    ApplyOutcome::new(KIND, name, Action::None, OutcomeStatus::Unchanged, "in sync")
-                }
+                ExecAction::Unchanged => ApplyOutcome::new(
+                    KIND,
+                    name,
+                    Action::None,
+                    OutcomeStatus::Unchanged,
+                    "in sync",
+                ),
                 ExecAction::Create | ExecAction::Update => {
                     let is_update = action == ExecAction::Update;
                     match upload_then_optionally_disable(&local, ctx, is_update).await {
@@ -225,9 +231,10 @@ mod tests {
         mount_source_list(&server, serde_json::json!({"totalRecords": 0, "items": []})).await;
         Mock::given(method("POST"))
             .and(path("/api/v2/eventconf/upload"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(
-                serde_json::json!({"success": [], "errors": []}),
-            ))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"success": [], "errors": []})),
+            )
             // Verify (on server drop) the upload actually happened exactly once,
             // rather than trusting the outcome status alone.
             .expect(1)

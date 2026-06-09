@@ -446,5 +446,4 @@ mod tests {
         assert!(!is_confirmation("no"));
         assert!(!is_confirmation(""));
     }
-
 }

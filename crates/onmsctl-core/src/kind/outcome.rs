@@ -185,7 +185,13 @@ mod tests {
 
     #[test]
     fn remediation_only_serialized_when_present() {
-        let ok = ApplyOutcome::new("User", "alice", Action::Create, OutcomeStatus::Created, "ok");
+        let ok = ApplyOutcome::new(
+            "User",
+            "alice",
+            Action::Create,
+            OutcomeStatus::Created,
+            "ok",
+        );
         let json = serde_json::to_string(&ok).unwrap();
         assert!(!json.contains("remediation"));
 
@@ -198,7 +204,13 @@ mod tests {
     #[test]
     fn renders_through_the_shared_table_path() {
         let outcomes = vec![
-            ApplyOutcome::new("User", "alice", Action::Create, OutcomeStatus::Created, "created"),
+            ApplyOutcome::new(
+                "User",
+                "alice",
+                Action::Create,
+                OutcomeStatus::Created,
+                "created",
+            ),
             ApplyOutcome::new(
                 "Requisition",
                 "acme",

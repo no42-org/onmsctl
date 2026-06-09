@@ -257,7 +257,12 @@ mod tests {
         fn kind(&self) -> &'static str {
             self.kind
         }
-        async fn plan(&self, docs: &[RawDoc], _params: &ApplyParams, _ctx: &Context) -> Result<Plan> {
+        async fn plan(
+            &self,
+            docs: &[RawDoc],
+            _params: &ApplyParams,
+            _ctx: &Context,
+        ) -> Result<Plan> {
             let mut preview = Vec::new();
             for doc in docs {
                 let name = doc_name(doc);
@@ -332,10 +337,14 @@ metadata: {name: e1}
     async fn executes_buckets_in_precedence_order() {
         let log = Arc::new(Mutex::new(Vec::new()));
         let reg = full_registry(&log);
-        let outcomes =
-            apply_documents(&reg, docs(THREE_KINDS), &ApplyParams::default(), &test_ctx())
-                .await
-                .unwrap();
+        let outcomes = apply_documents(
+            &reg,
+            docs(THREE_KINDS),
+            &ApplyParams::default(),
+            &test_ctx(),
+        )
+        .await
+        .unwrap();
         assert_eq!(outcomes.len(), 3);
         // User(100) < EventSource(200) < Requisition(300)
         assert_eq!(
@@ -367,7 +376,12 @@ metadata: {name: bob}
             fn kind(&self) -> &'static str {
                 "User"
             }
-            async fn plan(&self, docs: &[RawDoc], _params: &ApplyParams, _ctx: &Context) -> Result<Plan> {
+            async fn plan(
+                &self,
+                docs: &[RawDoc],
+                _params: &ApplyParams,
+                _ctx: &Context,
+            ) -> Result<Plan> {
                 *self.plan_calls.lock().unwrap() += 1;
                 let preview = docs
                     .iter()
@@ -408,7 +422,11 @@ metadata: {name: bob}
             .await
             .unwrap();
         assert_eq!(outcomes.len(), 2);
-        assert_eq!(*plan_calls.lock().unwrap(), 1, "one plan call for the bucket");
+        assert_eq!(
+            *plan_calls.lock().unwrap(),
+            1,
+            "one plan call for the bucket"
+        );
         assert_eq!(*log.lock().unwrap(), vec!["alice", "bob"]);
     }
 
@@ -418,9 +436,14 @@ metadata: {name: bob}
         let mut reg = Registry::new();
         reg.register(RANK_USER, Fake::new("User", log.clone()));
         // EventSource/Requisition NOT registered.
-        let err = apply_documents(&reg, docs(THREE_KINDS), &ApplyParams::default(), &test_ctx())
-            .await
-            .unwrap_err();
+        let err = apply_documents(
+            &reg,
+            docs(THREE_KINDS),
+            &ApplyParams::default(),
+            &test_ctx(),
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, Error::Config(_)));
         assert!(log.lock().unwrap().is_empty(), "nothing should execute");
     }
@@ -429,12 +452,20 @@ metadata: {name: bob}
     async fn plan_failure_gates_the_whole_apply() {
         let log = Arc::new(Mutex::new(Vec::new()));
         let mut reg = Registry::new();
-        reg.register(RANK_USER, Fake::new("User", log.clone()).fail_plan_for("u1"));
+        reg.register(
+            RANK_USER,
+            Fake::new("User", log.clone()).fail_plan_for("u1"),
+        );
         reg.register(RANK_EVENT_SOURCE, Fake::new("EventSource", log.clone()));
         reg.register(RANK_REQUISITION, Fake::new("Requisition", log.clone()));
-        let err = apply_documents(&reg, docs(THREE_KINDS), &ApplyParams::default(), &test_ctx())
-            .await
-            .unwrap_err();
+        let err = apply_documents(
+            &reg,
+            docs(THREE_KINDS),
+            &ApplyParams::default(),
+            &test_ctx(),
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, Error::Config(_)));
         assert!(log.lock().unwrap().is_empty(), "gate aborts before execute");
     }
@@ -466,10 +497,14 @@ metadata: {name: bob}
             Fake::new("EventSource", log.clone()).fail_execute_for("e1"),
         );
         reg.register(RANK_REQUISITION, Fake::new("Requisition", log.clone()));
-        let outcomes =
-            apply_documents(&reg, docs(THREE_KINDS), &ApplyParams::default(), &test_ctx())
-                .await
-                .unwrap();
+        let outcomes = apply_documents(
+            &reg,
+            docs(THREE_KINDS),
+            &ApplyParams::default(),
+            &test_ctx(),
+        )
+        .await
+        .unwrap();
         // u1 applied, e1 failed, r1 not attempted.
         assert_eq!(outcomes.len(), 3);
         assert_eq!(outcomes[0].status, OutcomeStatus::Created);
@@ -494,10 +529,14 @@ metadata: {name: bob}
             Fake::new("EventSource", log.clone()).err_execute_for("e1"),
         );
         reg.register(RANK_REQUISITION, Fake::new("Requisition", log.clone()));
-        let outcomes =
-            apply_documents(&reg, docs(THREE_KINDS), &ApplyParams::default(), &test_ctx())
-                .await
-                .expect("transport fault must not abort with Err in Option 2");
+        let outcomes = apply_documents(
+            &reg,
+            docs(THREE_KINDS),
+            &ApplyParams::default(),
+            &test_ctx(),
+        )
+        .await
+        .expect("transport fault must not abort with Err in Option 2");
         assert_eq!(outcomes.len(), 3);
         assert_eq!(outcomes[0].status, OutcomeStatus::Created);
         assert_eq!(outcomes[1].status, OutcomeStatus::Failed);

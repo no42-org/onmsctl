@@ -872,5 +872,4 @@ mod tests {
             other => panic!("unexpected {other:?}"),
         }
     }
-
 }

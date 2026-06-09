@@ -368,7 +368,6 @@ impl EventConfApi<'_> {
         let path = format!("{BASE}/vendors/{encoded}/events");
         self.client.get(&path, &[]).await
     }
-
 }
 
 /// Adapt a `Vec<(&str, String)>` to the `&[(&str, &str)]` shape the

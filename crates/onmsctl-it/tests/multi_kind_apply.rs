@@ -91,8 +91,7 @@ fn requisition_doc(name: &str) -> String {
 }
 
 fn write_doc(dir: &Path, file: &str, body: &str) {
-    std::fs::write(dir.join(file), body)
-        .unwrap_or_else(|e| panic!("writing fixture {file}: {e}"));
+    std::fs::write(dir.join(file), body).unwrap_or_else(|e| panic!("writing fixture {file}: {e}"));
 }
 
 /// Resolve a directory of YAML into the router's `RawDoc` list, exactly as the
@@ -133,9 +132,14 @@ async fn apply_multi_kind_dir_creates_all_three() {
     let docs = load_dir(dir.path());
     assert_eq!(docs.len(), 3, "three documents resolved from the directory");
 
-    let outcomes = apply_documents(&test_registry(), docs, &ApplyParams::default(), &h.context(false))
-        .await
-        .expect("multi-kind apply must not hit the plan gate");
+    let outcomes = apply_documents(
+        &test_registry(),
+        docs,
+        &ApplyParams::default(),
+        &h.context(false),
+    )
+    .await
+    .expect("multi-kind apply must not hit the plan gate");
 
     assert_eq!(outcomes.len(), 3, "one outcome per document");
     assert!(
@@ -194,22 +198,32 @@ async fn apply_dry_run_issues_no_mutation() {
         dry_run: true,
         ..Default::default()
     };
-    let outcomes = apply_documents(&test_registry(), load_dir(dir.path()), &params, &h.context(false))
-        .await
-        .expect("dry-run must not error");
+    let outcomes = apply_documents(
+        &test_registry(),
+        load_dir(dir.path()),
+        &params,
+        &h.context(false),
+    )
+    .await
+    .expect("dry-run must not error");
 
     assert_eq!(outcomes.len(), 2);
     // Dry-run never reports a real mutation status.
     assert!(
-        outcomes
-            .iter()
-            .all(|o| !matches!(o.status, OutcomeStatus::Created | OutcomeStatus::Updated | OutcomeStatus::Deleted)),
+        outcomes.iter().all(|o| !matches!(
+            o.status,
+            OutcomeStatus::Created | OutcomeStatus::Updated | OutcomeStatus::Deleted
+        )),
         "dry-run must preview only (Skipped/Unchanged), got: {outcomes:?}"
     );
 
     // And nothing was actually created.
     assert!(
-        IamApi::new(h.client()).get_user(&user).await.expect("get_user").is_none(),
+        IamApi::new(h.client())
+            .get_user(&user)
+            .await
+            .expect("get_user")
+            .is_none(),
         "dry-run must not create the user"
     );
     assert!(
@@ -257,7 +271,11 @@ async fn apply_unknown_kind_aborts_before_any_mutation() {
 
     // The whole apply is gated: the valid User doc must NOT have been created.
     assert!(
-        IamApi::new(h.client()).get_user(&user).await.expect("get_user").is_none(),
+        IamApi::new(h.client())
+            .get_user(&user)
+            .await
+            .expect("get_user")
+            .is_none(),
         "unknown-kind gate must abort before any document is executed"
     );
 
@@ -293,9 +311,14 @@ async fn apply_continue_on_error_attempts_every_bucket() {
         continue_on_error: true,
         ..Default::default()
     };
-    let outcomes = apply_documents(&test_registry(), load_dir(dir.path()), &params, &h.context(false))
-        .await
-        .expect("continue-on-error apply must not hit the plan gate");
+    let outcomes = apply_documents(
+        &test_registry(),
+        load_dir(dir.path()),
+        &params,
+        &h.context(false),
+    )
+    .await
+    .expect("continue-on-error apply must not hit the plan gate");
 
     // Every bucket attempted → one outcome per document, none Skipped
     // (Skipped is the not-attempted marker the router emits only after a halt).
