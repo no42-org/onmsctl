@@ -1,10 +1,12 @@
 # onmsctl
 
-A `kubectl`-style command-line interface for [OpenNMS Horizon][horizon] —
-declarative `apply -f` for event configuration and provisioning
-requisitions, XML→YAML migrators for both legacy eventconf and
-`provision.pl`-shape requisition files, and imperative verbs for
-source / event / requisition management.
+A `kubectl`-style command-line interface for [OpenNMS Horizon][horizon].
+A single declarative entrypoint — top-level `onmsctl apply -f` — peeks
+each YAML document's `kind` and routes it to the right handler, so users,
+event sources, and provisioning requisitions all reconcile through one
+command. XML→YAML migrators bring legacy eventconf and `provision.pl`-shape
+requisition files into that loop; reads, explicit deletes, and `convert`
+stay imperative.
 
 [horizon]: https://www.opennms.com/horizon/
 
@@ -175,11 +177,75 @@ flags (--url, --user, --context)  >  env (ONMS_URL, ONMS_USER, ONMSCTL_CONTEXT) 
 
 ---
 
+## Declarative apply (`onmsctl apply -f`)
+
+`onmsctl apply -f <file|dir|glob>` is the single declarative mutation
+entrypoint. It peeks each YAML document's `kind` and routes it to the
+registered handler — no per-capability apply verb. Three kinds are
+recognized:
+
+| `kind` | `apiVersion` | Reconciles |
+|---|---|---|
+| `User` | `onmsctl.no42.org/v1alpha1` | Horizon users + roles |
+| `EventSource` | `eventconf.opennms.org/v1` | event configuration sources |
+| `Requisition` | `provisioning.opennms.org/v1` | provisioning requisitions |
+
+A single file may hold many documents (`---`-separated), and a directory
+can mix all three kinds.
+
+**Plan → gate → execute.** Every document is planned first. If *any*
+document fails to plan — an unknown `kind`, a duplicate `metadata.name`,
+a parse error — the whole apply **aborts before any mutation**. Once the
+plan gate passes, documents execute in a static precedence order:
+
+```
+User (100)  →  EventSource (200)  →  Requisition (300)
+```
+
+**Input.** `-f` accepts a single file, a directory of `*.yaml` / `*.yml`
+(non-recursive by default), or a glob (quote it so the shell doesn't
+pre-expand). `apply` has no short alias.
+
+```sh
+onmsctl apply -f users.yaml                       # single file
+onmsctl apply -f ./desired-state/                 # directory (mixed kinds)
+onmsctl apply -f ./desired-state/ -R              # recurse into subdirs
+onmsctl apply -f 'sources/cisco-*.yaml'           # glob
+```
+
+**Flags.**
+
+| Flag | Behavior |
+|---|---|
+| `--dry-run` | Plan only; issues zero mutating HTTP. Classifies as a Read, so `--read-only` contexts may run it for review. |
+| `--diff` | Render each kind-bucket's diff to stderr. |
+| `--continue-on-error` (alias `--keep-going`) | Keep applying after a failing document. Default is stop-on-error — halt after the first failing document and report the rest as not-attempted. |
+| `-R` / `--recursive` | Recurse into subdirectories. Off by default; ignored with a stderr note when `-f` is not a directory. |
+
+**Exit codes.** `0` when every document applied or was unchanged; `1`
+when any document fails (including a plan-gate failure or an unknown
+`kind`); `2` on usage error (bad flags, empty / no input).
+
+### Removed imperative verbs → `onmsctl apply -f`
+
+The imperative mutators below no longer exist. Declare the desired state
+in YAML and `apply` it instead:
+
+| Removed verb(s) | Replacement |
+|---|---|
+| `source apply`, `source create`, `source enable`, `source disable` | Declare the source, its events, and enabled-state in a `kind: EventSource` document, then `onmsctl apply -f`. (`source upload` / `source download` still round-trip raw XML.) |
+| `event add`, `event update`, `event delete`, `event enable`, `event disable` | Edit `spec.events[...]` in the owning `kind: EventSource` document, then `onmsctl apply -f`. (`event list` remains for inspection.) |
+| `requisition apply` | `onmsctl apply -f` (kind `Requisition`). |
+| `requisition node\|interface\|service\|category add\|set\|remove` | Edit `spec.nodes[...]` in the requisition YAML, then `onmsctl apply -f`. The matching `… list` / `get` sub-resource verbs remain for inspection. |
+| `iam apply`, `iam user create`, `iam user update`, `iam user role add`, `iam user role remove` | Declare a `kind: User` document (scalar fields + `roles` set + `passwordRef`), then `onmsctl apply -f`. `iam user set-password`, `iam user delete`, and the read verbs remain. |
+
+---
+
 ## GitOps for OpenNMS event configuration
 
 Keep event configuration in git as YAML; push to Horizon declaratively.
 Two commands carry the loop — `source convert` brings existing XML in,
-`source apply` ships edits out.
+`onmsctl apply -f` ships edits out.
 
 ### Step 1 — Convert existing XML → YAML
 
@@ -197,32 +263,25 @@ catalog, exit codes, flags, and the unmodeled-element policy).
 ### Step 2 — Apply YAML to Horizon
 
 ```sh
-onmsctl source apply -f cisco.foo.yaml --diff
+onmsctl apply -f cisco.foo.yaml --diff
 ```
 
 Fetches the server's current state, prints a UEI-bucketed diff to
 stderr, uploads only when changes exist. Add `--dry-run` to simulate.
 
-`source apply -f` accepts a single file, a directory of YAML files, or
+`onmsctl apply -f` accepts a single file, a directory of YAML files, or
 a glob pattern (quote it so the shell doesn't pre-expand):
 
 ```sh
-onmsctl source apply -f sources/                  # directory
-onmsctl source apply -f 'sources/cisco-*.yaml'    # glob
+onmsctl apply -f sources/                  # directory
+onmsctl apply -f 'sources/cisco-*.yaml'    # glob
 ```
 
-With multiple files, each is applied in alphabetical (byte-wise) order
-with continue-on-error semantics — failures are collected and the
-exit code is non-zero if any file failed, but later files still run.
-`--diff` is single-file-only, but a glob that matches exactly one
-file collapses to single-file mode so `--diff` still applies.
-
-> **Note — partial parity with `requisition apply -f`.** Both verbs share
-> the same file / directory / glob input dispatch, but `source apply -f`
-> does **not** (yet) render the Phase-1 combined plan that
-> `requisition apply -f` does, and has no `--stop-on-error` flag — it is
-> always continue-on-error. For a multi-file preview, use `--dry-run`
-> per file rather than a single combined-plan summary.
+Every document is planned before any write (the plan gate aborts the
+whole apply if any document fails to plan), then applied in precedence
+order. Across multiple documents, stop-on-error is the default — pass
+`--continue-on-error` to keep going and collect failures, with a
+non-zero exit if any document failed.
 
 `metadata.name` becomes the server's stored source name verbatim;
 Horizon derives `vendor` server-side as the prefix before the first `.`
@@ -234,9 +293,9 @@ detail in the [EventSource YAML reference](#eventsource-yaml-schema).
 
 ### Step 3 — Iterate
 
-Edit YAML in git, push through review, run `source apply -f` again. The
+Edit YAML in git, push through review, run `onmsctl apply -f` again. The
 diff display flags changes the upload would make. `--dry-run` is safe
-for any branch; `source apply` itself is idempotent (Horizon's upsert
+for any branch; `apply` itself is idempotent (Horizon's upsert
 path replaces events under an existing basename).
 
 ### Editor integration
@@ -269,9 +328,9 @@ understand the extension ignore it harmlessly.
 ## GitOps for OpenNMS provisioning
 
 Manage Horizon requisitions (the `provision.pl`-shape data) declaratively
-from git. Three verbs carry the loop — `requisition convert` brings
-existing XML in, `requisition apply` ships edits out, `requisition
-status` / `import` cover the lifecycle.
+from git. The loop is: `requisition convert` brings existing XML in,
+`onmsctl apply -f` ships edits out, `requisition status` / `import` cover
+the lifecycle.
 
 ### Step 1 — Convert existing XML → YAML
 
@@ -306,20 +365,19 @@ never changes apply outcome; `apply --diff` collapses it to a one-line
 ```sh
 # Single file — preview without writing. --diff goes to stderr,
 # structured outcome to stdout. Safe against any context.
-onmsctl requisition apply -f acme-prod.yaml --dry-run --diff
+onmsctl apply -f acme-prod.yaml --dry-run --diff
 
 # Single file — real apply. With --wait, blocks until import
 # completes (or --timeout fires for exit 10).
-onmsctl requisition apply -f acme-prod.yaml --wait --timeout 5m
+onmsctl apply -f acme-prod.yaml --wait --timeout 5m
 
-# Directory mode — every *.yaml / *.yml under the path is applied
-# in alphabetical order. Phase 1 cross-file collision check runs
-# first (duplicate metadata.name aborts before any writes;
-# duplicate foreignId warns and continues). --stop-on-error
-# (kubectl-style) halts phase 2 after the first per-file failure;
-# default is continue-on-error.
-onmsctl requisition apply -f ./requisitions/ --dry-run
-onmsctl requisition apply -f ./requisitions/ --stop-on-error --wait
+# Directory mode — every *.yaml / *.yml under the path is planned
+# first. The plan gate runs a cross-file collision check (duplicate
+# metadata.name aborts before any writes; duplicate foreignId warns
+# and continues). Stop-on-error is the default — halt after the first
+# failing document; pass --continue-on-error to keep going.
+onmsctl apply -f ./requisitions/ --dry-run
+onmsctl apply -f ./requisitions/ --wait
 ```
 
 The apply path computes a three-level diff (canonical-bytes / per-node
@@ -327,12 +385,12 @@ The apply path computes a three-level diff (canonical-bytes / per-node
 of what changed. Override with `--rescan-existing true|false`.
 
 In directory mode, `--wait` polls per-file after each successful
-apply (not as one batch wait). `--diff` is single-file only — for
-directory previews use `--dry-run -o yaml` to see the structured
-outcomes per file.
+apply (not as one batch wait). `--diff` renders each kind-bucket's diff
+to stderr — for directory previews use `--dry-run -o yaml` to see the
+structured outcomes per file.
 
-Phase 1 plans every file first — parse, cross-file collision check,
-and a per-file diff (GET only) — then renders a combined plan to
+The plan phase parses every document first — cross-file collision check
+and a per-document diff (GET only) — then renders a combined plan to
 stderr before any write happens:
 
 ```text
@@ -344,15 +402,15 @@ Phase 1 plan (3 files): (dry-run)
 ```
 
 A parse error or a hard `metadata.name` collision aborts the whole
-batch in Phase 1 (the header reads `ABORTED`) before any HTTP write is
-issued. The `Summary:` line keeps a fixed shape on both the success
+batch at the plan gate (the header reads `ABORTED`) before any HTTP
+write is issued. The `Summary:` line keeps a fixed shape on both the success
 and abort paths, so scripts can `grep '^  Summary:'` regardless of
 outcome. Under `-o json | -o yaml` the per-file rows and collision
 findings ship in the structured payload instead of stderr.
 
 ### Step 3 — Iterate
 
-Edit YAML in git, push through review, run `requisition apply -f`
+Edit YAML in git, push through review, run `onmsctl apply -f`
 again. `--dry-run` is safe for any branch; `--diff` prints the diff to
 stderr so `-o json`/`-o yaml` consumers on stdout stay clean.
 
@@ -381,19 +439,19 @@ fixture demonstrates the pinned style with every modeled field.
 
 | `provision.pl` | `onmsctl` |
 |---|---|
-| `provision.pl requisition add <fs>` | `onmsctl requisition apply -f <fs>.yaml` (with an empty `nodes: []` payload) |
+| `provision.pl requisition add <fs>` | `onmsctl apply -f <fs>.yaml` (a `kind: Requisition` document with an empty `nodes: []` payload) |
 | `provision.pl requisition remove <fs>` | `onmsctl requisition delete <fs> --yes` (issues both `DELETE /rest/requisitions/<fs>` AND `DELETE /rest/requisitions/deployed/<fs>` in one call; idempotent on both — 404 on either snapshot is treated as success. **`--yes` is required in non-TTY contexts (CI / scripting); TTY contexts prompt interactively.** Remove the local YAML separately) |
 | `provision.pl requisition import <fs>` | `onmsctl requisition import <fs>` (PUT-only, no re-POST; add `--wait` to block until completion) |
 | `provision.pl requisition list` | `onmsctl requisition list` (wraps `GET /rest/requisitionNames`; respects `-o` table / json / yaml) |
-| `provision.pl node add <fs> <foreign-id> <node-label>` | Recommended: edit YAML, `onmsctl requisition apply -f <fs>.yaml`. Imperative escape-hatch: `onmsctl requisition node add <fs> <foreign-id> --label <node-label>` (the imperative path stages the change in the pending requisition; run `requisition import <fs>` to take effect, or `apply -f` to also resync the rest of the YAML) |
-| `provision.pl interface add <fs> <foreign-id> <ip>` | Recommended: edit YAML, `onmsctl requisition apply -f <fs>.yaml`. Imperative escape-hatch: `onmsctl requisition interface add <fs> <foreign-id> <ip> --snmp-primary P\|S\|N [--status 1\|3] [--descr ...]`. Sibling verbs: `interface list / get / set / remove`. Stages the change in the pending requisition; run `requisition import <fs>` to take effect. **Note:** `--status` and `--descr` are wire-only — apply→export→apply silently drops those values |
-| `provision.pl service add <fs> <foreign-id> <ip> <svc>` | Recommended: edit YAML, `onmsctl requisition apply -f <fs>.yaml`. Imperative escape-hatch: `onmsctl requisition service add <fs> <foreign-id> <ip> <svc>`. Sibling verbs: `service list / remove`. Stages the change in the pending requisition; run `requisition import <fs>` to take effect |
-| `provision.pl category add <fs> <foreign-id> <cat>` | Recommended: edit YAML, `onmsctl requisition apply -f <fs>.yaml`. Imperative escape-hatch: `onmsctl requisition category add <fs> <foreign-id> <cat>`. Sibling verbs: `category list / remove`. Stages the change in the pending requisition; run `requisition import <fs>` to take effect |
-| `provision.pl asset add <fs> <foreign-id> <name> <value>` | Recommended (requisition-time): edit YAML's `spec.nodes[].assets`, `onmsctl requisition apply -f <fs>.yaml`. Imperative escape-hatch (post-import, takes effect immediately): `onmsctl requisition asset set <db-id> <field> <value>`. Sibling verbs: `asset list / get`. **Misfit:** keyed by integer database node ID, not foreign-id — resolve via `curl /opennms/rest/nodes?foreignId=<fid>` before running |
+| `provision.pl node add <fs> <foreign-id> <node-label>` | Edit `spec.nodes[...]` in `<fs>.yaml`, then `onmsctl apply -f <fs>.yaml`. `requisition node list / get` remain for inspection. |
+| `provision.pl interface add <fs> <foreign-id> <ip>` | Edit the node's `interfaces` in `<fs>.yaml`, then `onmsctl apply -f <fs>.yaml`. `requisition interface list / get` remain for inspection. |
+| `provision.pl service add <fs> <foreign-id> <ip> <svc>` | Edit the interface's `services` in `<fs>.yaml`, then `onmsctl apply -f <fs>.yaml`. `requisition service list` remains for inspection. |
+| `provision.pl category add <fs> <foreign-id> <cat>` | Edit the node's `categories` in `<fs>.yaml`, then `onmsctl apply -f <fs>.yaml`. `requisition category list` remains for inspection. |
+| `provision.pl asset add <fs> <foreign-id> <name> <value>` | Edit the node's `spec.nodes[].assets` in `<fs>.yaml`, then `onmsctl apply -f <fs>.yaml`. Post-import, takes-effect-immediately escape hatch: `onmsctl requisition asset set <db-id> <field> <value>` (sibling reads: `asset list / get`). **Misfit:** keyed by integer database node ID, not foreign-id — resolve via `curl /opennms/rest/nodes?foreignId=<fid>` before running. |
 
 The migration philosophy reverses `provision.pl`'s shell-automation
 model. Where `provision.pl` ran one mutation per invocation,
-`onmsctl requisition apply` ships the desired state and lets the
+`onmsctl apply` ships the desired state and lets the
 three-level diff figure out what to mutate.
 
 ### Migrating off `provision.pl` shell automation
@@ -408,7 +466,7 @@ Recommended once-per-site recipe (per design D11):
    the per-code `--explain` text).
 2. **Commit** the YAML directory to git as the new source of truth.
 3. **Rewrite** the existing `provision.pl` shell scripts as `onmsctl
-   requisition apply -f <fs>.yaml` invocations. The YAML carries
+   apply -f <fs>.yaml` invocations. The YAML carries
    desired state; the legacy "step-by-step mutation" pattern
    collapses to one apply per requisition.
 4. **Schedule** the apply via CI / cron. `--dry-run --diff` is the
@@ -484,9 +542,10 @@ snapshots return 404), the verb is a no-op and skips the prompt.
 
 ## IAM (users + roles)
 
-Manage Horizon users and their roles — both declaratively (`iam apply
--f`, the GitOps loop) and imperatively (`iam user ...`, ad-hoc verbs).
-Targets the `users` REST surface on Horizon 35+.
+Manage Horizon users and their roles — declaratively via `onmsctl apply
+-f` (`kind: User`, the GitOps loop) and imperatively via the read /
+rotate / delete `iam user ...` verbs. Targets the `users` REST surface
+on Horizon 35+.
 
 ### `whoami`
 
@@ -497,27 +556,27 @@ onmsctl iam whoami        # prints the calling user (GET /users/whoami)
 `whoami` is also the safety check the apply path uses before any
 self-affecting change (see *Lockout protection* below).
 
-### Declarative apply (`iam apply -f`)
+### Declarative apply (`onmsctl apply -f`)
 
 ```sh
 # Preview — plan only, no writes. --diff renders the per-user plan and
 # the summary to stderr. Safe in any context, including --read-only
 # (a dry-run apply classifies as a Read verb).
-onmsctl iam apply -f examples/iam-user.yaml --dry-run --diff
+onmsctl apply -f examples/iam-user.yaml --dry-run --diff
 
-# Real apply. Continue-on-error per user with --keep-going; stop on the
-# first per-user failure by default.
-onmsctl iam apply -f ./users/ --keep-going
+# Real apply. Continue-on-error per user with --continue-on-error
+# (alias --keep-going); stop on the first per-user failure by default.
+onmsctl apply -f ./users/ --continue-on-error
 
 # Directory mode — every *.yaml / *.yml under each -f path. A duplicate
 # metadata.name across documents aborts before any write (PR-IAM-002).
-onmsctl iam apply -f ./users/ --dry-run
+onmsctl apply -f ./users/ --dry-run
 ```
 
-Each `-f` resolves through the shared apply-input dispatcher (file,
-directory, or glob), the same one `requisition apply` uses. Apply plans
-every user first (per-user GET + one `GET /users` lockout snapshot),
-renders a combined summary to stderr —
+`kind: User` documents flow through the same `onmsctl apply -f` plan →
+gate → execute path as every other kind. Apply plans every user first
+(per-user GET + one `GET /users` lockout snapshot), renders a combined
+summary to stderr —
 
 ```text
 plan: 1 create, 2 update, 3 role-delta, 4 unchanged, 0 skipped
@@ -570,8 +629,9 @@ Apply refuses any plan that would lock administration out of the server:
 
 - **`IAM-001` (admin lockout, exit 13):** emptying a protected role's
   holder set — by default `ROLE_ADMIN` — when it was non-empty before.
-  Override with **both** `--allow-admin-lockout` **and** `--yes` (the
-  flag alone is a parse error, not a silent no-op).
+  Override by setting `iam.allow-admin-lockout: true` in the context
+  config — a persisted, reviewable confirmation rather than an ad-hoc
+  CLI flag.
 - **`IAM-002` (self lockout, exit 14):** removing a protected role from,
   or deleting, the **calling** user (resolved via `whoami`). **No
   override** — re-run as a different admin.
@@ -579,7 +639,7 @@ Apply refuses any plan that would lock administration out of the server:
 If a self-affecting action is planned but `whoami` is unavailable (token
 auth without an associated user, or a non-2xx response), apply refuses
 with `IamWhoamiUnavailable` (exit 15) rather than skip the check.
-`--keep-going` controls per-user execution failures only; it never
+`--continue-on-error` controls per-user execution failures only; it never
 bypasses a plan-phase refusal (`IAM-001/002`, `PR-IAM-002`).
 
 **Per-context overrides.** A context may tune the defaults under an
@@ -593,14 +653,20 @@ contexts:
     iam:
       protected-roles: [ROLE_ADMIN, ROLE_REST]   # default: [ROLE_ADMIN]
       known-roles: [ROLE_ADMIN, ROLE_USER, ...]  # replaces the built-in set
+      allow-admin-lockout: true                  # default: false; persisted IAM-001 override
 ```
 
 `protected-roles` replaces the `[ROLE_ADMIN]` default (an explicit
 empty list disables the admin-lockout check); `known-roles` replaces
-the built-in `PR-IAM-006` validation set. Both apply to `iam apply` and
-to the imperative `create` / `role add` warnings.
+the built-in `PR-IAM-006` validation set; `allow-admin-lockout: true`
+is the persisted, reviewable override for the `IAM-001` admin-lockout
+refusal. All apply to `onmsctl apply -f` of `kind: User` documents.
 
 ### Imperative quick-reference
+
+User creation, field edits, and role grants/revokes are declarative —
+declare a `kind: User` document and `onmsctl apply -f`. The surviving
+imperative verbs cover reads, password rotation, and deletion:
 
 ```sh
 # read
@@ -609,13 +675,8 @@ onmsctl iam user get alice
 onmsctl iam user export                   # all users as declarative YAML
 onmsctl iam user export --name alice      # one user to stdout
 
-# write
-onmsctl iam user create alice --full-name "Alice Example" \
-    --email alice@example.org --role ROLE_USER --from-env ALICE_PW
-onmsctl iam user update alice --email alice@corp.example
+# delete
 onmsctl iam user delete alice --yes       # --yes skips the TTY prompt
-onmsctl iam user role add alice ROLE_PROVISION
-onmsctl iam user role remove alice ROLE_PROVISION --yes
 
 # rotate a password (one source; mutually exclusive)
 printf %s "$NEW_PW" | onmsctl iam user set-password alice --password-stdin
@@ -623,19 +684,20 @@ onmsctl iam user set-password alice --from-file /run/secrets/alice.pw
 onmsctl iam user set-password alice --from-keyring onmsctl/alice
 ```
 
-`create` and `set-password` take exactly one password source:
-`--from-file`, `--from-env`, `--from-keyring <service>/<account>`, or
-`--password-stdin` (piped input only — it refuses on a TTY so the secret
-can't echo). `delete` and `role remove` prompt for confirmation on a TTY
-and refuse without `--yes` in non-interactive contexts. `delete --yes`
-is idempotent: a 404 reports "nothing to do".
+`set-password` takes exactly one password source: `--from-file`,
+`--from-env`, `--from-keyring <service>/<account>`, or `--password-stdin`
+(piped input only — it refuses on a TTY so the secret can't echo).
+`delete` prompts for confirmation on a TTY and refuses without `--yes`
+in non-interactive contexts. `delete --yes` is idempotent: a 404 reports
+"nothing to do".
 
 ### Migration map: legacy `users.xml` → `onmsctl`
 
 | Pre-onmsctl | `onmsctl` |
 |---|---|
-| Hand-edit `$OPENNMS_HOME/etc/users.xml`, reload | `onmsctl iam apply -f users/` (one `kind: User` document per user; apply reconciles scalar fields + role set against the live server) |
-| Add a user via the web UI | `onmsctl iam user create <name> --from-env … --role …`, or add a YAML doc and `iam apply -f` |
+| Hand-edit `$OPENNMS_HOME/etc/users.xml`, reload | `onmsctl apply -f users/` (one `kind: User` document per user; apply reconciles scalar fields + role set against the live server) |
+| Add a user via the web UI | Add a `kind: User` document and `onmsctl apply -f` |
+| Change a user's roles in the UI | Edit the document's `roles` set and `onmsctl apply -f` (roles reconcile as a set) |
 | Rotate a password in the UI | `onmsctl iam user set-password <name> --password-stdin` |
 | Remove a `<user>` element + reload | `onmsctl iam user delete <name> --yes` (idempotent; 404 → no-op) |
 
@@ -678,8 +740,9 @@ contexts:
     read-only: true
 ```
 
-Verbs classified `WriteCmd` at compile time (`source create / delete /
-apply`, `event add / update / delete`, `requisition apply / import`)
+Verbs classified `WriteCmd` at compile time — `onmsctl apply` (a Write
+unless `--dry-run`), `source delete` / `upload`, `requisition delete` /
+`import`, `requisition asset set`, `iam user delete` / `set-password` —
 refuse with exit code 12 against a read-only context. Reads pass
 through. The `--read-only` flag and `$ONMSCTL_READ_ONLY` env var
 force the flag on regardless of context — precedence is **flag > env >
@@ -690,28 +753,24 @@ escape hatch — context can never un-set it).
 
 ## Imperative operations
 
-For ad-hoc work outside the GitOps loop:
+For ad-hoc work outside the GitOps loop. Source and event *mutation* is
+now declarative — declare a `kind: EventSource` document and `onmsctl
+apply -f` (see [Declarative apply](#declarative-apply-onmsctl-apply--f)).
+The verbs below are reads, raw-XML round-trips, and the explicit source
+delete:
 
 ```sh
 # sources
 onmsctl source list                  # -o table | -o yaml | -o json
 onmsctl source get 42
-onmsctl source create --name acme.widget --description "Acme widget events"
 onmsctl source delete 42 43
-onmsctl source enable 42 --cascade
-onmsctl source disable 42
 onmsctl source names                 # name-only listing
 onmsctl source names-and-ids
 
-# events (refs are <source-id>/<event-id>)
+# events (read-only; refs are <source-id>/<event-id>)
 onmsctl event list --source 42
 onmsctl event list --uei "uei.opennms.org/vendor/cisco/.*"   # cross-source
 onmsctl event list --vendor cisco
-onmsctl event add --source 42 -f examples/single-event.yaml
-onmsctl event update 42/108 -f event.yaml --enabled true     # --enabled required
-onmsctl event delete 42/108 42/109
-onmsctl event enable 42/108
-onmsctl event disable 42/108
 
 # raw XML round-trip
 onmsctl source upload cisco.foo.events.xml acme.widget.events.xml
@@ -719,10 +778,8 @@ onmsctl source download 42 -O cisco.foo.events.xml
 onmsctl source download 42 --format yaml -O cisco.foo.yaml   # convert inline
 ```
 
-`event add` / `event update` expect a single Event payload; see
-`examples/single-event.yaml`. `source download → edit → apply` may drop
-server-only fields not modeled locally — keep the XML alongside for
-full fidelity.
+`source download → edit → apply` may drop server-only fields not
+modeled locally — keep the XML alongside for full fidelity.
 
 ---
 
@@ -751,16 +808,16 @@ filename-stripper quirk client-side.
 - `source list` prints empty even when sources exist (NMS-19810); use
   `source names-and-ids` as a working alternative.
 - `find_source_by_name` always reports `Absent` (NMS-19810), so
-  `source apply --diff` shows the whole local document as "added"
+  `onmsctl apply --diff` shows the whole local document as "added"
   instead of a true delta. The upload itself still succeeds — Horizon's
   upsert path replaces events under an existing basename — so the
   source materializes correctly; treat the diff display as advisory
   until NMS-19810 is fixed upstream.
-- `source apply` and `source upload` work today: onmsctl sends
+- `onmsctl apply` and `source upload` work today: onmsctl sends
   `name="upload"` on every multipart part (NMS-19813 workaround).
-- `source apply` uploads as `{metadata.name}.xml` (not `.events.xml`)
-  so Horizon's naive filename stripper produces a source name equal
-  to `metadata.name` verbatim.
+- `onmsctl apply` uploads `kind: EventSource` documents as
+  `{metadata.name}.xml` (not `.events.xml`) so Horizon's naive filename
+  stripper produces a source name equal to `metadata.name` verbatim.
 
 ---
 
@@ -886,7 +943,7 @@ multi-line bodies — clip mode (`|`) keeps one trailing newline, strip
 mode (`|-`) keeps none.
 
 > **Security note for `scripts:`.** Shipping executable code via
-> `source apply` lowers the friction for deploying server-side code
+> `onmsctl apply` lowers the friction for deploying server-side code
 > execution on Horizon. The underlying threat surface already exists
 > at the raw eventconf-XML upload path — modeling `<script>` in YAML
 > does not introduce new authority. Operators should ensure RBAC on
@@ -919,12 +976,12 @@ is selection, `<filters>` is post-selection parameter rewrite.
 
 ### Apply-time limitations
 
-(`source apply --help` for full text.)
+(`onmsctl apply --help` for full text.)
 
 | # | Limitation | Workaround |
 |---|---|---|
-| 1 | `description` not set/preserved through `apply`. | `source create --description ...` at first creation. |
-| 2 | Disabled-state `apply` has a bounded enabled-flap window. | Imperative path for strict avoidance; `--verbose` warns when this runs. |
+| 1 | `description` not set/preserved through `apply`. | Carry the source's intent in the YAML and in git review; the field round-trips locally but is not persisted server-side in v0.1. |
+| 2 | Disabled-state `apply` has a bounded enabled-flap window. | `--verbose` warns when this runs. |
 | 3 | `vendor` is filename-derived, not declared. | Encode as the prefix before the first `.` in `metadata.name`. |
 | 4 | `fileOrder` is server-managed in v0.1. | Deferred to a future `kind: EventConfMaster`. |
 
