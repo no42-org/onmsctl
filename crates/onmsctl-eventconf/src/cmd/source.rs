@@ -17,7 +17,7 @@ use onmsctl_core::client::MultipartPart;
 use onmsctl_core::{Context, Error, OnmsClient, Result, render_list, render_one};
 
 use crate::api::{EventConfApi, SourceFilter};
-use crate::dto::{AddEventConfSourceRequest, SourceNameAndId};
+use crate::dto::SourceNameAndId;
 use crate::render::SourceName;
 
 /// Hard cap on bytes read from each upload-input file. Matches the
@@ -52,47 +52,11 @@ pub enum SourceCmd {
         id: i64,
     },
 
-    /// Create a new (empty) source. Use `source upload` to populate events.
-    Create {
-        /// Source name. Becomes the upload filename's basename and the
-        /// vendor is derived from the prefix before the first `.`.
-        #[arg(long)]
-        name: String,
-        /// Vendor name. If omitted, the server derives it from `--name`.
-        #[arg(long)]
-        vendor: Option<String>,
-        /// Free-form description. Note: this is the only point at which a
-        /// description can be set on an eventconf source — `source upload`
-        /// blanks it on every call.
-        #[arg(long)]
-        description: Option<String>,
-    },
-
     /// Delete one or more sources by id.
     Delete {
         /// Source ids to delete.
         #[arg(required = true)]
         ids: Vec<i64>,
-    },
-
-    /// Enable one or more sources.
-    Enable {
-        /// Source ids to enable.
-        #[arg(required = true)]
-        ids: Vec<i64>,
-        /// Also enable each source's events.
-        #[arg(long)]
-        cascade: bool,
-    },
-
-    /// Disable one or more sources.
-    Disable {
-        /// Source ids to disable.
-        #[arg(required = true)]
-        ids: Vec<i64>,
-        /// Also disable each source's events.
-        #[arg(long)]
-        cascade: bool,
     },
 
     /// Upload one or more eventconf XML files via the multipart endpoint.
@@ -137,47 +101,6 @@ pub enum SourceCmd {
 
     /// List `{id, name}` pairs for all eventconf sources.
     NamesAndIds,
-
-    /// Apply an `EventSource` YAML document declaratively.
-    ///
-    /// Reads the file, validates it locally, fetches the server's
-    /// current state, and either creates / updates / no-ops as
-    /// appropriate. With `--dry-run` no mutations are issued; with
-    /// `--diff` the structured diff prints to stderr first.
-    ///
-    /// Known limitations (per design.md §6):
-    ///   - description cannot be set or preserved through apply
-    ///   - bounded enabled-flap window when applying disabled-state
-    ///   - vendor is filename-derived (use metadata.name's prefix)
-    ///   - fileOrder is server-managed in v0.1
-    ///   - download → edit → apply round-trip may lose server-only
-    ///     fields not modeled by the local DTOs
-    ///
-    /// Accepts a single file, a directory, or a glob pattern. In
-    /// multi-file mode the verb iterates alphabetically with
-    /// continue-on-error semantics. `--diff` is single-file-only;
-    /// a glob that matches exactly one file collapses to single-
-    /// file mode so `--diff` still applies.
-    Apply {
-        /// Path to an EventSource YAML/JSON document, a directory of
-        /// documents, or a glob pattern (e.g. `'sources/*.yaml'`).
-        /// With a directory or glob, each matching file is applied
-        /// in alphabetical order. Quote glob patterns so the shell
-        /// doesn't pre-expand them.
-        #[arg(short = 'f', long)]
-        file: PathBuf,
-        /// Show what would happen without issuing any mutating HTTP calls.
-        #[arg(long)]
-        dry_run: bool,
-        /// Print the structured diff to stderr before applying (or in
-        /// dry-run mode, before reporting WouldUpdate). Single-file
-        /// only — multi-file mode (directory or glob with 2+ matches)
-        /// emits per-file outcome lines without the full diff body.
-        /// A glob that matches exactly one file collapses to single-
-        /// file mode so `--diff` still applies.
-        #[arg(long)]
-        diff: bool,
-    },
 
     /// Convert eventconf XML to EventSource YAML with a migration report.
     ///
@@ -251,12 +174,7 @@ impl onmsctl_core::Classify for SourceCmd {
             | SourceCmd::Download { .. }
             | SourceCmd::Convert { .. } => Read,
             // Issue POST / PUT / PATCH / DELETE.
-            SourceCmd::Create { .. }
-            | SourceCmd::Delete { .. }
-            | SourceCmd::Enable { .. }
-            | SourceCmd::Disable { .. }
-            | SourceCmd::Upload { .. }
-            | SourceCmd::Apply { .. } => Write,
+            SourceCmd::Delete { .. } | SourceCmd::Upload { .. } => Write,
         }
     }
 }
@@ -344,22 +262,6 @@ impl SourceCmd {
                 let out = render_one(&s, ctx.output_format)?;
                 println!("{out}");
             }
-            SourceCmd::Create {
-                name,
-                vendor,
-                description,
-            } => {
-                let req = AddEventConfSourceRequest {
-                    name,
-                    vendor,
-                    description,
-                };
-                let created = api.create_source(&req).await?;
-                eprintln!(
-                    "created source {} ({}, fileOrder {})",
-                    created.id, created.name, created.file_order
-                );
-            }
             SourceCmd::Delete { ids } => {
                 for id in &ids {
                     ensure_positive_id(*id, "source id")?;
@@ -367,28 +269,6 @@ impl SourceCmd {
                 let n = ids.len();
                 api.delete_sources(&ids).await?;
                 eprintln!("deleted {n} source(s)");
-            }
-            SourceCmd::Enable { ids, cascade } => {
-                for id in &ids {
-                    ensure_positive_id(*id, "source id")?;
-                }
-                let n = ids.len();
-                api.set_sources_enabled(&ids, true, cascade).await?;
-                eprintln!(
-                    "enabled {n} source(s){}",
-                    if cascade { " (cascade)" } else { "" }
-                );
-            }
-            SourceCmd::Disable { ids, cascade } => {
-                for id in &ids {
-                    ensure_positive_id(*id, "source id")?;
-                }
-                let n = ids.len();
-                api.set_sources_enabled(&ids, false, cascade).await?;
-                eprintln!(
-                    "disabled {n} source(s){}",
-                    if cascade { " (cascade)" } else { "" }
-                );
             }
             SourceCmd::Upload { files } => {
                 let parts = build_upload_parts(&files)?;
@@ -537,50 +417,6 @@ impl SourceCmd {
                     println!("{out}");
                 }
             }
-            SourceCmd::Apply {
-                file,
-                dry_run,
-                diff,
-            } => {
-                use onmsctl_core::apply_input::{ApplyDispatch, resolve_apply_input};
-
-                match resolve_apply_input(&file, &["yaml", "yml"])? {
-                    ApplyDispatch::Single(resolved) => {
-                        apply_single_source(&resolved, dry_run, diff, ctx).await?;
-                    }
-                    ApplyDispatch::Multi(files) => {
-                        if diff {
-                            eprintln!(
-                                "note: --diff has no effect in multi-file mode (use --dry-run for a per-file preview)"
-                            );
-                        }
-                        let mut failures: usize = 0;
-                        for path in &files {
-                            // Per-file: prefix the stdout outcome line
-                            // with the path so operators (and CI grep)
-                            // can correlate outcomes back to files.
-                            // Single-file mode keeps the bare outcome
-                            // line for backwards compatibility.
-                            match apply_single_source_with_path_prefix(path, dry_run, ctx).await {
-                                Ok(()) => {}
-                                Err(e) => {
-                                    failures += 1;
-                                    eprintln!("FAIL {}: {e}", path.display());
-                                }
-                            }
-                        }
-                        if failures > 0 {
-                            return Err(Error::PartialSuccess { failed: failures });
-                        }
-                    }
-                    other => {
-                        return Err(Error::Config(format!(
-                            "unsupported apply input shape: {other:?} (this CLI \
-                             build does not recognise this dispatch variant)"
-                        )));
-                    }
-                }
-            }
             // Convert is handled by the early `is_local_only` return above.
             SourceCmd::Convert { .. } => {
                 unreachable!("convert is dispatched via run_local")
@@ -588,79 +424,6 @@ impl SourceCmd {
         }
         Ok(())
     }
-}
-
-/// Apply a single EventSource YAML/JSON file. Shared between single-
-/// file dispatch and the multi-file loop. The body is unchanged from
-/// the original single-file flow that existed before the multi-file
-/// surface was added — extracted here so both paths share the size-
-/// cap check, parse, and `run_apply::<EventSourceTarget>` call.
-async fn apply_single_source(
-    file: &Path,
-    dry_run: bool,
-    show_diff: bool,
-    ctx: &Context,
-) -> Result<()> {
-    let outcome = apply_single_source_inner(file, dry_run, show_diff, ctx).await?;
-    println!("{outcome}");
-    Ok(())
-}
-
-/// Multi-file variant of [`apply_single_source`] — prefixes the
-/// outcome with the file path so operators can correlate the per-
-/// file results back to inputs. Single-file mode keeps the bare
-/// outcome line so existing single-file CI / script consumers are
-/// unaffected.
-async fn apply_single_source_with_path_prefix(
-    file: &Path,
-    dry_run: bool,
-    ctx: &Context,
-) -> Result<()> {
-    // `show_diff: false` — multi-file mode disables the diff body
-    // (already noted via stderr in the dispatch arm).
-    let outcome = apply_single_source_inner(file, dry_run, false, ctx).await?;
-    println!("{}: {outcome}", file.display());
-    Ok(())
-}
-
-/// The actual file-read + parse + `run_apply` body. Both wrappers
-/// thread this through differently shaped stdout rendering.
-async fn apply_single_source_inner(
-    file: &Path,
-    dry_run: bool,
-    show_diff: bool,
-    ctx: &Context,
-) -> Result<onmsctl_core::Outcome> {
-    use onmsctl_core::{ApplyOptions, run_apply};
-
-    use crate::apply::{EventSourceTarget, local::EventSourceLocal};
-
-    let meta = std::fs::metadata(file)
-        .map_err(|e| Error::Config(format!("failed to stat {}: {e}", file.display())))?;
-    if !meta.is_file() {
-        return Err(Error::Config(format!(
-            "{} is not a regular file (got {:?})",
-            file.display(),
-            meta.file_type()
-        )));
-    }
-    if meta.len() > MAX_UPLOAD_BYTES_PER_FILE {
-        return Err(Error::Config(format!(
-            "{} is {} bytes, exceeds apply input cap of {} bytes",
-            file.display(),
-            meta.len(),
-            MAX_UPLOAD_BYTES_PER_FILE
-        )));
-    }
-    let bytes = std::fs::read(file)
-        .map_err(|e| Error::Config(format!("failed to read {}: {e}", file.display())))?;
-    let local = EventSourceLocal::from_yaml(&bytes).map_err(|e| match e {
-        Error::Config(msg) => Error::Config(format!("{}: {msg}", file.display())),
-        other => other,
-    })?;
-
-    let opts = ApplyOptions { dry_run, show_diff };
-    run_apply::<EventSourceTarget>(local, &opts, ctx).await
 }
 
 /// Parsed shape of `onmsctl source convert ...` arguments. Aggregated
@@ -1110,87 +873,4 @@ mod tests {
         }
     }
 
-    // ---- `source apply -f` dispatch sanity ----
-    //
-    // The bulk of glob-dispatch tests live in
-    // `onmsctl_core::apply_input::tests`. Eventconf keeps three
-    // sanity tests confirming the dispatch types come back as
-    // expected with the `&["yaml", "yml"]` extension filter — if
-    // the filter is silently changed or the helper signature drifts,
-    // these break.
-
-    #[test]
-    fn source_apply_dispatch_single_file() {
-        use onmsctl_core::apply_input::{ApplyDispatch, resolve_apply_input};
-        let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().join("vendor.yaml");
-        std::fs::write(&path, "metadata: { name: x }\n").unwrap();
-        match resolve_apply_input(&path, &["yaml", "yml"]).unwrap() {
-            ApplyDispatch::Single(p) => assert_eq!(p, path),
-            ApplyDispatch::Multi(_) => panic!("single file → Single"),
-            other => panic!("unexpected dispatch variant: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn source_apply_dispatch_directory() {
-        use onmsctl_core::apply_input::{ApplyDispatch, resolve_apply_input};
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(tmp.path().join("a.yaml"), "x").unwrap();
-        std::fs::write(tmp.path().join("b.yml"), "x").unwrap();
-        std::fs::write(tmp.path().join("c.xml"), "ignored").unwrap();
-        match resolve_apply_input(tmp.path(), &["yaml", "yml"]).unwrap() {
-            ApplyDispatch::Multi(files) => {
-                assert_eq!(files.len(), 2, "xml filtered out");
-            }
-            ApplyDispatch::Single(_) => panic!("directory → Multi"),
-            other => panic!("unexpected dispatch variant: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn source_apply_dispatch_glob() {
-        use onmsctl_core::apply_input::{ApplyDispatch, resolve_apply_input};
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(tmp.path().join("cisco-router.yaml"), "x").unwrap();
-        std::fs::write(tmp.path().join("juniper-mx.yaml"), "x").unwrap();
-        let pattern = tmp.path().join("cisco-*.yaml");
-        // Glob matches one file → collapses to Single (preserves
-        // --diff for the operator who typed a pattern that happens
-        // to match exactly one).
-        match resolve_apply_input(&pattern, &["yaml", "yml"]).unwrap() {
-            ApplyDispatch::Single(p) => assert!(p.ends_with("cisco-router.yaml")),
-            ApplyDispatch::Multi(_) => {
-                panic!("single-match glob → Single (collapse)")
-            }
-            other => panic!("unexpected dispatch variant: {other:?}"),
-        }
-    }
-
-    /// Contract test: the eventconf wrapper MUST pass the
-    /// `&["yaml", "yml"]` filter to the shared resolver. Reaching
-    /// directly into the dispatch logic to verify this is awkward
-    /// (the dispatch lives inside the async `SourceCmd::run` match
-    /// arm), so we lock the contract by routing a `.json` file
-    /// through the dispatch and asserting it's filtered out — if
-    /// someone later changes the wrapper's filter to include `.json`
-    /// (or drops the filter entirely), this test breaks.
-    #[test]
-    fn source_apply_filter_excludes_non_yaml_extensions() {
-        use onmsctl_core::apply_input::{ApplyDispatch, resolve_apply_input};
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(tmp.path().join("vendor.yaml"), "x").unwrap();
-        std::fs::write(tmp.path().join("vendor.json"), "x").unwrap();
-        std::fs::write(tmp.path().join("README.md"), "x").unwrap();
-        // Same `&["yaml", "yml"]` filter the wrapper uses. If the
-        // wrapper drifts, the call site needs the same drift here.
-        match resolve_apply_input(tmp.path(), &["yaml", "yml"]).unwrap() {
-            ApplyDispatch::Multi(files) => {
-                assert_eq!(files.len(), 1, "only vendor.yaml kept");
-                assert!(files[0].ends_with("vendor.yaml"));
-            }
-            ApplyDispatch::Single(_) => panic!("directory → Multi"),
-            other => panic!("unexpected dispatch variant: {other:?}"),
-        }
-    }
 }
