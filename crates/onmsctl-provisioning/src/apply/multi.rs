@@ -260,6 +260,33 @@ pub async fn plan_directory(
         });
     }
 
+    // Phases 1b + 1c operate on already-parsed documents — see
+    // [`plan_parsed`], which the kind-router's ProvisioningHandler also
+    // calls with documents it parsed from `RawDoc` values.
+    plan_parsed(parsed, api, opts).await
+}
+
+/// Phases 1b + 1c of [`plan_directory`]: cross-file collision checks then
+/// per-document `plan_requisition` (GET only). Takes already-parsed
+/// `(source, RequisitionLocal)` pairs so it can serve both the file-reading
+/// `plan_directory` and the kind-router's `ProvisioningHandler` (which parses
+/// from `RawDoc` values). No mutating HTTP is issued. A hard collision
+/// (duplicate `metadata.name`) returns a `MultiApplyPlan` whose `is_aborted()`
+/// is true; a plan-time GET failure propagates as `Err`.
+///
+/// ORDER INVARIANT: this function preserves the caller's `parsed` order in
+/// `entries` — it does NOT sort (unlike `plan_directory`'s Phase 1a, which
+/// sorts paths before calling here). The kind-router's `ProvisioningHandler`
+/// relies on this: it builds its preview from `entries` and the router pairs
+/// preview↔execute outcomes positionally, so a sort here would silently
+/// mis-pair them. Keep this order-preserving.
+pub async fn plan_parsed(
+    parsed: Vec<(PathBuf, RequisitionLocal)>,
+    api: &ProvisioningApi<'_>,
+    opts: &MultiApplyOptions,
+) -> Result<MultiApplyPlan> {
+    let input_count = parsed.len();
+
     // ---- Phase 1b: cross-file collision checks ----
     let collisions = check_collisions(&parsed);
 
@@ -434,7 +461,9 @@ fn check_collisions(parsed: &[(PathBuf, RequisitionLocal)]) -> Vec<CollisionFind
                 key: (*name).to_string(),
                 files: files.iter().map(|p| p.to_path_buf()).collect(),
                 message: format!(
-                    "metadata.name '{name}' declared in {} files: {}",
+                    // "documents" not "files": the kind-router path keys docs
+                    // by `source#index`, so two docs in one file collide here.
+                    "metadata.name '{name}' declared in {} documents: {}",
                     files.len(),
                     files
                         .iter()
@@ -469,7 +498,7 @@ fn check_collisions(parsed: &[(PathBuf, RequisitionLocal)]) -> Vec<CollisionFind
                 key: (*fid).to_string(),
                 files: unique_files.iter().map(|p| p.to_path_buf()).collect(),
                 message: format!(
-                    "foreignId '{fid}' appears in {} files: {} (Horizon scopes \
+                    "foreignId '{fid}' appears in {} documents: {} (Horizon scopes \
                      foreign-id per requisition — likely a copy-paste mistake)",
                     unique_files.len(),
                     unique_files

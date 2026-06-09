@@ -28,8 +28,10 @@
 //! alphabetically) with continue-on-error default and an opt-in
 //! `--stop-on-error` flip.
 
+pub mod handler;
 pub mod multi;
 
+pub use handler::ProvisioningHandler;
 pub use multi::{
     CollisionCode, CollisionFinding, MultiApplyFileResult, MultiApplyOptions, MultiApplyOutcome,
     MultiApplyState,

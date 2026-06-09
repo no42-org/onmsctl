@@ -582,6 +582,7 @@ mod tests {
         cfg.contexts[0].iam = IamConfig {
             protected_roles: Some(vec!["ROLE_ADMIN".into(), "ROLE_REST".into()]),
             known_roles: Some(vec!["ROLE_USER".into()]),
+            ..Default::default()
         };
         let ctx = Context::resolve(&cfg, &Overrides::default()).unwrap();
         assert_eq!(

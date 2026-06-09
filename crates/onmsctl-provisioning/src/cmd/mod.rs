@@ -19,125 +19,38 @@ use std::io::{ErrorKind, Write};
 use std::path::PathBuf;
 
 use clap::Subcommand;
-use onmsctl_core::apply_input::ApplyDispatch;
 use onmsctl_core::{
     AsyncFlags, Classify, CmdKind, Context, Error, OnmsClient, OutputFormat, Result,
 };
 
 use crate::api::ProvisioningApi;
-use crate::apply::multi::{CollisionCode, MultiApplyPlan, execute_multi, plan_directory};
-use crate::apply::{
-    ApplyOptions, MultiApplyOptions, MultiApplyOutcome, MultiApplyState, PlanState, RescanChoice,
-    apply_requisition,
-};
 use crate::convert::{ConversionResult, FindingCode, Severity, convert_directory, explain};
 use crate::export::{export_all_requisitions, export_requisition};
-use crate::model::RequisitionLocal;
-use crate::render::render_apply_diff;
 use crate::wait::wait_for_import_completion;
-
-/// Hard cap on the size of a single `-f <file>` input. Matches the
-/// `onmsctl source apply` convention (16 MiB) — requisition documents
-/// are normally orders of magnitude smaller than this, the cap exists
-/// to prevent a malformed path from streaming GB of data into memory.
-const MAX_INPUT_BYTES: u64 = 16 * 1024 * 1024;
 
 /// `onmsctl requisition ...` subcommands.
 ///
-/// Variants are ordered to reflect three grouped families (per
-/// design.md §D8). clap 4 doesn't surface `help_heading` on Subcommand
-/// enum variants, so the grouping appears in declaration order rather
-/// than as named sections in `--help`:
+/// Variants are ordered to reflect grouped families (per design.md
+/// §D8). clap 4 doesn't surface `help_heading` on Subcommand enum
+/// variants, so the grouping appears in declaration order rather than
+/// as named sections in `--help`:
 ///
-/// - **GitOps**: `apply`, `export` — declarative reconcile loop
-/// - **Lifecycle**: `import`, `status` — async operations + introspection
+/// - **GitOps**: `export` — declarative reconcile loop (the apply
+///   direction is driven by the top-level `onmsctl apply -f`)
+/// - **Lifecycle**: `import`, `status`, `list`, `delete` — async
+///   operations + introspection
 /// - **Migration**: `convert` — one-shot XML→YAML migrator
-/// - **Sub-resources**: `node` (and future `interface`, `service`,
-///   `category`, `asset`) — imperative escape-hatch verbs
+/// - **Sub-resources**: `asset` — imperative escape-hatch verbs
 #[derive(Subcommand, Debug, Clone)]
 pub enum RequisitionCmd {
-    // ---- GitOps verbs (declarative workflow) ----
-    /// Apply a `kind: Requisition` YAML document declaratively.
-    ///
-    /// Reads the file, validates it locally, fetches the server's
-    /// current state, computes the L1/L2/L3 diff, and either creates
-    /// or updates the requisition + (optional) custom foreign-source.
-    /// With `--dry-run` no mutations are issued. With `--diff` the
-    /// structured diff prints to stdout.
-    ///
-    /// Output format follows the global `-o` flag:
-    ///   - `table` (default): one-line summary of the outcome
-    ///   - `json` / `yaml`: full structured [`ApplyOutcome`] including
-    ///     the L2/L3 delta tree
-    ///
-    /// `rescanExisting` is auto-decided from the diff's scan-relevance
-    /// (per design D3); override with `--rescan-existing true|false`.
-    Apply {
-        /// Path to a requisition YAML document, a directory of
-        /// documents, or a glob pattern. With a directory, every
-        /// `*.yaml` / `*.yml` file is applied in alphabetical order
-        /// (non-recursive). With a glob pattern (contains `*`, `?`,
-        /// or `[`), the matching files are applied in alphabetical
-        /// order — quote the pattern (`-f 'requisitions/*.yaml'`) so
-        /// the shell doesn't expand it first. `**` enables recursion;
-        /// a bare `*` matches a single path segment.
-        #[arg(short = 'f', long)]
-        file: PathBuf,
-        /// Compute the diff + decisions but issue no mutating HTTP.
-        #[arg(long)]
-        dry_run: bool,
-        /// Print the structured diff (text form) to stderr in addition
-        /// to the outcome summary. Stderr (not stdout) so the diff text
-        /// doesn't corrupt `-o json` / `-o yaml` output downstream of a
-        /// pipe (matching the eventconf precedent in `source apply`).
-        /// Single-file only — multi-file mode (directory or glob with
-        /// 2+ matches) emits per-file summaries without the full diff
-        /// body (use `--dry-run` per-file for review). A glob that
-        /// matches exactly one file collapses to single-file mode so
-        /// `--diff` still works.
-        #[arg(long)]
-        diff: bool,
-        /// Override the `rescanExisting` query parameter on import.
-        /// Accepts `true`, `false`, or `auto`. `auto` (the default)
-        /// runs the diff's scan-relevance classification per design
-        /// §D3.
-        #[arg(long, value_parser = rescan_flag, default_value = "auto")]
-        rescan_existing: RescanFlag,
-        /// Print to stderr the leaf path(s) that drove the
-        /// `rescanExisting=true` auto-decision per design §D3. Useful
-        /// for understanding why a small change triggered (or didn't
-        /// trigger) a full rescan. Combine with `--dry-run` to see the
-        /// classification without mutating server state. Single-file
-        /// only — multi-file mode (directory or glob with 2+ matches)
-        /// emits no per-file rationale (use it per-file with
-        /// `--dry-run`). A glob that matches exactly one file
-        /// collapses to single-file mode so `--explain-rescan` still
-        /// works.
-        #[arg(long)]
-        explain_rescan: bool,
-        /// Directory mode: halt phase 2 after the first per-file
-        /// error instead of continuing. kubectl-style fail-fast.
-        /// Has no effect in single-file mode.
-        #[arg(long)]
-        stop_on_error: bool,
-        /// Block until the triggered import completes (--wait), with
-        /// timeout (--timeout) and polling cadence (--poll-interval).
-        /// Without --wait, the verb returns as soon as the server
-        /// accepts the trigger. Exit code 10 on timeout, 11 on
-        /// observed async failure (mid-poll requisition deletion).
-        /// In directory mode, `--wait` polls AFTER each per-file
-        /// apply (not after the whole batch).
-        #[command(flatten)]
-        wait_flags: AsyncFlags,
-    },
     /// Trigger an import for an already-deployed requisition without
     /// re-POSTing its content.
     ///
     /// Equivalent to `PUT /rest/requisitions/{fs}/import?rescanExisting=...`
     /// on Horizon. Useful when the server's requisition is up to date
     /// (e.g. just edited via the UI) but a fresh scan is required —
-    /// `apply` would re-POST the same content and only then trigger
-    /// import; `import` skips the POST.
+    /// `onmsctl apply -f` would re-POST the same content and only then
+    /// trigger import; `import` skips the POST.
     ///
     /// `--wait` and scan-report identifier surface land with task 6.3.
     Import {
@@ -283,43 +196,6 @@ pub enum RequisitionCmd {
         #[arg(long)]
         explain: Option<String>,
     },
-    /// Imperative sub-resource verbs for the requisition's nodes.
-    ///
-    /// Use these for ad-hoc operator work (quick add / remove / set
-    /// of a single node) instead of editing YAML and re-applying.
-    /// Each sub-verb's help text cross-references the declarative
-    /// alternative. The GitOps path (`apply -f`) remains the
-    /// recommended workflow — these are escape-hatches.
-    #[command(subcommand)]
-    Node(node::NodeCmd),
-    /// Imperative sub-resource verbs for a node's interfaces.
-    ///
-    /// Interfaces are scoped within a node (`<fs> <foreign-id> <ip>`).
-    /// `set` here can mutate three wire-only fields (`--snmp-primary`,
-    /// `--status`, `--descr`) — the latter two are NOT modeled in the
-    /// local YAML, so this is the one place imperative verbs offer
-    /// functionality the declarative path doesn't.
-    #[command(subcommand)]
-    Interface(interface::InterfaceCmd),
-    /// Imperative sub-resource verbs for an interface's monitored
-    /// services.
-    ///
-    /// Services are scoped within an interface
-    /// (`<fs> <foreign-id> <ip> <service>`). Coverage is `list / add /
-    /// remove` only — services on the wire carry just a name and
-    /// category / meta-data arrays; `set` adds no value beyond
-    /// delete-and-re-add, and `get` adds no information `list`
-    /// doesn't.
-    #[command(subcommand)]
-    Service(service::ServiceCmd),
-    /// Imperative sub-resource verbs for a node's categories.
-    ///
-    /// Categories are scoped within a node
-    /// (`<fs> <foreign-id> <category>`). Coverage is `list / add /
-    /// remove` only — categories are tag-like (just a name), so
-    /// `set` and `get` add no value.
-    #[command(subcommand)]
-    Category(category::CategoryCmd),
     /// Imperative sub-resource verbs for a post-import node's asset
     /// record. The misfit of the sub-resource family.
     ///
@@ -332,16 +208,36 @@ pub enum RequisitionCmd {
     /// `add` and `remove` don't apply.
     #[command(subcommand)]
     Asset(asset::AssetCmd),
+    /// Read-only inspection of a requisition's nodes (`list` / `get`).
+    ///
+    /// Issues only `GET` requests. To change nodes, edit the
+    /// `kind: Requisition` YAML and run `onmsctl apply -f <file>`.
+    #[command(subcommand)]
+    Node(node::NodeCmd),
+    /// Read-only inspection of a node's interfaces (`list` / `get`).
+    ///
+    /// Issues only `GET` requests. To change interfaces, edit the
+    /// `kind: Requisition` YAML and run `onmsctl apply -f <file>`.
+    #[command(subcommand)]
+    Interface(interface::InterfaceCmd),
+    /// Read-only inspection of an interface's monitored services
+    /// (`list`).
+    ///
+    /// Issues only `GET` requests. To change services, edit the
+    /// `kind: Requisition` YAML and run `onmsctl apply -f <file>`.
+    #[command(subcommand)]
+    Service(service::ServiceCmd),
+    /// Read-only inspection of a node's categories (`list`).
+    ///
+    /// Issues only `GET` requests. To change categories, edit the
+    /// `kind: Requisition` YAML and run `onmsctl apply -f <file>`.
+    #[command(subcommand)]
+    Category(category::CategoryCmd),
 }
 
 impl Classify for RequisitionCmd {
     fn kind(&self) -> CmdKind {
         match self {
-            // Apply is classified Write even with --dry-run: read-only
-            // contexts should refuse it consistently so a user who
-            // accidentally drops --dry-run on a real-mutation flow
-            // can't bypass the safety net.
-            RequisitionCmd::Apply { .. } => CmdKind::Write,
             // Import issues PUT /import — Write.
             RequisitionCmd::Import { .. } => CmdKind::Write,
             // Status is read-only.
@@ -357,11 +253,12 @@ impl Classify for RequisitionCmd {
             RequisitionCmd::Convert { .. } => CmdKind::Read,
             // Delegate sub-resource classification to the nested
             // command (list/get = Read, add/set/remove = Write).
+            RequisitionCmd::Asset(cmd) => cmd.kind(),
+            // Sub-resource inspection verbs — read-only (list/get).
             RequisitionCmd::Node(cmd) => cmd.kind(),
             RequisitionCmd::Interface(cmd) => cmd.kind(),
             RequisitionCmd::Service(cmd) => cmd.kind(),
             RequisitionCmd::Category(cmd) => cmd.kind(),
-            RequisitionCmd::Asset(cmd) => cmd.kind(),
         }
     }
 }
@@ -404,27 +301,6 @@ impl RequisitionCmd {
             return self.run_local().await;
         }
         match self {
-            RequisitionCmd::Apply {
-                file,
-                dry_run,
-                diff,
-                rescan_existing,
-                explain_rescan,
-                stop_on_error,
-                wait_flags,
-            } => {
-                run_apply(
-                    file,
-                    dry_run,
-                    diff,
-                    rescan_existing,
-                    explain_rescan,
-                    stop_on_error,
-                    wait_flags,
-                    ctx,
-                )
-                .await
-            }
             RequisitionCmd::Import {
                 fs,
                 rescan_existing,
@@ -442,193 +318,13 @@ impl RequisitionCmd {
             RequisitionCmd::Convert { .. } => {
                 unreachable!("convert is dispatched via run_local")
             }
+            RequisitionCmd::Asset(cmd) => cmd.run(ctx).await,
             RequisitionCmd::Node(cmd) => cmd.run(ctx).await,
             RequisitionCmd::Interface(cmd) => cmd.run(ctx).await,
             RequisitionCmd::Service(cmd) => cmd.run(ctx).await,
             RequisitionCmd::Category(cmd) => cmd.run(ctx).await,
-            RequisitionCmd::Asset(cmd) => cmd.run(ctx).await,
         }
     }
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn run_apply(
-    file: PathBuf,
-    dry_run: bool,
-    diff: bool,
-    rescan_existing: RescanFlag,
-    explain_rescan: bool,
-    stop_on_error: bool,
-    wait_flags: AsyncFlags,
-    ctx: &Context,
-) -> Result<()> {
-    // ---- 1. Validate + dispatch on file / directory / glob ----
-    //
-    // The `-f` argument accepts three shapes per the spec:
-    //   - a single file: dispatch to the single-file path below
-    //   - a directory: expand to its `*.yaml` / `*.yml` children
-    //     (non-recursive) and dispatch to multi-file
-    //   - a glob pattern (contains `*`, `?`, or `[`): expand the
-    //     pattern (the `glob` crate honors `**` for recursion;
-    //     unprefixed `*` matches one path segment) and dispatch to
-    //     multi-file. A glob that happens to match exactly one file
-    //     collapses to the single-file path so `--diff` and
-    //     `--explain-rescan` still apply.
-    let resolved = match resolve_apply_input(&file)? {
-        ApplyDispatch::Multi(files) => {
-            if diff {
-                eprintln!(
-                    "note: --diff has no effect in multi-file mode (use --dry-run + -o yaml for a per-file preview)"
-                );
-            }
-            if explain_rescan {
-                eprintln!(
-                    "note: --explain-rescan has no effect in multi-file mode (use it per-file with --dry-run)"
-                );
-            }
-            return run_apply_files(
-                files,
-                dry_run,
-                rescan_existing,
-                stop_on_error,
-                wait_flags,
-                ctx,
-            )
-            .await;
-        }
-        ApplyDispatch::Single(path) => path,
-        // `ApplyDispatch` is `#[non_exhaustive]` — future variants
-        // (e.g. `Stdin`) require explicit per-capability routing.
-        // Refuse loudly today rather than dispatch silently.
-        other => {
-            return Err(Error::Config(format!(
-                "unsupported apply input shape: {other:?} (this CLI build does not \
-                 recognise this dispatch variant)"
-            )));
-        }
-    };
-    let meta = std::fs::metadata(&resolved)
-        .map_err(|e| Error::Config(format!("failed to stat {}: {e}", resolved.display())))?;
-    if !meta.is_file() {
-        return Err(Error::Config(format!(
-            "{} is not a regular file (got {:?})",
-            resolved.display(),
-            meta.file_type()
-        )));
-    }
-    if stop_on_error {
-        eprintln!(
-            "note: --stop-on-error has no effect in single-file mode (use it with --file <dir>)"
-        );
-    }
-    if meta.len() > MAX_INPUT_BYTES {
-        return Err(Error::Config(format!(
-            "{} is {} bytes, exceeds apply input cap of {} bytes",
-            resolved.display(),
-            meta.len(),
-            MAX_INPUT_BYTES
-        )));
-    }
-    let bytes = std::fs::read(&resolved)
-        .map_err(|e| Error::Config(format!("failed to read {}: {e}", resolved.display())))?;
-    let local: RequisitionLocal = serde_norway::from_slice(&bytes)
-        .map_err(|e| Error::Config(format!("{}: {e}", resolved.display())))?;
-
-    // ---- 2. Build client + API ----
-    let client = OnmsClient::from_context(ctx)?;
-    let api = ProvisioningApi::new(&client);
-
-    // ---- 3. Run the apply orchestrator ----
-    let opts = ApplyOptions {
-        dry_run,
-        rescan_existing: rescan_existing.into(),
-    };
-    let outcome = match apply_requisition(&local, &api, &opts).await {
-        Ok(o) => o,
-        Err(e) => {
-            // Surface the recovery hint to stderr BEFORE propagating
-            // the error so the operator sees both the failure cause
-            // (with its proper exit-code class — HTTP / auth / dns /
-            // tls — preserved by returning `e` unchanged) and the
-            // recovery guidance. Wrapping into `Error::Config` would
-            // collapse every failure to exit code 2 and double-prefix
-            // the message as "config error: apply failed for...".
-            //
-            // Only emit the hint when the error indicates a request
-            // actually reached the server — `HttpStatus` is the only
-            // class that could leave partial state behind. Parse
-            // errors, auth failures, DNS lookup failures, TLS
-            // handshake failures, etc. all happen pre-mutation, so
-            // the "partial writes are possible" warning would be
-            // misleading.
-            if matches!(e, Error::HttpStatus { .. }) {
-                eprint_recovery_hint(&local);
-            }
-            return Err(e);
-        }
-    };
-
-    // ---- 4. Optional --wait phase ----
-    // Only meaningful when apply actually triggered an import. Unchanged
-    // and DryRun paths skip the trigger and therefore skip the wait.
-    if wait_flags.wait
-        && matches!(
-            outcome.state,
-            crate::apply::ApplyState::Created | crate::apply::ApplyState::Updated
-        )
-    {
-        let new_ts = wait_for_import_completion(
-            &api,
-            &local.metadata.name,
-            outcome.pre_trigger_last_import_ms,
-            &wait_flags,
-        )
-        .await?;
-        eprintln!(
-            "Requisition/{}: import completed (last-import-ms={new_ts})",
-            local.metadata.name
-        );
-    }
-
-    // ---- 4. Format + print ----
-    if diff {
-        // Stderr so the text diff doesn't pollute stdout when the
-        // caller also requested `-o json` / `-o yaml`. Matches the
-        // eventconf `source apply --diff` precedent.
-        eprint!("{}", render_apply_diff(&local, &outcome));
-    }
-    if explain_rescan {
-        eprint_rescan_explanation(&outcome);
-    }
-
-    match ctx.output_format {
-        OutputFormat::Json => {
-            let json = serde_json::to_string_pretty(&outcome)
-                .map_err(|e| Error::Config(format!("serializing outcome to JSON: {e}")))?;
-            write_stdout_line(json.as_bytes())?;
-        }
-        OutputFormat::Yaml => {
-            let yaml = serde_norway::to_string(&outcome)
-                .map_err(|e| Error::Config(format!("serializing outcome to YAML: {e}")))?;
-            write_stdout(yaml.as_bytes())?;
-        }
-        OutputFormat::Table => {
-            // One-line summary when --diff wasn't requested (the diff
-            // body itself already names the requisition + state).
-            if !diff {
-                let line = format!(
-                    "Requisition/{}: {} (rescanExisting={}, foreignSource={})\n",
-                    local.metadata.name,
-                    state_word(outcome.state),
-                    outcome.rescan_existing,
-                    fs_word(outcome.foreign_source_action),
-                );
-                write_stdout(line.as_bytes())?;
-            }
-        }
-    }
-
-    Ok(())
 }
 
 async fn run_import(
@@ -1008,10 +704,10 @@ pub(super) fn nonempty_fs(s: &str) -> std::result::Result<String, String> {
 }
 
 /// clap value parser for generic "non-empty after trim" arguments
-/// (used by foreign-id and other string positionals in the sub-resource
-/// verb files). Mirrors `nonempty_fs` but without the FS-specific error
-/// wording. Lives here so `cmd/node.rs` and `cmd/interface.rs` share a
-/// single definition.
+/// (used by foreign-id positionals in the sub-resource verb files).
+/// Mirrors `nonempty_fs` but without the FS-specific error wording.
+/// Lives here so `cmd/node.rs` and `cmd/interface.rs` share a single
+/// definition.
 pub(super) fn nonempty_string(s: &str) -> std::result::Result<String, String> {
     if s.trim().is_empty() {
         Err("value must not be empty or whitespace-only".into())
@@ -1023,7 +719,7 @@ pub(super) fn nonempty_string(s: &str) -> std::result::Result<String, String> {
 /// clap value parser for IP-address positionals. Accepts IPv4 and IPv6
 /// literals (no brackets). Rejects typos and surrounding whitespace at
 /// parse time so the user sees a clean usage error instead of a 400/404
-/// against a malformed URL. Shared by `cmd/interface.rs` and
+/// against a malformed URL. Used by `cmd/interface.rs` and
 /// `cmd/service.rs`.
 pub(super) fn ip_addr(s: &str) -> std::result::Result<String, String> {
     use std::net::IpAddr;
@@ -1031,94 +727,6 @@ pub(super) fn ip_addr(s: &str) -> std::result::Result<String, String> {
     IpAddr::from_str(s)
         .map(|ip| ip.to_string())
         .map_err(|_| format!("invalid IP address {s:?} (expected IPv4 or IPv6 literal)"))
-}
-
-/// CLI surface for the tri-state `--rescan-existing=<true|false|auto>`
-/// flag. `Auto` (the default) hands the decision off to the diff
-/// engine's scan-relevance classification per design §D3; `Force(b)`
-/// overrides regardless of the diff content.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum RescanFlag {
-    #[default]
-    Auto,
-    Force(bool),
-}
-
-impl From<RescanFlag> for RescanChoice {
-    fn from(f: RescanFlag) -> Self {
-        match f {
-            RescanFlag::Auto => RescanChoice::Auto,
-            RescanFlag::Force(b) => RescanChoice::Force(b),
-        }
-    }
-}
-
-/// clap value parser for `--rescan-existing`. Accepts `true`,
-/// `false`, or `auto` (case-insensitive). Rejects other inputs at
-/// parse time.
-fn rescan_flag(s: &str) -> std::result::Result<RescanFlag, String> {
-    match s.to_ascii_lowercase().as_str() {
-        "true" => Ok(RescanFlag::Force(true)),
-        "false" => Ok(RescanFlag::Force(false)),
-        "auto" => Ok(RescanFlag::Auto),
-        other => Err(format!(
-            "rescan-existing must be one of 'true', 'false', or 'auto' (got {other:?})"
-        )),
-    }
-}
-
-/// Render the `--explain-rescan` rationale to stderr. Shows the
-/// scan-relevant leaf paths from the diff so the operator can see
-/// why the auto-decision landed on `rescanExisting=true`, or that no
-/// leaf was relevant and the auto-decision is `false`. When the
-/// operator forced the value via `--rescan-existing=true|false`, the
-/// rendering distinguishes the *would-have* auto-decision from the
-/// effective outcome.
-fn eprint_rescan_explanation(outcome: &crate::apply::ApplyOutcome) {
-    eprint!("{}", explain_rescan_text(outcome));
-}
-
-/// Pure-function form of [`eprint_rescan_explanation`] used by unit
-/// tests so the rendering can be asserted without capturing stderr.
-fn explain_rescan_text(outcome: &crate::apply::ApplyOutcome) -> String {
-    use std::fmt::Write;
-    let mut s = String::new();
-    let auto_would_be = !outcome.scan_relevant_leaves.is_empty();
-    let overridden = auto_would_be != outcome.rescan_existing;
-
-    if outcome.scan_relevant_leaves.is_empty() {
-        writeln!(
-            s,
-            "explain-rescan: no scan-relevant leaves in the diff — auto-decision would be \
-             rescanExisting=false."
-        )
-        .ok();
-    } else if overridden {
-        writeln!(
-            s,
-            "explain-rescan: {} scan-relevant leaf path(s) would have driven \
-             rescanExisting=true per design §D3 (overridden by \
-             --rescan-existing flag):",
-            outcome.scan_relevant_leaves.len()
-        )
-        .ok();
-        for p in &outcome.scan_relevant_leaves {
-            writeln!(s, "  - {p}").ok();
-        }
-    } else {
-        writeln!(
-            s,
-            "explain-rescan: {} scan-relevant leaf path(s) drive rescanExisting=true \
-             per design §D3:",
-            outcome.scan_relevant_leaves.len()
-        )
-        .ok();
-        for p in &outcome.scan_relevant_leaves {
-            writeln!(s, "  - {p}").ok();
-        }
-    }
-    writeln!(s, "Effective rescanExisting={}", outcome.rescan_existing).ok();
-    s
 }
 
 async fn run_list_requisitions(ctx: &Context) -> Result<()> {
@@ -1358,349 +966,6 @@ pub(super) fn write_stdout_line(bytes: &[u8]) -> Result<()> {
     write_stdout(b"\n")
 }
 
-/// Run `apply` over a pre-resolved list of requisition YAML files
-/// (from either directory expansion or glob expansion). Two-phase
-/// orchestration: `plan_directory` reads deployed state per file and
-/// builds a [`MultiApplyPlan`]; the combined plan is rendered to
-/// stderr; `--dry-run` exits here; otherwise `execute_multi` consumes
-/// the pre-computed plans. The caller is responsible for producing a
-/// non-empty file list.
-async fn run_apply_files(
-    files: Vec<PathBuf>,
-    dry_run: bool,
-    rescan_existing: RescanFlag,
-    stop_on_error: bool,
-    wait_flags: AsyncFlags,
-    ctx: &Context,
-) -> Result<()> {
-    // Empty input is a caller / glob-expansion mistake — a zero-file
-    // run is indistinguishable from a no-op success otherwise, which
-    // hides operator errors (typo'd dir, glob with no matches).
-    if files.is_empty() {
-        return Err(Error::Config(
-            "no input files to apply (the directory or glob expanded to zero \
-             matching YAML files)"
-                .into(),
-        ));
-    }
-
-    // --wait is a Phase-2 polling concern; dry-run skips Phase 2.
-    // Warn rather than reject so existing scripts that pass --wait
-    // unconditionally don't fail on --dry-run preview runs.
-    if dry_run && wait_flags.wait {
-        eprintln!("note: --wait is ignored with --dry-run (no Phase 2 import to wait on)");
-    }
-
-    let client = OnmsClient::from_context(ctx)?;
-    let api = ProvisioningApi::new(&client);
-
-    let opts = MultiApplyOptions {
-        rescan_existing: rescan_existing.into(),
-        stop_on_error,
-    };
-
-    // ---- Phase 1: plan ----
-    let plan = plan_directory(&files, &api, &opts).await?;
-    render_combined_plan(&plan, dry_run, ctx.output_format)?;
-
-    if plan.is_aborted() {
-        // Map Phase-1 abort cause to a structured error. The
-        // diagnostics (collision messages / parse errors) already
-        // landed on stderr via render_combined_plan.
-        let hard_collisions: Vec<&str> = plan
-            .collision_findings
-            .iter()
-            .filter(|f| matches!(f.code, CollisionCode::DuplicateMetadataName))
-            .map(|f| f.key.as_str())
-            .collect();
-        if !hard_collisions.is_empty() {
-            return Err(Error::Config(format!(
-                "phase-1 abort: {} hard collision(s) detected: [{}]",
-                hard_collisions.len(),
-                hard_collisions.join(", ")
-            )));
-        }
-        let parse_paths: Vec<String> = plan
-            .parse_errors
-            .iter()
-            .map(|p| p.path.display().to_string())
-            .collect();
-        return Err(Error::Config(format!(
-            "phase-1 abort: {} parse error(s) in: [{}]",
-            parse_paths.len(),
-            parse_paths.join(", ")
-        )));
-    }
-
-    if dry_run {
-        // Spec: --dry-run exits 0 after Phase 1, after the combined
-        // plan is rendered. Structured (`-o json|yaml`) dry-run output
-        // is deferred to a follow-up — see deferred-work.md.
-        return Ok(());
-    }
-
-    // ---- Phase 2: execute ----
-    let outcome = execute_multi(plan, &api, &opts).await?;
-    render_multi_outcome(&outcome, ctx)?;
-
-    // ---- --wait phase ----
-    // Honor --wait by polling per-file in the order results were
-    // produced (alphabetical path). Only Created/Updated successes
-    // are waited on; apply errors skip naturally. Wait errors abort
-    // the whole sequence (the Horizon-side import is already done;
-    // what failed is the polling, which is a real problem the
-    // operator wants to surface).
-    if wait_flags.wait {
-        for r in &outcome.results {
-            if let (Some(fs), Ok(apply)) = (&r.foreign_source, &r.outcome) {
-                use crate::apply::ApplyState;
-                if matches!(apply.state, ApplyState::Created | ApplyState::Updated) {
-                    let new_ts = wait_for_import_completion(
-                        &api,
-                        fs,
-                        apply.pre_trigger_last_import_ms,
-                        &wait_flags,
-                    )
-                    .await?;
-                    eprintln!("Requisition/{fs}: import completed (last-import-ms={new_ts})");
-                }
-            }
-        }
-    }
-
-    // Exit-code policy: any per-file Err → PartialSuccess (exit 1).
-    // Phase-1 aborts already returned above.
-    let failed = count_failures(&outcome);
-    if failed > 0 {
-        return Err(Error::PartialSuccess { failed });
-    }
-    Ok(())
-}
-
-/// Render the Phase-1 combined plan to stderr.
-///
-/// Format (multi-line so the output scales to N files; ASCII markers
-/// so the output is grep-friendly on non-UTF-8 terminals):
-///
-/// ```text
-/// Phase 1 plan (3 files):
-///   ok a.yaml -> Requisition/acme-prod: would-create (rescanExisting=true, foreignSource=created)
-///   ok b.yaml -> Requisition/site-b: unchanged
-///   ok c.yaml -> Requisition/lab-east: would-update (rescanExisting=false, foreignSource=no-change)
-///   Summary: 2 to apply, 1 unchanged
-/// ```
-///
-/// Aborted Phase 1 (parse error or hard collision) renders the
-/// header with the input file count + `ABORTED`, lists the
-/// parse-error rows / collision findings below, and emits a summary
-/// of skip counts.
-///
-/// Collision findings are suppressed from stderr under
-/// `-o json | -o yaml` (they ship in the outcome payload instead) so
-/// structured-output consumers don't see the data twice.
-fn render_combined_plan(
-    plan: &MultiApplyPlan,
-    dry_run: bool,
-    output_format: OutputFormat,
-) -> Result<()> {
-    let n = plan.input_count;
-    let plural = if n == 1 { "" } else { "s" };
-    if plan.is_aborted() {
-        eprintln!("Phase 1 plan ({n} file{plural}): ABORTED");
-    } else {
-        let suffix = if dry_run { " (dry-run)" } else { "" };
-        eprintln!("Phase 1 plan ({n} file{plural}):{suffix}");
-    }
-
-    for entry in &plan.entries {
-        eprintln!(
-            "  ok {} -> Requisition/{}: {} (rescanExisting={}, foreignSource={})",
-            entry.path.display(),
-            entry.plan.local.metadata.name,
-            plan_state_word(entry.plan.state),
-            entry.plan.rescan_existing,
-            fs_word(entry.plan.foreign_source_action),
-        );
-    }
-
-    for err in &plan.parse_errors {
-        let msg = err
-            .outcome
-            .as_ref()
-            .err()
-            .map(String::as_str)
-            .unwrap_or("?");
-        eprintln!("  err {} -> (parse error): {msg}", err.path.display());
-    }
-
-    // Collision findings — hard errors as "error", soft duplicates
-    // as "warn". Emitted here (Phase 1) rather than after Phase 2 so
-    // the spec scenario "warning ... continue to Phase 2" observes the
-    // warning BEFORE any non-GET HTTP request. Suppressed under
-    // structured output formats — render_multi_outcome ships them in
-    // the payload via `collision_findings`, and stderr+payload
-    // duplication is the bug we're avoiding.
-    let suppress_collisions = matches!(output_format, OutputFormat::Json | OutputFormat::Yaml);
-    if !suppress_collisions {
-        for f in &plan.collision_findings {
-            let sev = if matches!(f.code, CollisionCode::DuplicateMetadataName) {
-                "error"
-            } else {
-                "warn"
-            };
-            eprintln!("collision {sev}: {}", f.message);
-        }
-    }
-
-    // Aggregate summary line (proposal AC#2). Success and abort paths
-    // both get one — operators piping to scripts can grep `^  Summary:`
-    // for a fixed shape regardless of outcome.
-    let to_apply = plan
-        .entries
-        .iter()
-        .filter(|e| !matches!(e.plan.state, PlanState::Unchanged))
-        .count();
-    let unchanged = plan
-        .entries
-        .iter()
-        .filter(|e| matches!(e.plan.state, PlanState::Unchanged))
-        .count();
-    if plan.is_aborted() {
-        let parse_count = plan.parse_errors.len();
-        let collision_count = plan.collision_findings.len();
-        eprintln!(
-            "  Summary: ABORTED ({parse_count} parse error(s), \
-             {collision_count} collision finding(s))"
-        );
-    } else {
-        eprintln!("  Summary: {to_apply} to apply, {unchanged} unchanged");
-    }
-
-    Ok(())
-}
-
-fn plan_state_word(s: PlanState) -> &'static str {
-    match s {
-        PlanState::Unchanged => "unchanged",
-        PlanState::WouldCreate => "would-create",
-        PlanState::WouldUpdate => "would-update",
-    }
-}
-
-/// Resolve the provisioning `-f` argument by delegating to the
-/// shared `onmsctl_core::apply_input::resolve_apply_input` helper
-/// with `&["yaml", "yml"]` as the extension filter. Eventconf calls
-/// the same helper with the same filter (see the parity Requirement
-/// in `harden-provisioning-and-eventconf-parity`'s spec deltas).
-fn resolve_apply_input(file: &std::path::Path) -> Result<onmsctl_core::apply_input::ApplyDispatch> {
-    onmsctl_core::apply_input::resolve_apply_input(file, &["yaml", "yml"])
-}
-
-fn count_failures(outcome: &MultiApplyOutcome) -> usize {
-    outcome
-        .results
-        .iter()
-        .filter(|r| r.outcome.is_err())
-        .count()
-}
-
-/// Render the multi-apply outcome by the global output-format flag.
-///
-/// Collision findings are NOT rendered here — they land on stderr
-/// via `render_combined_plan` during Phase 1 so that the spec's
-/// "warning ... continue to Phase 2" scenario observes the warning
-/// before any non-GET HTTP request.
-fn render_multi_outcome(outcome: &MultiApplyOutcome, ctx: &Context) -> Result<()> {
-    match ctx.output_format {
-        OutputFormat::Json => {
-            let json = serde_json::to_string_pretty(outcome)
-                .map_err(|e| Error::Config(format!("serializing multi outcome to JSON: {e}")))?;
-            write_stdout_line(json.as_bytes())?;
-        }
-        OutputFormat::Yaml => {
-            let yaml = serde_norway::to_string(outcome)
-                .map_err(|e| Error::Config(format!("serializing multi outcome to YAML: {e}")))?;
-            write_stdout(yaml.as_bytes())?;
-        }
-        OutputFormat::Table => {
-            for r in &outcome.results {
-                let line = match &r.outcome {
-                    Ok(o) => format!(
-                        "  ✓ {} -> Requisition/{}: {} (rescanExisting={}, foreignSource={})\n",
-                        r.path.display(),
-                        r.foreign_source.as_deref().unwrap_or("?"),
-                        state_word(o.state),
-                        o.rescan_existing,
-                        fs_word(o.foreign_source_action),
-                    ),
-                    Err(e) => format!(
-                        "  ✗ {} -> {}: {e}\n",
-                        r.path.display(),
-                        r.foreign_source.as_deref().unwrap_or("(parse error)"),
-                    ),
-                };
-                write_stdout(line.as_bytes())?;
-            }
-            let summary = format!(
-                "Multi-apply {}: {} ok, {} failed, {} collision finding(s)\n",
-                multi_state_word(outcome.state),
-                outcome.results.iter().filter(|r| r.outcome.is_ok()).count(),
-                count_failures(outcome),
-                outcome.collision_findings.len(),
-            );
-            write_stdout(summary.as_bytes())?;
-        }
-    }
-    Ok(())
-}
-
-fn multi_state_word(s: MultiApplyState) -> &'static str {
-    match s {
-        MultiApplyState::AbortedPhase1 => "aborted (phase 1)",
-        MultiApplyState::Completed => "completed",
-        MultiApplyState::StoppedEarly => "stopped early",
-    }
-}
-
-/// Emit the partial-write recovery hint to stderr. The library returns
-/// a single error without telling us how far the write sequence got
-/// (FS write → requisition POST → import). We can't tell which step
-/// failed from the error alone, but we can warn the operator that
-/// partial state is possible and point at the introspection verb to
-/// check.
-///
-/// Emitted as a separate stderr line BEFORE the error propagates so
-/// the underlying error's exit-code class (HTTP / auth / dns / tls)
-/// reaches the process exit untouched.
-fn eprint_recovery_hint(local: &RequisitionLocal) {
-    let name = &local.metadata.name;
-    eprintln!(
-        "note: partial writes are possible for Requisition/{name} — the foreign-source \
-         POST, requisition POST, and import trigger run as separate calls. Run \
-         `onmsctl requisition status {name}` to verify server state before retrying."
-    );
-}
-
-fn state_word(s: crate::apply::ApplyState) -> &'static str {
-    use crate::apply::ApplyState::*;
-    match s {
-        Unchanged => "unchanged",
-        DryRun => "dry-run",
-        Created => "created",
-        Updated => "updated",
-    }
-}
-
-fn fs_word(a: crate::apply::ForeignSourceAction) -> &'static str {
-    use crate::apply::ForeignSourceAction::*;
-    match a {
-        NoChange => "no-change",
-        Created => "created",
-        Updated => "updated",
-        Deleted => "deleted",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1810,104 +1075,5 @@ mod tests {
         assert!(!is_delete_confirmation("ya"));
         assert!(!is_delete_confirmation("yes please"));
         assert!(!is_delete_confirmation("0"));
-    }
-
-    #[test]
-    fn rescan_flag_accepts_canonical_values_case_insensitive() {
-        assert_eq!(rescan_flag("true").unwrap(), RescanFlag::Force(true));
-        assert_eq!(rescan_flag("TRUE").unwrap(), RescanFlag::Force(true));
-        assert_eq!(rescan_flag("false").unwrap(), RescanFlag::Force(false));
-        assert_eq!(rescan_flag("FALSE").unwrap(), RescanFlag::Force(false));
-        assert_eq!(rescan_flag("auto").unwrap(), RescanFlag::Auto);
-        assert_eq!(rescan_flag("Auto").unwrap(), RescanFlag::Auto);
-    }
-
-    #[test]
-    fn rescan_flag_rejects_unknown_values() {
-        assert!(rescan_flag("maybe").is_err());
-        assert!(rescan_flag("").is_err());
-        assert!(rescan_flag("1").is_err());
-    }
-
-    #[test]
-    fn rescan_flag_converts_to_rescan_choice() {
-        assert_eq!(RescanChoice::from(RescanFlag::Auto), RescanChoice::Auto);
-        assert_eq!(
-            RescanChoice::from(RescanFlag::Force(true)),
-            RescanChoice::Force(true)
-        );
-        assert_eq!(
-            RescanChoice::from(RescanFlag::Force(false)),
-            RescanChoice::Force(false)
-        );
-    }
-
-    // ---- explain_rescan_text rendering ----
-
-    fn outcome_with(rescan_existing: bool, leaves: Vec<&str>) -> crate::apply::ApplyOutcome {
-        crate::apply::ApplyOutcome {
-            state: crate::apply::ApplyState::DryRun,
-            delta: Default::default(),
-            rescan_existing,
-            foreign_source_action: crate::apply::ForeignSourceAction::NoChange,
-            original_remote_fs: None,
-            pre_trigger_last_import_ms: None,
-            scan_relevant_leaves: leaves.into_iter().map(String::from).collect(),
-        }
-    }
-
-    #[test]
-    fn explain_rescan_empty_leaves_reports_no_relevant_paths() {
-        let outcome = outcome_with(false, vec![]);
-        let s = explain_rescan_text(&outcome);
-        assert!(s.contains("no scan-relevant leaves"));
-        assert!(s.contains("Effective rescanExisting=false"));
-    }
-
-    #[test]
-    fn explain_rescan_auto_with_leaves_drives_true() {
-        let outcome = outcome_with(true, vec!["spec.nodes[0].interfaces[0].services"]);
-        let s = explain_rescan_text(&outcome);
-        // Plain "drive" wording — auto-decision was honored.
-        assert!(s.contains("drive rescanExisting=true"));
-        assert!(!s.contains("would have driven"));
-        assert!(s.contains("spec.nodes[0].interfaces[0].services"));
-        assert!(s.contains("Effective rescanExisting=true"));
-    }
-
-    #[test]
-    fn explain_rescan_override_distinguishes_would_have_from_effective() {
-        // Operator forced --rescan-existing=false against a diff that
-        // auto would have driven to true.
-        let outcome = outcome_with(false, vec!["spec.nodes[0].interfaces[0].services"]);
-        let s = explain_rescan_text(&outcome);
-        assert!(s.contains("would have driven"));
-        assert!(s.contains("overridden by --rescan-existing"));
-        assert!(s.contains("Effective rescanExisting=false"));
-    }
-
-    // ---- Glob dispatch ----
-    //
-    // The bulk of glob-dispatch tests live in
-    // `onmsctl_core::apply_input::tests`. Provisioning keeps a single
-    // sanity test here verifying that the wrapper actually delegates
-    // to the shared helper with the yaml/yml extension filter — if
-    // the wrapper is renamed or removed, this test breaks.
-
-    #[test]
-    fn resolve_apply_input_wrapper_dispatches_to_core_with_yaml_filter() {
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(tmp.path().join("a.yaml"), "x").unwrap();
-        std::fs::write(tmp.path().join("b.yml"), "x").unwrap();
-        std::fs::write(tmp.path().join("README.md"), "x").unwrap();
-        match resolve_apply_input(tmp.path()).unwrap() {
-            ApplyDispatch::Multi(files) => {
-                assert_eq!(files.len(), 2, "yaml + yml kept, README.md filtered");
-            }
-            ApplyDispatch::Single(_) => {
-                panic!("directory with two yaml files should resolve to Multi")
-            }
-            other => panic!("unexpected dispatch variant: {other:?}"),
-        }
     }
 }

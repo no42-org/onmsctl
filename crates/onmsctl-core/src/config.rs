@@ -129,13 +129,21 @@ pub struct IamConfig {
     /// the built-in `KNOWN_ROLES`; an explicit list replaces it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub known_roles: Option<Vec<String>>,
+    /// Override the IAM-001 admin-lockout refusal when applying `kind: User`
+    /// documents. The generic top-level `apply` carries no per-kind CLI flag
+    /// (it stays generic, like `kubectl apply`), so this dangerous override
+    /// lives in per-context config. `None`/absent → `false` (refuse).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_admin_lockout: Option<bool>,
 }
 
 impl IamConfig {
     /// `true` when no IAM field is set, so the block serializes away rather
     /// than emitting an empty `iam: {}` in `config view`.
     fn is_empty(&self) -> bool {
-        self.protected_roles.is_none() && self.known_roles.is_none()
+        self.protected_roles.is_none()
+            && self.known_roles.is_none()
+            && self.allow_admin_lockout.is_none()
     }
 
     fn validate(&self, ctx_name: &str) -> Result<()> {

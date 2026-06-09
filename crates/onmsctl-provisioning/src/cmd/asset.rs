@@ -90,10 +90,10 @@ pub enum AssetCmd {
     /// - Field currently `null`: type can't be inferred from the
     ///   wire — the verb defaults to string and emits a stderr
     ///   warning. To establish a non-string type for a null field,
-    ///   use `requisition apply -f` first.
+    ///   use `onmsctl apply -f` first.
     ///
     /// **Declarative alternative for requisition-time assets:** edit
-    /// `spec.nodes[].assets` in the YAML and `requisition apply -f`.
+    /// `spec.nodes[].assets` in the YAML and `onmsctl apply -f`.
     /// However, requisition-time apply only carries values through
     /// the next import; this verb mutates the imported record
     /// directly, which is the only path for ad-hoc asset edits
@@ -244,7 +244,7 @@ async fn run_set(
         eprintln!(
             "warning: field {field:?} is currently null on the server — type cannot be \
              inferred from the wire; defaulting to string. To establish a non-string type, \
-             set the field via `requisition apply -f` first."
+             set the field via `onmsctl apply -f` first."
         );
     }
     let new_value = coerce_value_to_field_type(map.get(field), value)?;
@@ -283,7 +283,7 @@ fn coerce_value_to_field_type(
                         Error::Config(format!(
                             "field is integer on the server; cannot set to {raw:?} \
                              (provide an integer, or change the field type via \
-                             `requisition apply -f`)"
+                             `onmsctl apply -f`)"
                         ))
                     })
             } else {

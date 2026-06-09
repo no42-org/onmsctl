@@ -16,12 +16,17 @@ use std::process::ExitCode;
 
 use anyhow::{Context as _, Result};
 use clap::builder::TypedValueParser as _;
-use clap::{ArgAction, CommandFactory, Parser, Subcommand};
+use clap::{ArgAction, Args, CommandFactory, Parser, Subcommand};
 use onmsctl_core::{
-    Classify, CmdKind, Error, OutputFormat, Overrides,
+    ApplyParams, Classify, CmdKind, Error, OutputFormat, Overrides, apply_documents,
+    apply_input::resolve_apply_input,
     config::{ConfigFile, default_path as default_config_path, load as load_config},
     context::Context,
+    kind::load_documents,
+    render_list,
 };
+
+mod registry;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -91,6 +96,16 @@ struct Cli {
 /// here; the binary stitches them together statically.
 #[derive(Subcommand, Debug)]
 enum TopCmd {
+    /// Apply declarative resources from YAML — the canonical mutation entrypoint.
+    ///
+    /// Reads one or more YAML documents (a single file, a directory, or a glob),
+    /// peeks each document's `kind`, and routes it to the registered handler.
+    /// Documents apply in a static kind-precedence order through a
+    /// plan → gate → execute flow: every document is planned first, the whole
+    /// apply aborts before any mutation if any plan fails, then documents
+    /// execute in order (stop-on-error by default; `--continue-on-error` to
+    /// attempt all). Re-running the same input is the idempotent recovery path.
+    Apply(ApplyArgs),
     /// Manage eventconf sources.
     #[command(subcommand, visible_alias = "src")]
     Source(onmsctl_eventconf::cmd::SourceCmd),
@@ -123,6 +138,32 @@ enum TopCmd {
         shell: clap_complete::Shell,
     },
     // Future capabilities (Node, Alarm, …) extend here.
+}
+
+/// Flags for the top-level `apply` command. Kept generic (kubectl-aligned):
+/// per-kind knobs (e.g. IAM admin-lockout override) live in context config,
+/// not here.
+#[derive(Args, Debug)]
+struct ApplyArgs {
+    /// File, directory, or glob of YAML documents to apply.
+    #[arg(short = 'f', long = "filename", value_name = "FILE|DIR|GLOB")]
+    filename: PathBuf,
+
+    /// Plan only: classify as a Read command and issue no mutating HTTP.
+    #[arg(long)]
+    dry_run: bool,
+
+    /// Print each kind-bucket's rendered diff to stderr before reconciling.
+    #[arg(long)]
+    diff: bool,
+
+    /// Attempt every document instead of halting after the first failure.
+    #[arg(long, visible_alias = "keep-going")]
+    continue_on_error: bool,
+
+    /// Recurse into subdirectories when the input is a directory (off by default).
+    #[arg(short = 'R', long)]
+    recursive: bool,
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -223,6 +264,7 @@ async fn run(cli: Cli) -> Result<()> {
     // 2. Dispatch. version / completion / config don't need a resolved
     //    Context; capability commands do.
     match command {
+        TopCmd::Apply(args) => run_apply(args, &merged).await,
         TopCmd::Version => print_version(),
         TopCmd::Completion { shell } => print_completion(shell),
         TopCmd::Config(cmd) => run_config(cmd, &merged).await,
@@ -362,6 +404,114 @@ async fn run_config(cmd: ConfigCmd, merged: &Overrides) -> Result<()> {
             eprintln!("switched to context '{name}'");
             Ok(())
         }
+    }
+}
+
+/// `onmsctl apply -f <file|dir|glob>` — the single declarative entrypoint.
+///
+/// Resolves the input through the shared `apply_input` classifier, loads every
+/// YAML document, and drives them through the core kind-router. The verb
+/// classifies as `Read` under `--dry-run` (plan only, zero mutating HTTP) and
+/// `Write` otherwise; the read-only gate is enforced here, before any HTTP.
+async fn run_apply(args: ApplyArgs, merged: &Overrides) -> Result<()> {
+    // YAML is the only document format `apply` accepts; both extensions match
+    // the per-capability single/dir/glob resolvers used elsewhere.
+    const YAML_EXTS: &[&str] = &["yaml", "yml"];
+
+    let ctx = resolve_context(merged)?;
+
+    // Classify + gate BEFORE touching the filesystem or the network: a Write
+    // apply in a read-only context must be refused locally. `--dry-run` is a
+    // Read and is always permitted.
+    let cmd_kind = if args.dry_run {
+        CmdKind::Read
+    } else {
+        CmdKind::Write
+    };
+    refuse_if_read_only(&ctx, cmd_kind)?;
+
+    // `resolve_apply_input` lists directories non-recursively; `-R` rewrites a
+    // directory into a `**/*` glob so the same classifier walks subdirectories
+    // (the glob path filters by extension just like directory listing).
+    let dispatch = if args.recursive && args.filename.is_dir() {
+        let pattern = args.filename.join("**").join("*");
+        resolve_apply_input(&pattern, YAML_EXTS)?
+    } else {
+        // `-R` only applies to a directory. Warn rather than silently no-op so
+        // `-R -f file.yaml` / `-R -f 'glob/*'` don't masquerade as recursive.
+        if args.recursive {
+            eprintln!(
+                "note: --recursive ignored — {} is not a directory",
+                args.filename.display()
+            );
+        }
+        resolve_apply_input(&args.filename, YAML_EXTS)?
+    };
+
+    let docs = load_documents(&dispatch)?;
+    if docs.is_empty() {
+        // An empty or comment-only input would otherwise be a silent no-op;
+        // surface it as a usage error so a mistyped path or stripped file
+        // doesn't masquerade as "applied nothing, all good".
+        return Err(Error::Config(format!(
+            "no YAML documents found in {} (empty or comment-only input)",
+            args.filename.display()
+        ))
+        .into());
+    }
+
+    let registry = registry::build();
+    let params = ApplyParams {
+        dry_run: args.dry_run,
+        show_diff: args.diff,
+        continue_on_error: args.continue_on_error,
+    };
+
+    match apply_documents(&registry, docs, &params, &ctx).await {
+        Ok(outcomes) => {
+            let rendered = render_list(&outcomes, ctx.output_format)?;
+            write_stdout(rendered.as_bytes())?;
+            // Table/JSON renders carry no trailing newline; YAML already ends in
+            // one. Append exactly one so the shell prompt isn't glued and YAML
+            // output doesn't gain a spurious blank line.
+            if !rendered.ends_with('\n') {
+                write_stdout(b"\n")?;
+            }
+            // Exit 1 if any document failed — including a `Failed` preview row
+            // under `--dry-run` (the status, not the phase, drives the code).
+            let failed = outcomes.iter().filter(|o| o.status.is_failure()).count();
+            if failed > 0 {
+                return Err(Error::PartialSuccess { failed }.into());
+            }
+            Ok(())
+        }
+        // A plan-gate `Err` aborts the apply with nothing mutated. Map it to the
+        // spec's exit code: a generic config-class gate (unknown kind, dup name)
+        // is a document failure → exit 1, NOT a usage error; dedicated gate codes
+        // (IAM lockout 13/14/15, transport faults) carry their own meaning and
+        // propagate verbatim.
+        Err(e) => Err(classify_gate_error(e).into()),
+    }
+}
+
+/// Map a kind-router plan-gate error to its shell exit-code semantics. A
+/// generic config-class gate rejection (`exit_code() == 2`) is re-wrapped as
+/// [`Error::ApplyGate`] (exit 1) while preserving its message; any error with a
+/// dedicated code is returned unchanged so IAM lockout (13/14/15) and transport
+/// faults keep their stable codes.
+///
+/// CAVEAT: this keys solely on `exit_code() == 2`, so the router's internal
+/// preview-integrity violation (an `Error::Config("internal: …")` raised when a
+/// handler returns a mismatched preview count) is also demoted from 2 to 1 and
+/// labelled `ApplyGate`. That path requires a miswired handler — unreachable in
+/// shipped code — and the message still reads "internal: …". The principled fix
+/// (a dedicated `Error::Internal` variant that also subsumes the handler
+/// `downcast` sites) is tracked as deferred work, not done here.
+fn classify_gate_error(e: Error) -> Error {
+    if e.exit_code() == 2 {
+        Error::ApplyGate(e.to_string())
+    } else {
+        e
     }
 }
 
