@@ -199,6 +199,19 @@ pub enum Error {
     #[error("partial success: {failed} item(s) failed")]
     PartialSuccess { failed: usize },
 
+    /// A declarative `apply` plan-gate rejection (unknown `kind`, duplicate
+    /// `metadata.name`, an unparseable leaf document, …) reported by the
+    /// kind-router before any mutation. Distinct from [`Error::Config`]
+    /// (usage / misuse → exit 2): per the declarative-apply spec a gate
+    /// rejection is a *document failure* → exit 1, alongside execute-phase
+    /// failures. The binary wraps a generic config-class gate error in this
+    /// variant so the exit code is 1 while the original message (which names
+    /// the offending kind/document) is preserved. Gate refusals that carry a
+    /// dedicated exit code (IAM lockout 13/14/15, transport faults) propagate
+    /// verbatim and are NOT wrapped.
+    #[error("{0}")]
+    ApplyGate(String),
+
     /// Apply succeeded with the upload, but the post-upload re-lookup
     /// needed to perform follow-up steps (e.g. PATCH the enabled flag)
     /// did not return exactly one match. The upload IS persisted
@@ -279,6 +292,7 @@ impl Error {
         match self {
             Error::HttpStatus { .. } => 1,
             Error::PartialSuccess { .. } => 1,
+            Error::ApplyGate(_) => 1,
             Error::PostUploadLookupFailed { .. } => 1,
             Error::UserNotFound { .. } => 1,
             Error::Dns(_) => 4,
@@ -385,6 +399,7 @@ mod tests {
             11
         );
         assert_eq!(Error::PartialSuccess { failed: 3 }.exit_code(), 1);
+        assert_eq!(Error::ApplyGate("unknown kind".into()).exit_code(), 1);
         assert_eq!(Error::Config("x".into()).exit_code(), 2);
         assert_eq!(Error::NoContext.exit_code(), 2);
         // IAM lockout invariants — stable codes 13/14/15.
