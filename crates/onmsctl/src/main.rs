@@ -437,6 +437,14 @@ async fn run_apply(args: ApplyArgs, merged: &Overrides) -> Result<()> {
         let pattern = args.filename.join("**").join("*");
         resolve_apply_input(&pattern, YAML_EXTS)?
     } else {
+        // `-R` only applies to a directory. Warn rather than silently no-op so
+        // `-R -f file.yaml` / `-R -f 'glob/*'` don't masquerade as recursive.
+        if args.recursive {
+            eprintln!(
+                "note: --recursive ignored — {} is not a directory",
+                args.filename.display()
+            );
+        }
         resolve_apply_input(&args.filename, YAML_EXTS)?
     };
 
@@ -463,7 +471,12 @@ async fn run_apply(args: ApplyArgs, merged: &Overrides) -> Result<()> {
         Ok(outcomes) => {
             let rendered = render_list(&outcomes, ctx.output_format)?;
             write_stdout(rendered.as_bytes())?;
-            write_stdout(b"\n")?;
+            // Table/JSON renders carry no trailing newline; YAML already ends in
+            // one. Append exactly one so the shell prompt isn't glued and YAML
+            // output doesn't gain a spurious blank line.
+            if !rendered.ends_with('\n') {
+                write_stdout(b"\n")?;
+            }
             // Exit 1 if any document failed — including a `Failed` preview row
             // under `--dry-run` (the status, not the phase, drives the code).
             let failed = outcomes.iter().filter(|o| o.status.is_failure()).count();
@@ -486,6 +499,14 @@ async fn run_apply(args: ApplyArgs, merged: &Overrides) -> Result<()> {
 /// [`Error::ApplyGate`] (exit 1) while preserving its message; any error with a
 /// dedicated code is returned unchanged so IAM lockout (13/14/15) and transport
 /// faults keep their stable codes.
+///
+/// CAVEAT: this keys solely on `exit_code() == 2`, so the router's internal
+/// preview-integrity violation (an `Error::Config("internal: …")` raised when a
+/// handler returns a mismatched preview count) is also demoted from 2 to 1 and
+/// labelled `ApplyGate`. That path requires a miswired handler — unreachable in
+/// shipped code — and the message still reads "internal: …". The principled fix
+/// (a dedicated `Error::Internal` variant that also subsumes the handler
+/// `downcast` sites) is tracked as deferred work, not done here.
 fn classify_gate_error(e: Error) -> Error {
     if e.exit_code() == 2 {
         Error::ApplyGate(e.to_string())
