@@ -3,9 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//! `ApplyTarget` impl for the `EventSource` resource.
+//! Server-state model + reconcile seams for the `EventSource` resource.
 //!
-//! Drives the apply algorithm from `design.md §5.2`:
+//! [`EventSourceHandler`](super::handler::EventSourceHandler) drives the seams
+//! (`fetch_remote` / `diff_source` / `upload_then_optionally_disable`) through
+//! the core kind-router. The apply algorithm (`design.md §5.2`):
 //!
 //!   1. validate local (already done in `EventSourceLocal::from_yaml`).
 //!   2. Render local events to eventconf XML.
@@ -17,7 +19,6 @@
 //!   6. If `spec.enabled = false`, follow up with PATCH `/sources/status`.
 //!      Brief enabled-flap window per design.md §6 limitation 2.
 
-use async_trait::async_trait;
 use onmsctl_core::client::MultipartPart;
 use onmsctl_core::error::PostUploadLookupKind;
 use onmsctl_core::{Context, Diff, Error, OnmsClient, Result};
@@ -28,11 +29,6 @@ use crate::apply::diff::{EventSetDiff, diff_event_sets, render_diff};
 use crate::apply::local::EventSourceLocal;
 use crate::dto::Event;
 use crate::xml::{parse_events_from_xml, render_eventconf_xml, xml_canonical};
-
-/// Marker type implementing [`onmsctl_core::ApplyTarget`] for
-/// `EventSource` documents. Construct via the
-/// `onmsctl_core::run_apply::<EventSourceTarget>` driver.
-pub struct EventSourceTarget;
 
 /// Server-side state for an `EventSource`. Carries the source row, its
 /// parsed events, and the canonical XML form for fast change detection.
@@ -47,42 +43,9 @@ pub struct EventSourceRemote {
     pub(crate) canonical_xml: String,
 }
 
-#[async_trait]
-impl onmsctl_core::ApplyTarget for EventSourceTarget {
-    type Local = EventSourceLocal;
-    type Remote = EventSourceRemote;
-
-    fn name(local: &EventSourceLocal) -> &str {
-        &local.metadata.name
-    }
-
-    async fn fetch(name: &str, ctx: &Context) -> Result<Option<EventSourceRemote>> {
-        fetch_remote(name, ctx).await
-    }
-
-    async fn create(local: EventSourceLocal, ctx: &Context) -> Result<()> {
-        upload_then_optionally_disable(&local, ctx, false).await
-    }
-
-    async fn update(
-        local: EventSourceLocal,
-        _remote: EventSourceRemote,
-        ctx: &Context,
-    ) -> Result<()> {
-        // Update is identical to create at the wire level: the upload
-        // endpoint upserts (deletes existing events, inserts new) for
-        // any source whose basename already exists. See design.md §3.1.
-        upload_then_optionally_disable(&local, ctx, true).await
-    }
-
-    fn diff(local: &EventSourceLocal, remote: &EventSourceRemote) -> Diff {
-        diff_source(local, remote)
-    }
-}
-
 /// Fetch server-side `EventSource` state by name. `Ok(None)` when the source is
-/// absent; `Err` when the name resolves ambiguously (refuse to apply). Shared by
-/// the legacy `ApplyTarget` driver and the kind-router's `EventSourceHandler`.
+/// absent; `Err` when the name resolves ambiguously (refuse to apply). Used by
+/// the kind-router's `EventSourceHandler`.
 pub async fn fetch_remote(name: &str, ctx: &Context) -> Result<Option<EventSourceRemote>> {
     let client = OnmsClient::from_context(ctx)?;
     let api = EventConfApi::new(&client);
@@ -107,8 +70,8 @@ pub async fn fetch_remote(name: &str, ctx: &Context) -> Result<Option<EventSourc
 }
 
 /// Structured diff between a local `EventSource` and its server state. Empty
-/// when the events canonicalize equal AND the `enabled` flag matches. Shared by
-/// the legacy `ApplyTarget` driver and the kind-router's `EventSourceHandler`.
+/// when the events canonicalize equal AND the `enabled` flag matches. Used by
+/// the kind-router's `EventSourceHandler`.
 pub fn diff_source(local: &EventSourceLocal, remote: &EventSourceRemote) -> Diff {
     // Fast path: if the rendered local XML normalizes to the same
     // canonical form as the server's stored XML AND the enabled
@@ -284,15 +247,14 @@ mod tests {
     fn diff_returns_empty_when_events_and_enabled_match() {
         let l = local_with(vec![ev("uei.a", "Warning")], true);
         let r = remote_with(vec![rev("uei.a", "Warning")], true);
-        let d = <EventSourceTarget as onmsctl_core::ApplyTarget>::diff(&l, &r);
-        assert!(d.is_empty());
+        assert!(diff_source(&l, &r).is_empty());
     }
 
     #[test]
     fn diff_includes_enabled_change_line_when_flags_differ() {
         let l = local_with(vec![ev("uei.a", "Warning")], false);
         let r = remote_with(vec![rev("uei.a", "Warning")], true);
-        let d = <EventSourceTarget as onmsctl_core::ApplyTarget>::diff(&l, &r);
+        let d = diff_source(&l, &r);
         assert!(!d.is_empty());
         let s = d.as_str();
         assert!(s.contains("spec.enabled"));
@@ -303,8 +265,8 @@ mod tests {
     fn diff_includes_event_changes() {
         let l = local_with(vec![ev("uei.a", "Warning"), ev("uei.b", "Major")], true);
         let r = remote_with(vec![rev("uei.a", "Warning"), rev("uei.c", "Cleared")], true);
-        let d = <EventSourceTarget as onmsctl_core::ApplyTarget>::diff(&l, &r);
-        let s = d.as_str();
+        let s = diff_source(&l, &r);
+        let s = s.as_str();
         assert!(s.contains("+ uei.b"));
         assert!(s.contains("- uei.c"));
     }
@@ -313,18 +275,9 @@ mod tests {
     fn diff_combines_enabled_and_event_changes() {
         let l = local_with(vec![ev("uei.a", "Major")], false);
         let r = remote_with(vec![rev("uei.a", "Warning")], true);
-        let d = <EventSourceTarget as onmsctl_core::ApplyTarget>::diff(&l, &r);
-        let s = d.as_str();
+        let s = diff_source(&l, &r);
+        let s = s.as_str();
         assert!(s.contains("spec.enabled"));
         assert!(s.contains("~ uei.a"));
-    }
-
-    #[test]
-    fn name_is_metadata_name() {
-        let l = local_with(vec![], true);
-        assert_eq!(
-            <EventSourceTarget as onmsctl_core::ApplyTarget>::name(&l),
-            "cisco.foo"
-        );
     }
 }

@@ -102,11 +102,10 @@ impl Harness {
         &self.client
     }
 
-    /// Build a [`Context`] suitable for `run_apply::<EventSourceTarget>`
-    /// and other driver-level entry points that rebuild their own
-    /// client from `Context`. `verbose` toggles the stderr warnings
-    /// guarded by `ctx.verbose` (notably the disabled-state apply
-    /// flap notice).
+    /// Build a [`Context`] suitable for `apply_documents` and other
+    /// entry points that rebuild their own client from `Context`.
+    /// `verbose` toggles the stderr warnings guarded by `ctx.verbose`
+    /// (notably the disabled-state apply flap notice).
     pub fn context(&self, verbose: bool) -> Context {
         Context {
             name: "integration-test".into(),

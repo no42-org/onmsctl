@@ -11,8 +11,8 @@
 //! upload endpoint upserts by derived source name (two same-named docs would
 //! clobber each other). `plan()` parses the bucket, gates on duplicate names,
 //! then fetches each source's server state and computes its action via the
-//! shared [`fetch_remote`] / [`diff_source`] seams (extracted from the legacy
-//! `ApplyTarget` impl); `execute()` uploads each changed source via
+//! shared [`fetch_remote`] / [`diff_source`] reconcile seams in the `target`
+//! module; `execute()` uploads each changed source via
 //! [`upload_then_optionally_disable`] (the canonical replace path) and follows
 //! up with the `spec.enabled` PATCH. The gate-class refusals — duplicate name
 //! and ambiguous source name — are raised from `plan()` as `Err` so the router

@@ -13,8 +13,9 @@
 //!     Drives the `source convert` migration path.
 //!   - [`diff`] — UEI-bucketed structured diff between local and
 //!     server-state shapes (see `design.md §5.3`).
-//!   - [`target`] — the [`onmsctl_core::ApplyTarget`] impl that wires
-//!     fetch / create / update / diff for the EventConf capability.
+//!   - [`target`] — the server-state model + reconcile seams
+//!     (`fetch_remote` / `diff_source` / `upload_then_optionally_disable`)
+//!     that [`handler::EventSourceHandler`] drives.
 
 pub mod conversion;
 pub mod diff;
@@ -25,7 +26,7 @@ pub mod target;
 
 pub use from_wire::WireToLocalError;
 pub use handler::EventSourceHandler;
-pub use target::{EventSourceRemote, EventSourceTarget};
+pub use target::EventSourceRemote;
 
 pub use local::{
     AlarmDataDef, AutoackDef, CorrelationDef, DecodeDef, EventDef, EventSourceLocal,

@@ -3,12 +3,15 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//! End-to-end integration tests for `onmsctl source apply` against a live
-//! Horizon 36 instance. Each test is `#[ignore]`d so `make test` is
-//! unaffected; `make integration` opts in via `--include-ignored`.
+//! End-to-end integration tests for the `EventSource` path of the top-level
+//! `onmsctl apply -f` (the kind-router) against a live Horizon 36 instance.
+//! Each test is `#[ignore]`d so `make test` is unaffected; `make integration`
+//! opts in via `--include-ignored`.
 //!
-//! Covers task 5.12: create-from-empty, replace-existing,
-//! unchanged-detection, dry-run-with-diff, disabled-state apply.
+//! Covers create-from-empty, replace-existing, unchanged-detection,
+//! dry-run(-with-diff), and disabled-state apply — driving the real
+//! `EventSourceHandler` through `apply_documents`, the same path the binary
+//! takes for `kind: EventSource` documents.
 //!
 //! ## Note on the ambiguous-name scenario
 //!
@@ -20,10 +23,14 @@
 //! unit test `find_source_by_name_returns_ambiguous_for_duplicate_names`
 //! in `crates/onmsctl-eventconf/src/api.rs`.
 
-use onmsctl_core::{ApplyOptions, Outcome, run_apply};
+use onmsctl_core::kind::parse_documents;
+use onmsctl_core::kind::precedence::RANK_EVENT_SOURCE;
+use onmsctl_core::{
+    Action, ApplyOutcome, ApplyParams, Context, OutcomeStatus, Registry, apply_documents,
+};
 use onmsctl_eventconf::EventConfApi;
 use onmsctl_eventconf::apply::{
-    EventDef, EventSourceLocal, EventSourceSpec, EventSourceTarget, Metadata,
+    EventDef, EventSourceHandler, EventSourceLocal, EventSourceSpec, Metadata,
 };
 use onmsctl_it::{Harness, harness_or_skip};
 
@@ -77,6 +84,23 @@ async fn pre_post_cleanup(h: &Harness, when: &str) {
     }
 }
 
+/// Apply a single `EventSource` through the kind-router exactly as the binary
+/// does: serialize the local doc to YAML, route it through `apply_documents`
+/// with a registry holding the real `EventSourceHandler`, and return the one
+/// resulting outcome. Replaces the retired `run_apply::<EventSourceTarget>`
+/// driver.
+async fn apply_one(local: &EventSourceLocal, params: ApplyParams, ctx: &Context) -> ApplyOutcome {
+    let yaml = serde_norway::to_string(local).expect("serialize EventSourceLocal");
+    let docs = parse_documents("source.yaml", &yaml).expect("parse EventSource document");
+    let mut reg = Registry::new();
+    reg.register(RANK_EVENT_SOURCE, Box::new(EventSourceHandler));
+    let mut outcomes = apply_documents(&reg, docs, &params, ctx)
+        .await
+        .expect("EventSource apply must not hit the plan gate");
+    assert_eq!(outcomes.len(), 1, "one outcome per source document");
+    outcomes.pop().unwrap()
+}
+
 #[ignore = "live Horizon required (run via `make integration`)"]
 #[tokio::test]
 async fn apply_creates_source_when_absent() {
@@ -90,12 +114,13 @@ async fn apply_creates_source_when_absent() {
         true,
     );
     let ctx = h.context(false);
-    let opts = ApplyOptions::default();
 
-    let outcome = run_apply::<EventSourceTarget>(local, &opts, &ctx)
-        .await
-        .expect("apply create");
-    assert_eq!(outcome, Outcome::Created, "first apply must Create");
+    let outcome = apply_one(&local, ApplyParams::default(), &ctx).await;
+    assert_eq!(
+        outcome.status,
+        OutcomeStatus::Created,
+        "first apply must Create"
+    );
 
     // Verify the source is actually on the server with the right shape.
     let api = EventConfApi::new(h.client());
@@ -119,24 +144,19 @@ async fn apply_updates_when_events_change() {
 
     let name = unique_source_name(&h, "update");
     let ctx = h.context(false);
-    let opts = ApplyOptions::default();
 
     // First apply — Created.
     let first = make_local(&name, &[("Warning", "alpha"), ("Major", "beta")], true);
     assert_eq!(
-        run_apply::<EventSourceTarget>(first, &opts, &ctx)
-            .await
-            .expect("apply create"),
-        Outcome::Created
+        apply_one(&first, ApplyParams::default(), &ctx).await.status,
+        OutcomeStatus::Created
     );
 
     // Second apply, different event set — Updated.
     let second = make_local(&name, &[("Warning", "alpha"), ("Minor", "gamma")], true);
     assert_eq!(
-        run_apply::<EventSourceTarget>(second, &opts, &ctx)
-            .await
-            .expect("apply update"),
-        Outcome::Updated
+        apply_one(&second, ApplyParams::default(), &ctx).await.status,
+        OutcomeStatus::Updated
     );
 
     pre_post_cleanup(&h, "post").await;
@@ -150,23 +170,18 @@ async fn apply_is_unchanged_when_state_matches() {
 
     let name = unique_source_name(&h, "unchanged");
     let ctx = h.context(false);
-    let opts = ApplyOptions::default();
 
     let local = make_local(&name, &[("Warning", "stable")], true);
 
     assert_eq!(
-        run_apply::<EventSourceTarget>(local.clone(), &opts, &ctx)
-            .await
-            .expect("apply create"),
-        Outcome::Created
+        apply_one(&local, ApplyParams::default(), &ctx).await.status,
+        OutcomeStatus::Created
     );
 
     // Re-apply the exact same shape — must Unchanged.
     assert_eq!(
-        run_apply::<EventSourceTarget>(local, &opts, &ctx)
-            .await
-            .expect("apply identical"),
-        Outcome::Unchanged
+        apply_one(&local, ApplyParams::default(), &ctx).await.status,
+        OutcomeStatus::Unchanged
     );
 
     pre_post_cleanup(&h, "post").await;
@@ -184,26 +199,27 @@ async fn apply_dry_run_does_not_mutate_and_reports_would_update() {
     // Seed: real create.
     let seed = make_local(&name, &[("Warning", "seed")], true);
     assert_eq!(
-        run_apply::<EventSourceTarget>(seed, &ApplyOptions::default(), &ctx)
-            .await
-            .expect("apply create"),
-        Outcome::Created
+        apply_one(&seed, ApplyParams::default(), &ctx).await.status,
+        OutcomeStatus::Created
     );
 
-    // Different shape, dry-run + diff: must report WouldUpdate AND not
-    // mutate the server. The diff print to stderr is incidental — the
-    // observable side-effect (server state) is what we test.
+    // Different shape, dry-run + diff: the preview must report a would-update
+    // (Skipped status, predicted action Update) AND not mutate the server.
+    // The diff print to stderr is incidental — the observable side-effect
+    // (server state) is what we test.
     let proposed = make_local(&name, &[("Warning", "seed"), ("Minor", "extra")], true);
-    let opts = ApplyOptions {
+    let params = ApplyParams {
         dry_run: true,
         show_diff: true,
+        ..Default::default()
     };
+    let preview = apply_one(&proposed, params, &ctx).await;
     assert_eq!(
-        run_apply::<EventSourceTarget>(proposed, &opts, &ctx)
-            .await
-            .expect("apply dry-run"),
-        Outcome::WouldUpdate
+        preview.status,
+        OutcomeStatus::Skipped,
+        "dry-run would-update previews as Skipped"
     );
+    assert_eq!(preview.action, Action::Update, "predicted action is Update");
 
     // Confirm the server is still at the seed shape — one event.
     let api = EventConfApi::new(h.client());
@@ -241,19 +257,15 @@ async fn apply_disabled_state_results_in_disabled_source() {
     // Seed enabled.
     let enabled = make_local(&name, &[("Warning", "seed")], true);
     assert_eq!(
-        run_apply::<EventSourceTarget>(enabled, &ApplyOptions::default(), &ctx)
-            .await
-            .expect("apply create enabled"),
-        Outcome::Created
+        apply_one(&enabled, ApplyParams::default(), &ctx).await.status,
+        OutcomeStatus::Created
     );
 
     // Apply same shape but disabled — Updated.
     let disabled = make_local(&name, &[("Warning", "seed")], false);
     assert_eq!(
-        run_apply::<EventSourceTarget>(disabled, &ApplyOptions::default(), &ctx)
-            .await
-            .expect("apply disabled update"),
-        Outcome::Updated
+        apply_one(&disabled, ApplyParams::default(), &ctx).await.status,
+        OutcomeStatus::Updated
     );
 
     // Final state: source exists and is disabled.

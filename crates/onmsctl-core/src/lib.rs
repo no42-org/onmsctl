@@ -6,8 +6,8 @@
 //! Shared infrastructure for `onmsctl` capabilities.
 //!
 //! Phase 2 — foundation: error types, authentication, configuration loader,
-//! context resolution, output-format selection. HTTP client, output rendering,
-//! and the `ApplyTarget` driver land in subsequent commits.
+//! context resolution, output-format selection, HTTP client, output rendering,
+//! and the declarative kind-router (`kind::`).
 //!
 //! See `openspec/changes/init-onmsctl-event-conf/design.md` for the full
 //! architecture and `cli-core` spec deltas for observable requirements.
@@ -25,7 +25,7 @@ pub mod format;
 pub mod kind;
 pub mod render;
 
-pub use apply::{ApplyOptions, ApplyTarget, Diff, Outcome, run_apply};
+pub use apply::Diff;
 pub use kind::{
     Action, ApplyOutcome, ApplyParams, KindHandler, OutcomeStatus, Plan, RawDoc, Registry,
     apply_documents, parse_documents,
