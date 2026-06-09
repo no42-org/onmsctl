@@ -165,12 +165,6 @@ impl EventConfApi<'_> {
         self.client.get(&path, &[]).await
     }
 
-    /// `POST /eventconf/sources/eventConfSource` — note the unusual path.
-    pub async fn create_source(&self, req: &AddEventConfSourceRequest) -> Result<CreatedSource> {
-        let path = format!("{BASE}/sources/eventConfSource");
-        self.client.post(&path, req).await
-    }
-
     /// `DELETE /eventconf/sources` with body `{ sourceIds: [...] }`.
     /// Empty slice is refused client-side so the server cannot interpret
     /// `{sourceIds: []}` as "delete all".
@@ -375,53 +369,6 @@ impl EventConfApi<'_> {
         self.client.get(&path, &[]).await
     }
 
-    /// `POST /eventconf/sources/{sourceId}/events`. The endpoint returns
-    /// the new event id as a bare integer body (e.g. `159`) — not the
-    /// `{"id":N}` object shape `create_source` uses. Top-level integers
-    /// are valid JSON so reqwest's `json` decoder handles it directly.
-    pub async fn add_event(&self, source_id: i64, event: &Event) -> Result<i64> {
-        let path = format!("{BASE}/sources/{source_id}/events");
-        self.client.post(&path, event).await
-    }
-
-    /// `PUT /eventconf/sources/{sourceId}/events/{eventId}`.
-    pub async fn update_event(
-        &self,
-        source_id: i64,
-        event_id: i64,
-        req: &EventConfEventEditRequest,
-    ) -> Result<()> {
-        let path = format!("{BASE}/sources/{source_id}/events/{event_id}");
-        self.client.put_drain(&path, req).await
-    }
-
-    /// `DELETE /eventconf/sources/{sourceId}/events` with `{eventIds: [...]}`.
-    /// Empty slice is refused client-side.
-    pub async fn delete_events(&self, source_id: i64, event_ids: &[i64]) -> Result<()> {
-        ensure_non_empty(event_ids, "delete_events", "event ids")?;
-        let path = format!("{BASE}/sources/{source_id}/events");
-        let payload = EventConfEventDeletePayload {
-            event_ids: event_ids.to_vec(),
-        };
-        self.client.delete(&path, Some(&payload)).await
-    }
-
-    /// `PATCH /eventconf/sources/{sourceId}/events/status`. Empty slice
-    /// is refused client-side.
-    pub async fn set_events_enabled(
-        &self,
-        source_id: i64,
-        event_ids: &[i64],
-        enable: bool,
-    ) -> Result<()> {
-        ensure_non_empty(event_ids, "set_events_enabled", "event ids")?;
-        let path = format!("{BASE}/sources/{source_id}/events/status");
-        let payload = EnableDisableConfSourceEventsPayload {
-            enable,
-            events_ids: event_ids.to_vec(),
-        };
-        self.client.patch_drain(&path, &payload).await
-    }
 }
 
 /// Adapt a `Vec<(&str, String)>` to the `&[(&str, &str)]` shape the
@@ -501,28 +448,6 @@ mod tests {
         assert_eq!(s.name, "cisco.foo");
         assert_eq!(s.file_order, 50);
         assert_eq!(s.event_count, 17);
-    }
-
-    #[tokio::test]
-    async fn create_source_uses_unusual_path() {
-        let (mock, client) = mock_with_client().await;
-        Mock::given(method("POST"))
-            .and(path("/api/v2/eventconf/sources/eventConfSource"))
-            .and(body_json(serde_json::json!({"name": "cisco.foo"})))
-            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
-                "id": 42, "name": "cisco.foo", "fileOrder": 50
-            })))
-            .mount(&mock)
-            .await;
-        let api = EventConfApi::new(&client);
-        let req = AddEventConfSourceRequest {
-            name: "cisco.foo".into(),
-            description: None,
-            vendor: None,
-        };
-        let created = api.create_source(&req).await.unwrap();
-        assert_eq!(created.id, 42);
-        assert_eq!(created.file_order, 50);
     }
 
     #[tokio::test]
@@ -691,74 +616,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn add_event_returns_id() {
-        // Horizon returns the new event id as a bare integer body
-        // (e.g. `108`), not the `{"id":N}` shape used by create_source.
-        // Top-level integer is valid JSON so reqwest's json decoder
-        // handles it; the test pins the wire shape.
-        let (mock, client) = mock_with_client().await;
-        Mock::given(method("POST"))
-            .and(path("/api/v2/eventconf/sources/42/events"))
-            .respond_with(ResponseTemplate::new(201).set_body_string("108"))
-            .mount(&mock)
-            .await;
-        let api = EventConfApi::new(&client);
-        let e = Event {
-            uei: Some("uei.opennms.org/test".into()),
-            severity: Some("Warning".into()),
-            ..Event::default()
-        };
-        let id = api.add_event(42, &e).await.unwrap();
-        assert_eq!(id, 108);
-    }
-
-    #[tokio::test]
-    async fn update_event_uses_put() {
-        let (mock, client) = mock_with_client().await;
-        Mock::given(method("PUT"))
-            .and(path("/api/v2/eventconf/sources/42/events/108"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
-            .mount(&mock)
-            .await;
-        let api = EventConfApi::new(&client);
-        let req = EventConfEventEditRequest {
-            enabled: true,
-            event: Event::default(),
-        };
-        api.update_event(42, 108, &req).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn delete_events_sends_eventids_payload() {
-        let (mock, client) = mock_with_client().await;
-        Mock::given(method("DELETE"))
-            .and(path("/api/v2/eventconf/sources/42/events"))
-            .and(body_json(serde_json::json!({"eventIds": [108, 109]})))
-            .respond_with(ResponseTemplate::new(200))
-            .mount(&mock)
-            .await;
-        let api = EventConfApi::new(&client);
-        api.delete_events(42, &[108, 109]).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn set_events_enabled_sends_typo_field_names() {
-        let (mock, client) = mock_with_client().await;
-        // Wire format uses `enable` and `eventsIds` (with the trailing s).
-        Mock::given(method("PATCH"))
-            .and(path("/api/v2/eventconf/sources/42/events/status"))
-            .and(body_json(serde_json::json!({
-                "enable": true,
-                "eventsIds": [108, 109]
-            })))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
-            .mount(&mock)
-            .await;
-        let api = EventConfApi::new(&client);
-        api.set_events_enabled(42, &[108, 109], true).await.unwrap();
-    }
-
-    #[tokio::test]
     async fn list_source_names_returns_string_array() {
         let (mock, client) = mock_with_client().await;
         Mock::given(method("GET"))
@@ -869,17 +726,6 @@ mod tests {
                 assert!(m.contains("delete_sources"));
                 assert!(m.contains("empty"));
             }
-            other => panic!("unexpected {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn delete_events_rejects_empty_slice() {
-        let (_mock, client) = mock_with_client().await;
-        let api = EventConfApi::new(&client);
-        let err = api.delete_events(42, &[]).await.unwrap_err();
-        match err {
-            Error::Config(m) => assert!(m.contains("empty")),
             other => panic!("unexpected {other:?}"),
         }
     }
