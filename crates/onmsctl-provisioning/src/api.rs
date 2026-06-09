@@ -888,12 +888,12 @@ mod tests {
         .unwrap();
     }
 
-    /// Locks the documented `add` create-or-replace hazard: when an
-    /// operator adds an interface whose IP already exists, the body we
-    /// POST carries only the new payload — empty `monitored-service`,
-    /// `category`, and `meta-data` arrays — so the server's existing
-    /// values for those collections are wiped. Asserting this contract
-    /// pins the warning text in `InterfaceCmd::Add`.
+    /// Locks the create-or-replace hazard of `post_requisition_interface`:
+    /// when the posted interface IP already exists, the body carries only
+    /// the new payload — empty `monitored-service`, `category`, and
+    /// `meta-data` arrays — so the server's existing values for those
+    /// collections are wiped. Asserting this contract pins the wire
+    /// overwrite semantics of `post_requisition_interface`.
     #[tokio::test]
     async fn post_requisition_interface_body_overwrites_collections() {
         use crate::model::server::InterfaceServer;

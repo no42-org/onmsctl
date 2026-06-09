@@ -10,6 +10,10 @@
 //! (with `req` as the visible alias).
 
 pub mod asset;
+pub mod category;
+pub mod interface;
+pub mod node;
+pub mod service;
 
 use std::io::{ErrorKind, Write};
 use std::path::PathBuf;
@@ -202,6 +206,31 @@ pub enum RequisitionCmd {
     /// `add` and `remove` don't apply.
     #[command(subcommand)]
     Asset(asset::AssetCmd),
+    /// Read-only inspection of a requisition's nodes (`list` / `get`).
+    ///
+    /// Issues only `GET` requests. To change nodes, edit the
+    /// `kind: Requisition` YAML and run `onmsctl apply -f <file>`.
+    #[command(subcommand)]
+    Node(node::NodeCmd),
+    /// Read-only inspection of a node's interfaces (`list` / `get`).
+    ///
+    /// Issues only `GET` requests. To change interfaces, edit the
+    /// `kind: Requisition` YAML and run `onmsctl apply -f <file>`.
+    #[command(subcommand)]
+    Interface(interface::InterfaceCmd),
+    /// Read-only inspection of an interface's monitored services
+    /// (`list`).
+    ///
+    /// Issues only `GET` requests. To change services, edit the
+    /// `kind: Requisition` YAML and run `onmsctl apply -f <file>`.
+    #[command(subcommand)]
+    Service(service::ServiceCmd),
+    /// Read-only inspection of a node's categories (`list`).
+    ///
+    /// Issues only `GET` requests. To change categories, edit the
+    /// `kind: Requisition` YAML and run `onmsctl apply -f <file>`.
+    #[command(subcommand)]
+    Category(category::CategoryCmd),
 }
 
 impl Classify for RequisitionCmd {
@@ -223,6 +252,11 @@ impl Classify for RequisitionCmd {
             // Delegate sub-resource classification to the nested
             // command (list/get = Read, add/set/remove = Write).
             RequisitionCmd::Asset(cmd) => cmd.kind(),
+            // Sub-resource inspection verbs — read-only (list/get).
+            RequisitionCmd::Node(cmd) => cmd.kind(),
+            RequisitionCmd::Interface(cmd) => cmd.kind(),
+            RequisitionCmd::Service(cmd) => cmd.kind(),
+            RequisitionCmd::Category(cmd) => cmd.kind(),
         }
     }
 }
@@ -283,6 +317,10 @@ impl RequisitionCmd {
                 unreachable!("convert is dispatched via run_local")
             }
             RequisitionCmd::Asset(cmd) => cmd.run(ctx).await,
+            RequisitionCmd::Node(cmd) => cmd.run(ctx).await,
+            RequisitionCmd::Interface(cmd) => cmd.run(ctx).await,
+            RequisitionCmd::Service(cmd) => cmd.run(ctx).await,
+            RequisitionCmd::Category(cmd) => cmd.run(ctx).await,
         }
     }
 }
@@ -663,6 +701,32 @@ pub(super) fn nonempty_fs(s: &str) -> std::result::Result<String, String> {
     Ok(s.to_string())
 }
 
+/// clap value parser for generic "non-empty after trim" arguments
+/// (used by foreign-id positionals in the sub-resource verb files).
+/// Mirrors `nonempty_fs` but without the FS-specific error wording.
+/// Lives here so `cmd/node.rs` and `cmd/interface.rs` share a single
+/// definition.
+pub(super) fn nonempty_string(s: &str) -> std::result::Result<String, String> {
+    if s.trim().is_empty() {
+        Err("value must not be empty or whitespace-only".into())
+    } else {
+        Ok(s.to_string())
+    }
+}
+
+/// clap value parser for IP-address positionals. Accepts IPv4 and IPv6
+/// literals (no brackets). Rejects typos and surrounding whitespace at
+/// parse time so the user sees a clean usage error instead of a 400/404
+/// against a malformed URL. Used by `cmd/interface.rs` and
+/// `cmd/service.rs`.
+pub(super) fn ip_addr(s: &str) -> std::result::Result<String, String> {
+    use std::net::IpAddr;
+    use std::str::FromStr;
+    IpAddr::from_str(s)
+        .map(|ip| ip.to_string())
+        .map_err(|_| format!("invalid IP address {s:?} (expected IPv4 or IPv6 literal)"))
+}
+
 async fn run_list_requisitions(ctx: &Context) -> Result<()> {
     let client = OnmsClient::from_context(ctx)?;
     let api = ProvisioningApi::new(&client);
@@ -903,6 +967,26 @@ pub(super) fn write_stdout_line(bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ip_addr_accepts_ipv4_and_ipv6() {
+        assert_eq!(ip_addr("10.0.0.1").unwrap(), "10.0.0.1");
+        assert_eq!(ip_addr("2001:db8::1").unwrap(), "2001:db8::1");
+    }
+
+    #[test]
+    fn ip_addr_rejects_garbage() {
+        assert!(ip_addr("not-an-ip").is_err());
+        assert!(ip_addr("10.0.0.1.2").is_err());
+        assert!(ip_addr(" 10.0.0.1 ").is_err());
+    }
+
+    #[test]
+    fn nonempty_string_rejects_whitespace_only() {
+        assert!(nonempty_string("").is_err());
+        assert!(nonempty_string("   ").is_err());
+        assert_eq!(nonempty_string("foo").unwrap(), "foo");
+    }
 
     #[test]
     fn only_convert_is_local_only() {
