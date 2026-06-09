@@ -6,14 +6,17 @@
 //! `EventSourceHandler` — the eventconf capability's adapter into the core
 //! kind-router.
 //!
-//! Each `EventSource` is independent (no cross-document invariants), so this is
-//! the simplest handler: `plan()` parses the bucket, fetches each source's
-//! server state, and computes its action via the shared [`fetch_remote`] /
-//! [`diff_source`] seams (extracted from the legacy `ApplyTarget` impl);
-//! `execute()` uploads each changed source via [`upload_then_optionally_disable`]
-//! (the canonical replace path) and follows up with the `spec.enabled` PATCH.
-//! An ambiguous source name is the one gate-class refusal — it is raised from
-//! `plan()` as `Err` so the router aborts before any upload.
+//! `EventSource` documents are mostly independent, with **one** cross-document
+//! invariant: `metadata.name` must be unique across the bucket, because the
+//! upload endpoint upserts by derived source name (two same-named docs would
+//! clobber each other). `plan()` parses the bucket, gates on duplicate names,
+//! then fetches each source's server state and computes its action via the
+//! shared [`fetch_remote`] / [`diff_source`] seams (extracted from the legacy
+//! `ApplyTarget` impl); `execute()` uploads each changed source via
+//! [`upload_then_optionally_disable`] (the canonical replace path) and follows
+//! up with the `spec.enabled` PATCH. The gate-class refusals — duplicate name
+//! and ambiguous source name — are raised from `plan()` as `Err` so the router
+//! aborts before any upload.
 
 use async_trait::async_trait;
 
@@ -59,13 +62,13 @@ impl KindHandler for EventSourceHandler {
     }
 
     async fn plan(&self, docs: &[RawDoc], _params: &ApplyParams, ctx: &Context) -> Result<Plan> {
-        let mut sources: Vec<(EventSourceLocal, ExecAction)> = Vec::with_capacity(docs.len());
-        let mut preview: Vec<ApplyOutcome> = Vec::with_capacity(docs.len());
-
+        // -- Parse every document first (gate on parse failure). --
+        let mut parsed: Vec<(String, EventSourceLocal)> = Vec::with_capacity(docs.len());
         for d in docs {
             // Re-serialize the single already-split document and route it
-            // through `from_yaml` so it gets the exact same validation +
-            // guided error messages as the legacy path.
+            // through `from_yaml` for the same validation + guided field-key
+            // errors as the legacy path. (Parse-error line numbers refer to
+            // this normalized form, not the user's original source bytes.)
             let yaml = serde_norway::to_string(&d.value).map_err(|e| {
                 Error::Config(format!("{}: could not re-serialize document: {e}", d.label()))
             })?;
@@ -73,8 +76,16 @@ impl KindHandler for EventSourceHandler {
                 Error::Config(msg) => Error::Config(format!("{}: {msg}", d.label())),
                 other => other,
             })?;
+            parsed.push((d.label(), local));
+        }
 
-            // Fetch + diff (read-only). An ambiguous name → Err → router gate.
+        // -- Cross-document uniqueness gate (the upload upserts by name). --
+        check_unique_names(&parsed)?;
+
+        // -- Fetch + diff per source (read-only). Ambiguous name → Err → gate. --
+        let mut sources: Vec<(EventSourceLocal, ExecAction)> = Vec::with_capacity(parsed.len());
+        let mut preview: Vec<ApplyOutcome> = Vec::with_capacity(parsed.len());
+        for (_, local) in parsed {
             let action = match fetch_remote(&local.metadata.name, ctx).await? {
                 None => ExecAction::Create,
                 Some(remote) => {
@@ -85,7 +96,6 @@ impl KindHandler for EventSourceHandler {
                     }
                 }
             };
-
             preview.push(ApplyOutcome::would(
                 KIND,
                 local.metadata.name.clone(),
@@ -142,6 +152,35 @@ impl KindHandler for EventSourceHandler {
     }
 }
 
+/// Refuse a bucket that declares the same `metadata.name` in more than one
+/// document — the upload endpoint upserts by name, so duplicates would clobber
+/// each other silently. `labels` are `source#index` for diagnostics. Mirrors
+/// the iam/provisioning cross-document name gates.
+fn check_unique_names(parsed: &[(String, EventSourceLocal)]) -> Result<()> {
+    use std::collections::BTreeMap;
+    let mut by_name: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for (label, local) in parsed {
+        by_name
+            .entry(local.metadata.name.as_str())
+            .or_default()
+            .push(label.as_str());
+    }
+    let dups: Vec<String> = by_name
+        .iter()
+        .filter(|(_, labels)| labels.len() > 1)
+        .map(|(name, labels)| format!("'{name}' ({})", labels.join(", ")))
+        .collect();
+    if dups.is_empty() {
+        Ok(())
+    } else {
+        Err(Error::Config(format!(
+            "duplicate EventSource metadata.name across the apply input — the upload \
+             endpoint upserts by name, so duplicates would clobber each other: {}",
+            dups.join("; ")
+        )))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,6 +228,9 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(
                 serde_json::json!({"success": [], "errors": []}),
             ))
+            // Verify (on server drop) the upload actually happened exactly once,
+            // rather than trusting the outcome status alone.
+            .expect(1)
             .mount(&server)
             .await;
 
@@ -206,6 +248,35 @@ mod tests {
         assert_eq!(outcomes.len(), 1);
         assert_eq!(outcomes[0].name, "cisco.foo");
         assert_eq!(outcomes[0].status, OutcomeStatus::Created);
+    }
+
+    #[tokio::test]
+    async fn duplicate_metadata_name_gates_with_err() {
+        let server = MockServer::start().await;
+        // Two EventSource docs share metadata.name → upsert-by-name would
+        // clobber. Must refuse before any fetch (no mocks mounted).
+        let yaml = "apiVersion: eventconf.opennms.org/v1\nkind: EventSource\nmetadata:\n  name: dup\nspec:\n  enabled: true\n  events:\n    - uei: uei.x/a\n      label: A\n      severity: Warning\n---\napiVersion: eventconf.opennms.org/v1\nkind: EventSource\nmetadata:\n  name: dup\nspec:\n  enabled: true\n  events:\n    - uei: uei.x/b\n      label: B\n      severity: Major\n";
+        let docs = parse_documents("dup.yaml", yaml).unwrap();
+        assert_eq!(docs.len(), 2);
+        let ctx = ctx_for(&server);
+        let err = match EventSourceHandler
+            .plan(&docs, &ApplyParams::default(), &ctx)
+            .await
+        {
+            Ok(_) => panic!("expected a duplicate-name refusal"),
+            Err(e) => e,
+        };
+        assert!(matches!(err, Error::Config(_)), "got {err:?}");
+        let msg = err.to_string();
+        assert!(msg.contains("duplicate"), "{msg}");
+        assert!(
+            msg.contains("dup.yaml#0") && msg.contains("dup.yaml#1"),
+            "message should name both colliding docs: {msg}"
+        );
+        assert!(
+            server.received_requests().await.unwrap().is_empty(),
+            "duplicate-name gate must issue no HTTP"
+        );
     }
 
     #[tokio::test]
