@@ -101,10 +101,11 @@ onmsctl 0.0.1
 capabilities:
   - eventconf 0.0.1
   - provisioning 0.0.1
+  - iam 0.0.1
 ```
 
 Each capability owns its own subcommand tree (`source` / `event`,
-`requisition`, etc.) and ships its own JSON Schemas, validators, and
+`requisition`, `iam`) and ships its own JSON Schemas, validators, and
 HTTP client wrappers. New capabilities are added as workspace
 members; this list grows verbatim from `onmsctl_<cap>::{CAPABILITY_NAME,
 VERSION}`.
@@ -367,9 +368,8 @@ never changes apply outcome; `apply --diff` collapses it to a one-line
 # structured outcome to stdout. Safe against any context.
 onmsctl apply -f acme-prod.yaml --dry-run --diff
 
-# Single file — real apply. With --wait, blocks until import
-# completes (or --timeout fires for exit 10).
-onmsctl apply -f acme-prod.yaml --wait --timeout 5m
+# Single file — real apply.
+onmsctl apply -f acme-prod.yaml
 
 # Directory mode — every *.yaml / *.yml under the path is planned
 # first. The plan gate runs a cross-file collision check (duplicate
@@ -377,36 +377,37 @@ onmsctl apply -f acme-prod.yaml --wait --timeout 5m
 # and continues). Stop-on-error is the default — halt after the first
 # failing document; pass --continue-on-error to keep going.
 onmsctl apply -f ./requisitions/ --dry-run
-onmsctl apply -f ./requisitions/ --wait
+onmsctl apply -f ./requisitions/
 ```
 
-The apply path computes a three-level diff (canonical-bytes / per-node
-/ per-leaf) and auto-decides `rescanExisting` from the scan-relevance
-of what changed. Override with `--rescan-existing true|false`.
+The apply path computes a three-level diff (canonical-bytes / per-node /
+per-leaf), auto-decides `rescanExisting` from the scan-relevance of what
+changed, writes the foreign-source + requisition, and triggers the import —
+fire-and-forget. The declarative path always uses the auto `rescanExisting`
+decision; there is no override flag.
 
-In directory mode, `--wait` polls per-file after each successful
-apply (not as one batch wait). `--diff` renders each kind-bucket's diff
-to stderr — for directory previews use `--dry-run -o yaml` to see the
-structured outcomes per file.
+`--diff` renders each kind-bucket's diff to stderr — for directory previews
+use `--dry-run -o yaml` to see the structured outcomes per document. Import
+completion is asynchronous server-side: to block on it, run the lifecycle
+verb `onmsctl requisition import <fs> --wait --timeout 5m`, or poll
+`onmsctl requisition status <fs>`.
 
-The plan phase parses every document first — cross-file collision check
-and a per-document diff (GET only) — then renders a combined plan to
-stderr before any write happens:
+The plan phase parses every document first — running the cross-file
+collision check and a per-document diff (GET only) — before any write.
+Each document then produces one `ApplyOutcome` row, rendered through the
+global `-o table|yaml|json`. A `--dry-run` shows the predicted action
+without mutating:
 
 ```text
-Phase 1 plan (3 files): (dry-run)
-  ok a.yaml -> Requisition/acme-prod: would-create (rescanExisting=true, foreignSource=created)
-  ok b.yaml -> Requisition/site-b: unchanged
-  ok c.yaml -> Requisition/lab-east: would-update (rescanExisting=false, foreignSource=no-change)
-  Summary: 2 to apply, 1 unchanged
+kind         name       action  status     message
+Requisition  acme-prod  create  Skipped    dry-run: would create
+Requisition  site-b     none    Unchanged  in sync
+Requisition  lab-east   update  Skipped    dry-run: would update
 ```
 
-A parse error or a hard `metadata.name` collision aborts the whole
-batch at the plan gate (the header reads `ABORTED`) before any HTTP
-write is issued. The `Summary:` line keeps a fixed shape on both the success
-and abort paths, so scripts can `grep '^  Summary:'` regardless of
-outcome. Under `-o json | -o yaml` the per-file rows and collision
-findings ship in the structured payload instead of stderr.
+A parse error, an unknown `kind`, or a hard `metadata.name` collision
+fails at the plan gate before any HTTP write is issued: the process exits
+`1` with a message naming the offending document, and nothing is mutated.
 
 ### Step 3 — Iterate
 
@@ -575,14 +576,10 @@ onmsctl apply -f ./users/ --dry-run
 
 `kind: User` documents flow through the same `onmsctl apply -f` plan →
 gate → execute path as every other kind. Apply plans every user first
-(per-user GET + one `GET /users` lockout snapshot), renders a combined
-summary to stderr —
-
-```text
-plan: 1 create, 2 update, 3 role-delta, 4 unchanged, 0 skipped
-```
-
-— then executes in the order creates → updates → role deltas. Roles
+(per-user GET + one `GET /users` lockout snapshot), then executes in the
+order creates → updates → role deltas. Each user produces one
+`ApplyOutcome` row, rendered through the global `-o table|yaml|json`, with
+any `PR-IAM-*` warnings carried in the row's message / details. Roles
 reconcile as a **set**: declaring `roles: [B, C]` against a server that
 holds `[A, B]` grants `C` and revokes `A`, leaving `B`. An omitted
 scalar field never clears the server value (merge semantics, not
@@ -1007,6 +1004,12 @@ Stable per `cli-core` spec §4.5; safe for scripting:
 | 7 | TLS handshake failed |
 | 8 | redirect loop |
 | 9 | unsupported authentication scheme |
+| 10 | `--wait` timed out before the async operation completed |
+| 11 | `--wait` observed the async operation fail server-side |
+| 12 | write refused locally by a `read-only` context |
+| 13 | `apply` refused: would empty a protected role (IAM-001 admin lockout) |
+| 14 | `apply` refused: would strip the calling user's own protected role / delete their account (IAM-002 self lockout) |
+| 15 | `apply` refused: caller identity unavailable via `GET /users/whoami`, so the self-lockout check can't run |
 
 ### Shell completions
 
