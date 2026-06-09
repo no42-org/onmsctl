@@ -159,7 +159,14 @@ fn preview_for(entry: &MultiApplyPlanEntry, soft: &[&CollisionFinding]) -> Apply
 
 /// Map an execute-phase per-file result to an `ApplyOutcome`.
 fn outcome_of(r: MultiApplyFileResult) -> ApplyOutcome {
-    let name = r.foreign_source.clone().unwrap_or_default();
+    // `foreign_source` is always `Some` for results `execute_multi` produces
+    // (parse-error rows, the only `None` source, never reach the handler path).
+    // Fall back to a visible placeholder rather than a blank name if that ever
+    // changes.
+    let name = r
+        .foreign_source
+        .clone()
+        .unwrap_or_else(|| "<unknown>".to_string());
     match r.outcome {
         Ok(po) => match po.state {
             ApplyState::Unchanged => {
@@ -289,6 +296,13 @@ mod tests {
         };
         assert!(matches!(err, Error::Config(_)), "got {err:?}");
         assert!(err.to_string().contains("acme"));
+        // The two same-file docs are distinguished by `source#index`, so the
+        // message names both rather than listing one path twice.
+        let msg = err.to_string();
+        assert!(
+            msg.contains("reqs.yaml#0") && msg.contains("reqs.yaml#1"),
+            "message should distinguish the two colliding docs: {msg}"
+        );
         assert!(
             server.received_requests().await.unwrap().is_empty(),
             "hard collision must issue no HTTP"
@@ -296,9 +310,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn duplicate_foreign_id_warns_in_preview_but_plans() {
+    async fn duplicate_foreign_id_warns_only_implicated_docs() {
         let server = MockServer::start().await;
-        for name in ["site-a", "site-b"] {
+        for name in ["site-a", "site-b", "site-c"] {
             mount_create(&server, name).await;
         }
         Mock::given(method("GET"))
@@ -307,19 +321,29 @@ mod tests {
             .mount(&server)
             .await;
 
-        // Different names, SAME foreignId → soft collision (warning).
-        let docs = req_docs(&[("site-a", "web01"), ("site-b", "web01")]);
+        // site-a + site-b SHARE foreignId web01 (soft collision); site-c's
+        // web99 is unique. Only the two implicated docs must carry the warning.
+        let docs = req_docs(&[
+            ("site-a", "web01"),
+            ("site-b", "web01"),
+            ("site-c", "web99"),
+        ]);
         let ctx = ctx_for(&server);
         let plan = ProvisioningHandler
             .plan(&docs, &ApplyParams::default(), &ctx)
             .await
             .unwrap();
-        assert_eq!(plan.preview.len(), 2);
-        // Both entries implicate the same foreignId → both carry the warning.
+        assert_eq!(plan.preview.len(), 3);
+        let by_name = |n: &str| plan.preview.iter().find(|o| o.name == n).unwrap();
+        assert!(by_name("site-a").details.is_some(), "site-a should warn");
+        assert!(by_name("site-b").details.is_some(), "site-b should warn");
+        // The control: a non-colliding doc must NOT get the warning. This
+        // exercises `files.contains(&entry.path)` — a broad/wrong match would
+        // attach the warning here too.
         assert!(
-            plan.preview.iter().all(|o| o.details.is_some()),
-            "soft collision should attach a warning to each implicated document"
+            by_name("site-c").details.is_none(),
+            "non-colliding doc must not carry the foreignId warning"
         );
-        assert!(plan.preview.iter().all(|o| o.message.contains("warning")));
+        assert!(!by_name("site-c").message.contains("warning"));
     }
 }
