@@ -28,6 +28,9 @@ use onmsctl_core::{Error, Result};
 
 // -- Top-level shape --------------------------------------------------------
 
+/// Kind literal for EventSource documents — the kind-router discriminator.
+pub const KIND: &str = "EventSource";
+
 /// The kubectl-style document the user authors. Validated at load time.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

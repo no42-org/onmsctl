@@ -19,10 +19,12 @@
 pub mod conversion;
 pub mod diff;
 pub mod from_wire;
+pub mod handler;
 pub mod local;
 pub mod target;
 
 pub use from_wire::WireToLocalError;
+pub use handler::EventSourceHandler;
 pub use target::{EventSourceRemote, EventSourceTarget};
 
 pub use local::{

@@ -57,26 +57,7 @@ impl onmsctl_core::ApplyTarget for EventSourceTarget {
     }
 
     async fn fetch(name: &str, ctx: &Context) -> Result<Option<EventSourceRemote>> {
-        let client = OnmsClient::from_context(ctx)?;
-        let api = EventConfApi::new(&client);
-        match api.find_source_by_name(name).await? {
-            SourceLookup::Absent => Ok(None),
-            SourceLookup::Ambiguous(ids) => Err(Error::Config(format!(
-                "source name '{name}' resolves ambiguously to ids {ids:?}; refuse to apply"
-            ))),
-            SourceLookup::Found(src) => {
-                let xml_bytes = api.download_source_xml(src.id).await?;
-                let events = parse_events_from_xml(&xml_bytes)?;
-                let canonical_xml = xml_canonical(&xml_bytes)?;
-                Ok(Some(EventSourceRemote {
-                    id: src.id,
-                    name: src.name,
-                    enabled: src.enabled,
-                    events,
-                    canonical_xml,
-                }))
-            }
-        }
+        fetch_remote(name, ctx).await
     }
 
     async fn create(local: EventSourceLocal, ctx: &Context) -> Result<()> {
@@ -95,35 +76,68 @@ impl onmsctl_core::ApplyTarget for EventSourceTarget {
     }
 
     fn diff(local: &EventSourceLocal, remote: &EventSourceRemote) -> Diff {
-        // Fast path: if the rendered local XML normalizes to the same
-        // canonical form as the server's stored XML AND the enabled
-        // flag matches, there is no diff. Avoids paying for the
-        // structured diff computation when state is already synced.
-        if local.spec.enabled == remote.enabled
-            && let Some(local_canonical) = render_local_canonical_xml(local)
-            && local_canonical == remote.canonical_xml
-        {
-            return Diff::empty();
-        }
-
-        // Slow path: build the structured diff (events bucketed by UEI
-        // + the source-level enabled-flag change), render to text, wrap.
-        let event_diff = compute_diff(local, remote);
-        if event_diff.is_empty() && local.spec.enabled == remote.enabled {
-            return Diff::empty();
-        }
-        let mut s = String::new();
-        if local.spec.enabled != remote.enabled {
-            s.push_str(&format!(
-                "spec.enabled: {} → {}    [will sync after upload]\n",
-                remote.enabled, local.spec.enabled
-            ));
-        }
-        if !event_diff.is_empty() {
-            s.push_str(&render_diff(&event_diff));
-        }
-        Diff::from_text(s)
+        diff_source(local, remote)
     }
+}
+
+/// Fetch server-side `EventSource` state by name. `Ok(None)` when the source is
+/// absent; `Err` when the name resolves ambiguously (refuse to apply). Shared by
+/// the legacy `ApplyTarget` driver and the kind-router's `EventSourceHandler`.
+pub async fn fetch_remote(name: &str, ctx: &Context) -> Result<Option<EventSourceRemote>> {
+    let client = OnmsClient::from_context(ctx)?;
+    let api = EventConfApi::new(&client);
+    match api.find_source_by_name(name).await? {
+        SourceLookup::Absent => Ok(None),
+        SourceLookup::Ambiguous(ids) => Err(Error::Config(format!(
+            "source name '{name}' resolves ambiguously to ids {ids:?}; refuse to apply"
+        ))),
+        SourceLookup::Found(src) => {
+            let xml_bytes = api.download_source_xml(src.id).await?;
+            let events = parse_events_from_xml(&xml_bytes)?;
+            let canonical_xml = xml_canonical(&xml_bytes)?;
+            Ok(Some(EventSourceRemote {
+                id: src.id,
+                name: src.name,
+                enabled: src.enabled,
+                events,
+                canonical_xml,
+            }))
+        }
+    }
+}
+
+/// Structured diff between a local `EventSource` and its server state. Empty
+/// when the events canonicalize equal AND the `enabled` flag matches. Shared by
+/// the legacy `ApplyTarget` driver and the kind-router's `EventSourceHandler`.
+pub fn diff_source(local: &EventSourceLocal, remote: &EventSourceRemote) -> Diff {
+    // Fast path: if the rendered local XML normalizes to the same
+    // canonical form as the server's stored XML AND the enabled
+    // flag matches, there is no diff. Avoids paying for the
+    // structured diff computation when state is already synced.
+    if local.spec.enabled == remote.enabled
+        && let Some(local_canonical) = render_local_canonical_xml(local)
+        && local_canonical == remote.canonical_xml
+    {
+        return Diff::empty();
+    }
+
+    // Slow path: build the structured diff (events bucketed by UEI
+    // + the source-level enabled-flag change), render to text, wrap.
+    let event_diff = compute_diff(local, remote);
+    if event_diff.is_empty() && local.spec.enabled == remote.enabled {
+        return Diff::empty();
+    }
+    let mut s = String::new();
+    if local.spec.enabled != remote.enabled {
+        s.push_str(&format!(
+            "spec.enabled: {} → {}    [will sync after upload]\n",
+            remote.enabled, local.spec.enabled
+        ));
+    }
+    if !event_diff.is_empty() {
+        s.push_str(&render_diff(&event_diff));
+    }
+    Diff::from_text(s)
 }
 
 /// Render local events to canonical XML for the fast-path compare in
@@ -145,7 +159,7 @@ fn render_local_canonical_xml(local: &EventSourceLocal) -> Option<String> {
 /// `--verbose` enabled-flap warning, which is only meaningful when an
 /// already-existing source is being transiently re-enabled by the
 /// upload before we PATCH it back to disabled.
-async fn upload_then_optionally_disable(
+pub async fn upload_then_optionally_disable(
     local: &EventSourceLocal,
     ctx: &Context,
     is_update: bool,
