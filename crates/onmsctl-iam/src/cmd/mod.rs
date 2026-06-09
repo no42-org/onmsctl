@@ -5,13 +5,13 @@
 
 //! `onmsctl iam ...` command surface (Group 8).
 //!
-//! Subcommand tree: `whoami`, `apply` (declarative), `user` (imperative +
-//! `role`, `set-password`, `export`), and a `group` stub (out of scope —
-//! tracked as a follow-up change). [`IamCmd`] implements [`Classify`] so the
-//! binary refuses writes under `--read-only`; per design §D8 (F16) an
-//! `apply --dry-run` classifies as **Read** so review workflows run in
-//! read-only contexts — a deliberate divergence from provisioning's
-//! "apply is always Write" choice.
+//! Subcommand tree: `whoami`, `user` (read verbs `list`/`get`/`export`, the
+//! explicit `delete`, and `set-password`), and a `group` stub (out of scope —
+//! tracked as a follow-up change). Declarative user mutation moved to the
+//! top-level `onmsctl apply -f` (kind `User`); the imperative `iam apply`,
+//! `user create`, `user update`, and `user role add`/`remove` verbs were
+//! removed. [`IamCmd`] implements [`Classify`] so the binary refuses writes
+//! under `--read-only`.
 
 use std::io::{IsTerminal, Read, Write};
 use std::path::PathBuf;
@@ -22,12 +22,9 @@ use onmsctl_core::{
 };
 
 use crate::api::IamApi;
-use crate::apply::multi::{ApplyOptions, ApplyState, UserResult, apply_users};
-use crate::model::local::{
-    FromEnvRef, FromFileRef, FromKeyringRef, KNOWN_ROLES, KeyringRef, PasswordRef, UserLocal,
-};
+use crate::model::local::{FromEnvRef, FromFileRef, FromKeyringRef, KeyringRef, PasswordRef};
 use crate::model::wire::OnmsUserWire;
-use crate::render::{UserRow, render_apply_report};
+use crate::render::UserRow;
 use crate::secret::{SecretString, resolve_password_ref};
 
 /// `onmsctl iam` — manage Horizon users and roles.
@@ -35,47 +32,12 @@ use crate::secret::{SecretString, resolve_password_ref};
 pub enum IamCmd {
     /// Print the calling user (`GET /users/whoami`).
     Whoami,
-    /// Reconcile declared users from YAML against the server (declarative).
-    ///
-    /// Lockout protection defaults to `protected-roles = [ROLE_ADMIN]` and the
-    /// built-in known-roles set. Both are overridable per context via
-    /// `iam.protected-roles` / `iam.known-roles` (an explicit empty
-    /// `protected-roles` list disables the admin-lockout check).
-    Apply(ApplyArgs),
-    /// Manage users (imperative verbs, roles, password, export).
+    /// Manage users (read verbs, explicit delete, password, export).
     #[command(subcommand)]
     User(UserCmd),
     /// Manage groups — not implemented yet (tracked in a follow-up change).
     #[command(subcommand)]
     Group(GroupCmd),
-}
-
-/// Arguments for `iam apply`. Mirrors `requisition apply`'s flag shape.
-#[derive(Args, Debug)]
-pub struct ApplyArgs {
-    /// User YAML file(s) or directories (each `-f` may name a file or a dir
-    /// of `*.yaml` / `*.yml`).
-    #[arg(short = 'f', long = "file", required = true)]
-    files: Vec<PathBuf>,
-    /// Plan and render without issuing any write.
-    #[arg(long)]
-    dry_run: bool,
-    /// Show the per-user planned actions (the per-user diff). Without this or
-    /// `--dry-run`, apply prints only the one-line summary + findings.
-    #[arg(long)]
-    diff: bool,
-    /// Continue past a per-user Phase-2 failure instead of stopping. Does NOT
-    /// bypass plan-phase refusals (IAM-001/002, PR-IAM-002/003/005).
-    #[arg(long)]
-    keep_going: bool,
-    /// Permit emptying a protected role's holder set (IAM-001). Requires
-    /// `--yes`.
-    #[arg(long, requires = "yes")]
-    allow_admin_lockout: bool,
-    /// Confirm destructive / override actions (required with
-    /// `--allow-admin-lockout`).
-    #[arg(short = 'y', long)]
-    yes: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -87,10 +49,6 @@ pub enum UserCmd {
         /// Username.
         name: String,
     },
-    /// Create a user (imperative). Requires a password source.
-    Create(CreateArgs),
-    /// Update a user's scalar fields (imperative).
-    Update(UpdateArgs),
     /// Delete a user.
     Delete {
         /// Username.
@@ -99,9 +57,6 @@ pub enum UserCmd {
         #[arg(short = 'y', long)]
         yes: bool,
     },
-    /// Add or remove a single role on a user.
-    #[command(subcommand)]
-    Role(UserRoleCmd),
     /// Rotate a user's password.
     SetPassword(SetPasswordArgs),
     /// Export users as declarative YAML to stdout.
@@ -112,28 +67,7 @@ pub enum UserCmd {
     },
 }
 
-#[derive(Subcommand, Debug)]
-pub enum UserRoleCmd {
-    /// Grant a role.
-    Add {
-        /// Username.
-        name: String,
-        /// Role, e.g. `ROLE_USER`.
-        role: String,
-    },
-    /// Revoke a role.
-    Remove {
-        /// Username.
-        name: String,
-        /// Role to revoke.
-        role: String,
-        /// Skip the interactive confirmation prompt.
-        #[arg(short = 'y', long)]
-        yes: bool,
-    },
-}
-
-/// Password-source flags shared by `create` and `set-password`. Exactly one
+/// Password-source flags for `set-password`. Exactly one
 /// of `--from-file` / `--from-env` / `--from-keyring` / `--password-stdin`
 /// may be given (clap enforces mutual exclusion via the `pwsrc` group).
 #[derive(Args, Debug, Default)]
@@ -150,37 +84,6 @@ pub struct PasswordSource {
     /// Read the password from stdin (one line).
     #[arg(long, group = "pwsrc")]
     password_stdin: bool,
-}
-
-#[derive(Args, Debug)]
-pub struct CreateArgs {
-    /// Username.
-    name: String,
-    #[arg(long)]
-    full_name: Option<String>,
-    #[arg(long)]
-    email: Option<String>,
-    #[arg(long)]
-    comments: Option<String>,
-    /// Role to grant (repeatable).
-    #[arg(long = "role")]
-    roles: Vec<String>,
-    #[arg(long)]
-    duty_schedule: Option<String>,
-    #[command(flatten)]
-    password: PasswordSource,
-}
-
-#[derive(Args, Debug)]
-pub struct UpdateArgs {
-    /// Username.
-    name: String,
-    #[arg(long)]
-    full_name: Option<String>,
-    #[arg(long)]
-    email: Option<String>,
-    #[arg(long)]
-    comments: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -206,10 +109,6 @@ impl Classify for IamCmd {
     fn kind(&self) -> CmdKind {
         match self {
             IamCmd::Whoami => CmdKind::Read,
-            // F16 / task 8.8: a dry-run apply issues only GETs, so read-only
-            // contexts may run it for review. A real apply is Write.
-            IamCmd::Apply(a) if a.dry_run => CmdKind::Read,
-            IamCmd::Apply(_) => CmdKind::Write,
             IamCmd::User(c) => c.kind(),
             IamCmd::Group(_) => CmdKind::Read, // stub never writes
         }
@@ -220,18 +119,8 @@ impl Classify for UserCmd {
     fn kind(&self) -> CmdKind {
         match self {
             UserCmd::List | UserCmd::Get { .. } | UserCmd::Export { .. } => CmdKind::Read,
-            UserCmd::Create(_)
-            | UserCmd::Update(_)
-            | UserCmd::Delete { .. }
-            | UserCmd::SetPassword(_) => CmdKind::Write,
-            UserCmd::Role(c) => c.kind(),
+            UserCmd::Delete { .. } | UserCmd::SetPassword(_) => CmdKind::Write,
         }
-    }
-}
-
-impl Classify for UserRoleCmd {
-    fn kind(&self) -> CmdKind {
-        CmdKind::Write
     }
 }
 
@@ -244,7 +133,6 @@ impl IamCmd {
     pub async fn run(self, ctx: &Context) -> Result<()> {
         match self {
             IamCmd::Whoami => run_whoami(ctx).await,
-            IamCmd::Apply(args) => run_apply(args, ctx).await,
             IamCmd::User(cmd) => cmd.run(ctx).await,
             IamCmd::Group(_) => Err(Error::Config(
                 "`iam group` is not implemented yet; tracked in a follow-up change".into(),
@@ -258,13 +146,7 @@ impl UserCmd {
         match self {
             UserCmd::List => run_user_list(ctx).await,
             UserCmd::Get { name } => run_user_get(&name, ctx).await,
-            UserCmd::Create(args) => run_user_create(args, ctx).await,
-            UserCmd::Update(args) => run_user_update(args, ctx).await,
             UserCmd::Delete { name, yes } => run_user_delete(&name, yes, ctx).await,
-            UserCmd::Role(UserRoleCmd::Add { name, role }) => run_role_add(&name, &role, ctx).await,
-            UserCmd::Role(UserRoleCmd::Remove { name, role, yes }) => {
-                run_role_remove(&name, &role, yes, ctx).await
-            }
             UserCmd::SetPassword(args) => run_set_password(args, ctx).await,
             UserCmd::Export { name } => run_user_export(name, ctx).await,
         }
@@ -307,74 +189,6 @@ async fn run_user_get(name: &str, ctx: &Context) -> Result<()> {
         }
         None => Err(Error::UserNotFound { name: name.into() }),
     }
-}
-
-async fn run_user_create(args: CreateArgs, ctx: &Context) -> Result<()> {
-    let client = OnmsClient::from_context(ctx)?;
-    let api = IamApi::new(&client);
-    let secret = resolve_password(&args.password, "create")?;
-    // Dedup before warning so a duplicated `--role` warns once, matching the
-    // declarative planner (which iterates a BTreeSet).
-    let roles: std::collections::BTreeSet<String> = args.roles.into_iter().collect();
-    let known = resolved_known_roles(ctx);
-    for role in &roles {
-        warn_if_unknown_role(role, &known);
-    }
-    let spec = crate::model::local::UserSpec {
-        full_name: args.full_name,
-        email: args.email,
-        comments: args.comments,
-        duty_schedule: args.duty_schedule,
-        roles,
-        password_ref: None,
-    };
-    let local = build_local(&args.name, spec)?;
-    api.post_user(&local, secret.expose()).await?;
-    eprintln!("created user '{}'", args.name);
-    Ok(())
-}
-
-async fn run_user_update(args: UpdateArgs, ctx: &Context) -> Result<()> {
-    let client = OnmsClient::from_context(ctx)?;
-    let api = IamApi::new(&client);
-    // Pre-flight existence so update never silently creates.
-    api.require_user(&args.name).await?;
-    let form = crate::model::wire::UpdateForm {
-        full_name: args.full_name,
-        email: args.email,
-        comments: args.comments,
-    };
-    if form.is_empty() {
-        eprintln!("nothing to update for '{}'", args.name);
-        return Ok(());
-    }
-    api.put_user_form(&args.name, &form).await?;
-    eprintln!("updated user '{}'", args.name);
-    Ok(())
-}
-
-async fn run_role_add(name: &str, role: &str, ctx: &Context) -> Result<()> {
-    if role.is_empty() {
-        return Err(Error::Config("role must not be empty".into()));
-    }
-    warn_if_unknown_role(role, &resolved_known_roles(ctx));
-    let client = OnmsClient::from_context(ctx)?;
-    let api = IamApi::new(&client);
-    api.put_user_role(name, role).await?;
-    eprintln!("granted '{role}' to '{name}'");
-    Ok(())
-}
-
-async fn run_role_remove(name: &str, role: &str, yes: bool, ctx: &Context) -> Result<()> {
-    if role.is_empty() {
-        return Err(Error::Config("role must not be empty".into()));
-    }
-    confirm_destructive(yes, &format!("revoke role '{role}' from user '{name}'"))?;
-    let client = OnmsClient::from_context(ctx)?;
-    let api = IamApi::new(&client);
-    api.delete_user_role(name, role).await?;
-    eprintln!("revoked '{role}' from '{name}'");
-    Ok(())
 }
 
 async fn run_user_delete(name: &str, yes: bool, ctx: &Context) -> Result<()> {
@@ -438,87 +252,9 @@ async fn run_user_export(name: Option<String>, ctx: &Context) -> Result<()> {
     Ok(())
 }
 
-async fn run_apply(args: ApplyArgs, ctx: &Context) -> Result<()> {
-    let client = OnmsClient::from_context(ctx)?;
-    let api = IamApi::new(&client);
-
-    let docs = load_documents(&args.files)?;
-    if docs.is_empty() {
-        return Err(Error::Config(
-            "no user documents found in the given -f path(s)".into(),
-        ));
-    }
-
-    // Per-context `iam.protected-roles` / `iam.known-roles` override the
-    // built-in defaults (task 7.4 / design §D8, §D13).
-    let protected_roles = resolved_protected_roles(ctx);
-    // An empty protected-roles set turns off the IAM-001/IAM-002 admin-lockout
-    // invariants entirely (a deliberate, documented escape hatch). Surface
-    // that loudly — disabling a safety check should never be silent.
-    if protected_roles.is_empty() {
-        eprintln!(
-            "warning: iam.protected-roles is empty for context '{}' — the IAM-001/IAM-002 \
-             admin-lockout checks are DISABLED for this apply",
-            ctx.name
-        );
-    }
-    let opts = ApplyOptions {
-        dry_run: args.dry_run,
-        keep_going: args.keep_going,
-        known_roles: resolved_known_roles(ctx),
-        protected_roles,
-        // The IAM-001 override needs both flags (task 7.3). clap's
-        // `requires = "yes"` already rejects `--allow-admin-lockout` alone, so
-        // this `&& yes` is belt-and-suspenders.
-        allow_admin_lockout: args.allow_admin_lockout && args.yes,
-    };
-
-    let report = apply_users(&docs, &api, &opts).await?;
-    // Per-user actions are the "diff": shown for `--dry-run` (review) or when
-    // explicitly requested with `--diff`. A plain apply prints only the
-    // summary line + findings. (spec.md §"`--diff` SHALL render per-user
-    // diffs in the plan phase".)
-    render_apply_report(&report, args.dry_run || args.diff);
-
-    match report.state {
-        ApplyState::AbortedInput => Err(Error::Config(
-            "apply aborted: duplicate metadata.name across input documents (PR-IAM-002)".into(),
-        )),
-        _ => {
-            let failed = report
-                .users
-                .iter()
-                .filter(|u| matches!(u.result, UserResult::Failed | UserResult::PlanFailed))
-                .count();
-            if failed > 0 {
-                Err(Error::PartialSuccess { failed })
-            } else {
-                Ok(())
-            }
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/// Build a validated [`UserLocal`] from imperative parts by round-tripping
-/// through YAML so the same parse-time guards (numeric/empty name, role
-/// validation) apply as on the declarative path.
-fn build_local(name: &str, spec: crate::model::local::UserSpec) -> Result<UserLocal> {
-    let doc = UserLocal {
-        api_version: crate::model::local::ApiVersion,
-        kind: crate::model::local::KindUser,
-        metadata: crate::model::local::Metadata {
-            name: name.to_owned(),
-            unmodeled: None,
-        },
-        spec,
-    };
-    let yaml = serde_norway::to_string(&doc)?;
-    Ok(serde_norway::from_str(&yaml)?)
-}
 
 /// Resolve the password from the selected source. The interactive no-echo
 /// prompt (no flag on a TTY) is a planned follow-up; until then a source flag
@@ -583,52 +319,6 @@ fn resolve_password(src: &PasswordSource, verb: &str) -> Result<SecretString> {
     )))
 }
 
-/// Read every YAML document under the given `-f` arguments into
-/// `(path, UserLocal)` pairs. Each `-f` is resolved through the shared
-/// `onmsctl_core::apply_input::resolve_apply_input` dispatcher (file /
-/// directory / glob), matching provisioning and spec.md's "route through the
-/// shared dispatcher" requirement. One document per file (non-recursive dirs;
-/// pass a `**` glob for recursion).
-fn load_documents(paths: &[PathBuf]) -> Result<Vec<(PathBuf, UserLocal)>> {
-    use onmsctl_core::apply_input::{ApplyDispatch, resolve_apply_input};
-
-    let mut files: Vec<PathBuf> = Vec::new();
-    for p in paths {
-        match resolve_apply_input(p, &["yaml", "yml"])? {
-            ApplyDispatch::Single(f) => files.push(f),
-            ApplyDispatch::Multi(fs) => files.extend(fs),
-            // `ApplyDispatch` is #[non_exhaustive]; a future variant (e.g.
-            // Stdin) isn't supported by `iam apply` yet.
-            other => {
-                return Err(Error::Config(format!(
-                    "unsupported apply input dispatch: {other:?}"
-                )));
-            }
-        }
-    }
-    files.sort();
-    files.dedup();
-
-    let mut docs = Vec::with_capacity(files.len());
-    for path in files {
-        let text = std::fs::read_to_string(&path)
-            .map_err(|e| Error::Config(format!("reading {}: {e}", path.display())))?;
-        let local: UserLocal = serde_norway::from_str(&text)
-            .map_err(|e| Error::Config(format!("parsing {}: {e}", path.display())))?;
-        docs.push((path, local));
-    }
-    Ok(docs)
-}
-
-/// Confirm a destructive imperative action. `--yes` skips; otherwise requires
-/// an interactive TTY and a `yes`/`y` answer; non-TTY without `--yes` refuses.
-fn confirm_destructive(yes: bool, action: &str) -> Result<()> {
-    if yes {
-        return Ok(());
-    }
-    confirm_with_message(&format!("About to {action}. This cannot be undone."))
-}
-
 fn confirm_with_message(message: &str) -> Result<()> {
     use std::io::BufRead;
     let stdin_tty = std::io::stdin().is_terminal();
@@ -655,43 +345,6 @@ fn confirm_with_message(message: &str) -> Result<()> {
 /// after trimming.
 fn is_confirmation(line: &str) -> bool {
     matches!(line.trim().to_ascii_lowercase().as_str(), "yes" | "y")
-}
-
-/// Resolve the effective known-roles set: per-context `iam.known-roles`
-/// **replaces** the built-in [`KNOWN_ROLES`] when present (design §D13).
-fn resolved_known_roles(ctx: &Context) -> std::collections::BTreeSet<String> {
-    match &ctx.iam.known_roles {
-        Some(roles) => roles.iter().cloned().collect(),
-        None => KNOWN_ROLES.iter().map(|s| s.to_string()).collect(),
-    }
-}
-
-/// Resolve the effective protected-roles set: per-context
-/// `iam.protected-roles` overrides the built-in `[ROLE_ADMIN]` default; an
-/// explicit empty list disables the IAM-001 admin-lockout check (task 7.4 /
-/// design §D8).
-fn resolved_protected_roles(ctx: &Context) -> std::collections::BTreeSet<String> {
-    match &ctx.iam.protected_roles {
-        Some(roles) => roles.iter().cloned().collect(),
-        None => std::collections::BTreeSet::from(["ROLE_ADMIN".to_string()]),
-    }
-}
-
-/// Emit the `PR-IAM-006` soft-validation warning for a role outside the
-/// effective known set, so the imperative `create` / `role add` paths warn on
-/// a typo just like the declarative `apply` planner does. `known` is the
-/// context-resolved set (see [`resolved_known_roles`]).
-fn warn_if_unknown_role(role: &str, known: &std::collections::BTreeSet<String>) {
-    // An empty role is a hard error handled downstream (parse / `role add`
-    // guard); don't pre-empt it with a misleading "unknown role" warning.
-    if role.is_empty() {
-        return;
-    }
-    if !known.contains(role) {
-        eprintln!(
-            "[PR-IAM-006] warning: role {role:?} is not in the known-roles set; applying anyway"
-        );
-    }
 }
 
 fn print_stdout(s: &str) {
@@ -722,14 +375,6 @@ mod tests {
     }
 
     #[test]
-    fn apply_dry_run_is_read_other_apply_is_write() {
-        let dry = parse(&["apply", "-f", "u.yaml", "--dry-run"]).unwrap();
-        assert_eq!(dry.kind(), CmdKind::Read);
-        let real = parse(&["apply", "-f", "u.yaml"]).unwrap();
-        assert_eq!(real.kind(), CmdKind::Write);
-    }
-
-    #[test]
     fn whoami_and_list_are_read() {
         assert_eq!(parse(&["whoami"]).unwrap().kind(), CmdKind::Read);
         assert_eq!(parse(&["user", "list"]).unwrap().kind(), CmdKind::Read);
@@ -744,12 +389,6 @@ mod tests {
     fn mutating_user_verbs_are_write() {
         assert_eq!(
             parse(&["user", "delete", "alice"]).unwrap().kind(),
-            CmdKind::Write
-        );
-        assert_eq!(
-            parse(&["user", "role", "add", "alice", "ROLE_USER"])
-                .unwrap()
-                .kind(),
             CmdKind::Write
         );
         assert_eq!(
@@ -769,36 +408,6 @@ mod tests {
             }
             other => panic!("unexpected: {other:?}"),
         }
-    }
-
-    #[test]
-    fn apply_allow_admin_lockout_and_keep_going_plumbed() {
-        match parse(&[
-            "apply",
-            "-f",
-            "u.yaml",
-            "--allow-admin-lockout",
-            "--yes",
-            "--keep-going",
-        ])
-        .unwrap()
-        {
-            IamCmd::Apply(a) => {
-                assert!(a.allow_admin_lockout);
-                assert!(a.yes);
-                assert!(a.keep_going);
-            }
-            other => panic!("unexpected: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn allow_admin_lockout_requires_yes() {
-        // Passing the override without --yes is a parse error, not a silent
-        // downgrade.
-        assert!(parse(&["apply", "-f", "u.yaml", "--allow-admin-lockout"]).is_err());
-        // With --yes it parses.
-        assert!(parse(&["apply", "-f", "u.yaml", "--allow-admin-lockout", "--yes"]).is_ok());
     }
 
     #[test]
@@ -838,70 +447,4 @@ mod tests {
         assert!(!is_confirmation(""));
     }
 
-    fn ctx_with_iam(iam: onmsctl_core::config::IamConfig) -> Context {
-        Context {
-            name: "t".into(),
-            url: onmsctl_core::Url::parse("http://localhost:8980/opennms").unwrap(),
-            creds: onmsctl_core::AuthCreds::basic("u", "p"),
-            insecure_skip_tls_verify: false,
-            output_format: onmsctl_core::OutputFormat::Table,
-            verbose: false,
-            read_only: false,
-            iam,
-        }
-    }
-
-    #[test]
-    fn protected_roles_default_is_role_admin() {
-        let ctx = ctx_with_iam(Default::default());
-        assert_eq!(
-            resolved_protected_roles(&ctx),
-            std::collections::BTreeSet::from(["ROLE_ADMIN".to_string()])
-        );
-    }
-
-    #[test]
-    fn protected_roles_context_override_replaces_default() {
-        let ctx = ctx_with_iam(onmsctl_core::config::IamConfig {
-            protected_roles: Some(vec!["ROLE_ADMIN".into(), "ROLE_REST".into()]),
-            known_roles: None,
-            ..Default::default()
-        });
-        let got = resolved_protected_roles(&ctx);
-        assert_eq!(
-            got,
-            std::collections::BTreeSet::from(["ROLE_ADMIN".to_string(), "ROLE_REST".to_string()])
-        );
-    }
-
-    #[test]
-    fn empty_protected_roles_disables_the_check() {
-        let ctx = ctx_with_iam(onmsctl_core::config::IamConfig {
-            protected_roles: Some(vec![]),
-            known_roles: None,
-            ..Default::default()
-        });
-        assert!(resolved_protected_roles(&ctx).is_empty());
-    }
-
-    #[test]
-    fn known_roles_default_is_the_builtin_set() {
-        let ctx = ctx_with_iam(Default::default());
-        let got = resolved_known_roles(&ctx);
-        assert!(got.contains("ROLE_ADMIN"));
-        assert_eq!(got.len(), KNOWN_ROLES.len());
-    }
-
-    #[test]
-    fn known_roles_context_override_replaces_builtin() {
-        let ctx = ctx_with_iam(onmsctl_core::config::IamConfig {
-            protected_roles: None,
-            known_roles: Some(vec!["ROLE_CUSTOM".into()]),
-            ..Default::default()
-        });
-        assert_eq!(
-            resolved_known_roles(&ctx),
-            std::collections::BTreeSet::from(["ROLE_CUSTOM".to_string()])
-        );
-    }
 }
