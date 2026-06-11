@@ -30,7 +30,7 @@ How to fix
 2. OVERRIDE — pass `--name <override>` to set the metadata.name
    explicitly without renaming the input file:
 
-       onmsctl source convert "Cisco Foo.xml" --name cisco.foo
+       onmsctl event-source convert "Cisco Foo.xml" --name cisco.foo
 
 3. STDIN — when reading from stdin, `--name` is REQUIRED because there
    is no filename to derive from.

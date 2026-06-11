@@ -91,7 +91,7 @@ spec:
           mechanism: snmpudp
           target: "alarmcentral:162"
       scripts:
-        # SECURITY NOTE: shipping executable code via `source apply`
+        # SECURITY NOTE: shipping executable code via `apply`
         # requires RBAC on eventconf write access in Horizon. The
         # threat surface already exists at the raw XML upload path;
         # modeling here just lowers the friction.

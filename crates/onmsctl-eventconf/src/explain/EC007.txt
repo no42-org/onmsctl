@@ -22,7 +22,7 @@ Anything else is rejected:
     fails at deserialize time with the same error class, naming the
     bad value and the accepted set.
   - Eventconf XML with an unrecognized `alarm-type` attribute (e.g.
-    `alarm-type="4"`) reaches `source convert` and produces an EC007
+    `alarm-type="4"`) reaches `event-source convert` and produces an EC007
     finding at Error severity. YAML is NOT written. Exit code is 2.
 
 Symbolic input is case-insensitive (`Raise` / `RAISE` / `raise`).

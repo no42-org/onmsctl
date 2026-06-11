@@ -3,7 +3,7 @@
 # kind: User example covering every modeled field
 # (per task 10.5 of the add-iam-capability change).
 #
-# Pair with `onmsctl iam apply -f examples/iam-user.yaml --dry-run --diff`
+# Pair with `onmsctl apply -f examples/iam-user.yaml --dry-run --diff`
 # to see the per-user plan against a live Horizon.
 apiVersion: onmsctl.no42.org/v1alpha1
 kind: User

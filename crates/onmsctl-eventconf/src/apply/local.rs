@@ -157,7 +157,7 @@ const FORWARD_MECHANISMS: &[&str] = &["snmpudp", "snmptcp", "xmltcp", "xmludp"];
 /// at event-fire time.
 ///
 /// **Security note.** Modeling this element in YAML makes it trivial
-/// to ship server-side code via `source apply`. The threat surface
+/// to ship server-side code via `apply`. The threat surface
 /// already exists at the eventconf-XML upload path; this change does
 /// not introduce new authority. Operators should ensure RBAC on
 /// eventconf write access is appropriately scoped.
@@ -196,7 +196,7 @@ pub struct ParameterDef {
     /// Whether eventd should expand `%parm[#N]%` placeholders in `value`
     /// at event-fire time. Absent on the wire when not set in the source
     /// YAML — the absent vs explicit `true`/`false` distinction
-    /// round-trips through `source apply` / `source download`.
+    /// round-trips through `apply` / `event-source download`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expand: Option<bool>,
 }
@@ -298,7 +298,7 @@ impl AlarmType {
     /// outside `{1, 2, 3}` — the caller is expected to surface that
     /// to operators (e.g. `from_wire.rs` returns
     /// `WireToLocalError::AlarmDataAlarmTypeOutOfRange` so
-    /// `source convert` emits `EC007` against it).
+    /// `event-source convert` emits `EC007` against it).
     pub fn from_wire(n: i32) -> Option<Self> {
         match n {
             1 => Some(Self::Raise),
@@ -448,7 +448,7 @@ pub struct AlarmDataDef {
     ///     the device. Common for hardware-failure traps.
     ///
     /// Anything else fails at parse (for YAML inputs) or surfaces as
-    /// `EC007` during `source convert` (for downloaded XML that uses
+    /// `EC007` during `event-source convert` (for downloaded XML that uses
     /// an unrecognized integer).
     pub alarm_type: AlarmType,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -622,8 +622,8 @@ fn guided_rejection_for_known_spec_keys(bytes: &[u8]) -> Option<Error> {
                 "description" => {
                     return Some(Error::Config(
                         "spec.description cannot be set or preserved through `apply` \
-                         (the upload endpoint blanks it). Use `onmsctl source create --description ...` \
-                         at first creation."
+                         (the upload endpoint blanks it). Set it out-of-band via the \
+                         Horizon REST API or web UI."
                             .into(),
                     ));
                 }
@@ -676,7 +676,7 @@ impl EventSourceLocal {
         if self.spec.events.is_empty() {
             return Err(Error::Config(
                 "spec.events is empty; refusing to apply an EventSource with no events. \
-                 To remove a source, use `onmsctl source delete <id>`."
+                 To remove a source, use `onmsctl event-source delete <id>`."
                     .into(),
             ));
         }
@@ -987,7 +987,7 @@ impl AlarmDataDef {
         }
         // Range validation: unknown integers (`AlarmType::Other(n)`) are
         // permitted at the validator level. They round-trip verbatim and
-        // surface as `EC007` during `source convert` rather than as a
+        // surface as `EC007` during `event-source convert` rather than as a
         // blocking validation error here. The deserializer already
         // rejects unknown symbolic strings (typos) up front.
         Ok(())

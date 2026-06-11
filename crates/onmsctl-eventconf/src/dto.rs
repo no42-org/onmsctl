@@ -207,8 +207,8 @@ pub struct Event {
     /// two different domains:
     ///
     ///   - `parameter` (THIS field): static, defined alongside the event
-    ///     in eventconf XML. Round-trips through `source apply` /
-    ///     `source convert`. Per-event metadata that eventd attaches at
+    ///     in eventconf XML. Round-trips through `apply` /
+    ///     `event-source convert`. Per-event metadata that eventd attaches at
     ///     fire time. eventd evaluates entries in document order.
     ///   - `parm_collection` (below): runtime, present on a fired event
     ///     instance. JSON-only on the wire; the XML render in
@@ -225,7 +225,7 @@ pub struct Event {
     pub forward: Option<Vec<Forward>>,
     /// Embedded executable logic that eventd runs on event arrival.
     /// Typically BeanShell. **Security note:** modeling this in YAML
-    /// makes it trivial to ship server-side code via `source apply` —
+    /// makes it trivial to ship server-side code via `apply` —
     /// the threat surface already existed via raw XML upload, but
     /// operators should ensure RBAC on eventconf write access is
     /// configured appropriately.
@@ -429,7 +429,7 @@ pub struct AlarmData {
     ///     or alarmd cleanup policy.
     ///
     /// Other integers round-trip verbatim and trigger `EC007` during
-    /// `source convert`. The local YAML schema `AlarmType` enum projects
+    /// `event-source convert`. The local YAML schema `AlarmType` enum projects
     /// to/from this integer via `to_wire()` / `from_wire()`.
     pub alarm_type: Option<i32>,
     pub clear_key: Option<String>,

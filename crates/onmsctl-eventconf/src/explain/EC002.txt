@@ -10,7 +10,7 @@ Why
 An EventSource with no events is operationally meaningless — it
 represents a source that defines no traps, has no detection logic,
 and produces no UEIs. Such a document cannot be applied via
-`onmsctl source apply` (which validates non-empty events) and serves
+`onmsctl apply` (which validates non-empty events) and serves
 no purpose in version control.
 
 When this finding fires, the most likely causes are:

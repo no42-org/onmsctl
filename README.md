@@ -14,6 +14,9 @@ stay imperative.
 > configuration schema, and the `EventSource` YAML schema between minor
 > versions. Surfaces stabilize at `v1.0.0`.
 
+> **New to onmsctl?** Start with the [Quick Start guide](docs/quickstart.md) —
+> install, configure a context, and run your first `apply` in a few minutes.
+
 ---
 
 ## Install
@@ -104,7 +107,7 @@ capabilities:
   - iam 0.0.1
 ```
 
-Each capability owns its own subcommand tree (`source` / `event`,
+Each capability owns its own subcommand tree (`event-source` / `event`,
 `requisition`, `iam`) and ships its own JSON Schemas, validators, and
 HTTP client wrappers. New capabilities are added as workspace
 members; this list grows verbatim from `onmsctl_<cap>::{CAPABILITY_NAME,
@@ -234,7 +237,7 @@ in YAML and `apply` it instead:
 
 | Removed verb(s) | Replacement |
 |---|---|
-| `source apply`, `source create`, `source enable`, `source disable` | Declare the source, its events, and enabled-state in a `kind: EventSource` document, then `onmsctl apply -f`. (`source upload` / `source download` still round-trip raw XML.) |
+| `event-source apply`, `event-source create`, `event-source enable`, `event-source disable` | Declare the source, its events, and enabled-state in a `kind: EventSource` document, then `onmsctl apply -f`. (`event-source upload` / `event-source download` still round-trip raw XML.) |
 | `event add`, `event update`, `event delete`, `event enable`, `event disable` | Edit `spec.events[...]` in the owning `kind: EventSource` document, then `onmsctl apply -f`. (`event list` remains for inspection.) |
 | `requisition apply` | `onmsctl apply -f` (kind `Requisition`). |
 | `requisition node\|interface\|service\|category add\|set\|remove` | Edit `spec.nodes[...]` in the requisition YAML, then `onmsctl apply -f`. The matching `… list` / `get` sub-resource verbs remain for inspection. |
@@ -245,7 +248,7 @@ in YAML and `apply` it instead:
 ## GitOps for OpenNMS event configuration
 
 Keep event configuration in git as YAML; push to Horizon declaratively.
-Two commands carry the loop — `source convert` brings existing XML in,
+Two commands carry the loop — `event-source convert` brings existing XML in,
 `onmsctl apply -f` ships edits out.
 
 ### Step 1 — Convert existing XML → YAML
@@ -253,12 +256,12 @@ Two commands carry the loop — `source convert` brings existing XML in,
 Pure local file transform; no Horizon contact required.
 
 ```sh
-onmsctl source convert /opt/opennms/etc/events/cisco.foo.events.xml
-onmsctl source convert --output-dir yaml/ /opt/opennms/etc/events/*.events.xml
+onmsctl event-source convert /opt/opennms/etc/events/cisco.foo.events.xml
+onmsctl event-source convert --output-dir yaml/ /opt/opennms/etc/events/*.events.xml
 ```
 
 Rule violations emit stable, file:line-anchored findings on stderr (see
-[`source convert` reference](#source-convert) for the finding-code
+[`event-source convert` reference](#source-convert) for the finding-code
 catalog, exit codes, flags, and the unmodeled-element policy).
 
 ### Step 2 — Apply YAML to Horizon
@@ -712,7 +715,7 @@ stay terse:
 
 | Long form | Alias | Notes |
 |---|---|---|
-| `onmsctl source ...` | `onmsctl src ...` | eventconf source verbs |
+| `onmsctl event-source ...` | `onmsctl evtsrc ...` | eventconf source verbs |
 | `onmsctl event ...` | `onmsctl evt ...` | eventconf event verbs |
 | `onmsctl requisition ...` | `onmsctl req ...` | provisioning verbs |
 | `onmsctl config ...` | `onmsctl cfg ...` | local config management |
@@ -738,7 +741,7 @@ contexts:
 ```
 
 Verbs classified `WriteCmd` at compile time — `onmsctl apply` (a Write
-unless `--dry-run`), `source delete` / `upload`, `requisition delete` /
+unless `--dry-run`), `event-source delete` / `upload`, `requisition delete` /
 `import`, `requisition asset set`, `iam user delete` / `set-password` —
 refuse with exit code 12 against a read-only context. Reads pass
 through. The `--read-only` flag and `$ONMSCTL_READ_ONLY` env var
@@ -758,11 +761,11 @@ delete:
 
 ```sh
 # sources
-onmsctl source list                  # -o table | -o yaml | -o json
-onmsctl source get 42
-onmsctl source delete 42 43
-onmsctl source names                 # name-only listing
-onmsctl source names-and-ids
+onmsctl event-source list                  # -o table | -o yaml | -o json
+onmsctl event-source get 42
+onmsctl event-source delete 42 43
+onmsctl event-source names                 # name-only listing
+onmsctl event-source names-and-ids
 
 # events (read-only; refs are <source-id>/<event-id>)
 onmsctl event list --source 42
@@ -770,12 +773,12 @@ onmsctl event list --uei "uei.opennms.org/vendor/cisco/.*"   # cross-source
 onmsctl event list --vendor cisco
 
 # raw XML round-trip
-onmsctl source upload cisco.foo.events.xml acme.widget.events.xml
-onmsctl source download 42 -O cisco.foo.events.xml
-onmsctl source download 42 --format yaml -O cisco.foo.yaml   # convert inline
+onmsctl event-source upload cisco.foo.events.xml acme.widget.events.xml
+onmsctl event-source download 42 -O cisco.foo.events.xml
+onmsctl event-source download 42 --format yaml -O cisco.foo.yaml   # convert inline
 ```
 
-`source download → edit → apply` may drop server-only fields not
+`event-source download → edit → apply` may drop server-only fields not
 modeled locally — keep the XML alongside for full fidelity.
 
 ---
@@ -802,15 +805,15 @@ filename-stripper quirk client-side.
 
 **User-visible cascade:**
 
-- `source list` prints empty even when sources exist (NMS-19810); use
-  `source names-and-ids` as a working alternative.
+- `event-source list` prints empty even when sources exist (NMS-19810); use
+  `event-source names-and-ids` as a working alternative.
 - `find_source_by_name` always reports `Absent` (NMS-19810), so
   `onmsctl apply --diff` shows the whole local document as "added"
   instead of a true delta. The upload itself still succeeds — Horizon's
   upsert path replaces events under an existing basename — so the
   source materializes correctly; treat the diff display as advisory
   until NMS-19810 is fixed upstream.
-- `onmsctl apply` and `source upload` work today: onmsctl sends
+- `onmsctl apply` and `event-source upload` work today: onmsctl sends
   `name="upload"` on every multipart part (NMS-19813 workaround).
 - `onmsctl apply` uploads `kind: EventSource` documents as
   `{metadata.name}.xml` (not `.events.xml`) so Horizon's naive filename
@@ -820,20 +823,20 @@ filename-stripper quirk client-side.
 
 ## Reference
 
-### `source convert`
+### `event-source convert`
 
-`source convert` parses each event against the local `EventSource`
+`event-source convert` parses each event against the local `EventSource`
 schema and emits findings on stderr. Example finding:
 
 ```
 EC004  error    event missing required field: uei
   At:   bad.events.xml:14:5  (event[3])
   Fix:  Add the required uei to the event in the source XML.
-  For the full rationale: onmsctl source convert --explain EC004
+  For the full rationale: onmsctl event-source convert --explain EC004
 ```
 
 **Finding codes.** `EC001`–`EC008` are stable across releases. Read any
-rule's rationale with `onmsctl source convert --explain <code>`.
+rule's rationale with `onmsctl event-source convert --explain <code>`.
 
 | Code | Severity | Meaning |
 |------|----------|---------|
@@ -867,7 +870,7 @@ The v0.1 modeling gaps (`<snmp>`, `<parameter>`, `<forward>`,
 elements (`<priority>`, `<autoaction>`, `<operaction>`, `<loggroup>`,
 vendor extensions) keep firing `EC001` until they're modeled too. For
 full fidelity today, keep the XML alongside the YAML and use
-`source upload`.
+`event-source upload`.
 
 `EC001` is **structural-only** — it does not detect attribute extensions
 on modeled elements or enum-value drift on modeled fields.
@@ -889,7 +892,7 @@ Symbolic input is case-insensitive on parse; the canonical YAML output
 is always lowercase. Anything else — unknown symbolic strings
 (`"problem"`, the alarmd Java alias) OR integers outside `{1, 2, 3}` —
 fails immediately. YAML inputs reject at deserialize time; eventconf
-XML inputs to `source convert` produce an `EC007` finding at Error
+XML inputs to `event-source convert` produce an `EC007` finding at Error
 severity (no YAML written, exit 2).
 
 #### `snmp`
@@ -1037,7 +1040,7 @@ onmsctl completion zsh > ~/.oh-my-zsh/custom/completions/_onmsctl
 ```
 
 Oh My Zsh does not pick up `$ZSH_CUSTOM/completions/` automatically.
-Add this to `~/.zshrc` above `source $ZSH/oh-my-zsh.sh`:
+Add this to `~/.zshrc` above `event-source $ZSH/oh-my-zsh.sh`:
 
 ```sh
 fpath=("$ZSH_CUSTOM/completions" $fpath)

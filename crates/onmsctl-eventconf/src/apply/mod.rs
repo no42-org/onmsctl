@@ -10,7 +10,7 @@
 //!     and validation.
 //!   - [`conversion`] — `EventSourceLocal` → wire-format `Event` DTO.
 //!   - [`from_wire`] — wire-format `Event` → `EventDef` (the inverse).
-//!     Drives the `source convert` migration path.
+//!     Drives the `event-source convert` migration path.
 //!   - [`diff`] — UEI-bucketed structured diff between local and
 //!     server-state shapes (see `design.md §5.3`).
 //!   - [`target`] — the server-state model + reconcile seams

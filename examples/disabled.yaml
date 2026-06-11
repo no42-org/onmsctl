@@ -1,7 +1,7 @@
 # Disabled EventSource. `apply` will upload the events (which the server
 # always enables), then issue a follow-up PATCH to disable the source.
 # A bounded enabled-flap window exists between those two requests; see
-# `onmsctl source apply --help` for details. Run with `--verbose` to
+# `onmsctl apply --help` for details. Run with `--verbose` to
 # see the flap warning on stderr.
 apiVersion: eventconf.opennms.org/v1
 kind: EventSource

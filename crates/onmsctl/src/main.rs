@@ -106,10 +106,11 @@ enum TopCmd {
     /// execute in order (stop-on-error by default; `--continue-on-error` to
     /// attempt all). Re-running the same input is the idempotent recovery path.
     Apply(ApplyArgs),
-    /// Manage eventconf sources.
-    #[command(subcommand, visible_alias = "src")]
+    /// Manage eventconf event sources.
+    #[command(subcommand, name = "event-source", visible_alias = "evtsrc")]
     Source(onmsctl_eventconf::cmd::SourceCmd),
-    /// Manage eventconf events.
+    /// Query eventconf event definitions — within one event source (`--source`)
+    /// or across all sources (`--uei` / `--vendor` / `--source-name`).
     #[command(subcommand, visible_alias = "evt")]
     Event(onmsctl_eventconf::cmd::EventCmd),
     /// Manage provisioning requisitions (GitOps + lifecycle verbs).

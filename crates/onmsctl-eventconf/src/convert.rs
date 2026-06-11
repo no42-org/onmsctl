@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//! XML → YAML conversion engine for the `source convert` migration command.
+//! XML → YAML conversion engine for the `event-source convert` migration command.
 //!
 //! Takes eventconf XML bytes and produces a [`ConversionResult`] carrying:
 //!   - The serialized YAML (if conversion succeeded enough to produce one)
@@ -12,7 +12,7 @@
 //!   - Coverage metrics (events scanned / converted / dropped)
 //!
 //! The engine is `pub` so the CLI layer (`cmd::source::Convert`) and the
-//! `source download --format yaml` path can both call it identically. The
+//! `event-source download --format yaml` path can both call it identically. The
 //! engine itself does **no I/O** — bytes in, structured result out.
 //!
 //! See the `source-convert-with-migration-report` OpenSpec change for the
@@ -502,8 +502,8 @@ pub fn convert(xml: &[u8], source_path: &Path, opts: &ConvertOpts) -> Conversion
                 },
                 suggested_fix: "These elements are not part of the local YAML schema and will be \
                     absent from the converted YAML. For full-fidelity round-tripping keep the \
-                    eventconf XML alongside the YAML and use `source upload`. Run \
-                    `onmsctl source convert --explain EC001` for the full rationale, or upgrade \
+                    eventconf XML alongside the YAML and use `event-source upload`. Run \
+                    `onmsctl event-source convert --explain EC001` for the full rationale, or upgrade \
                     `onmsctl` if these elements are modeled in a newer release."
                     .into(),
             });
@@ -809,7 +809,7 @@ fn field_name_for(err: WireToLocalError) -> &'static str {
 // -- explain() table -------------------------------------------------------
 
 /// Long-form explanation for a finding code. Returned by
-/// `onmsctl source convert --explain <code>`. Text is stable across patch
+/// `onmsctl event-source convert --explain <code>`. Text is stable across patch
 /// releases — wording may shift but the section structure does not.
 pub fn explain(code: FindingCode) -> &'static str {
     match code {
@@ -859,7 +859,7 @@ pub fn render_report_text(result: &ConversionResult) -> String {
             render_finding_details(&mut out, &f.details);
             out.push_str(&format!("    Fix: {}\n", f.suggested_fix));
             out.push_str(&format!(
-                "    For the full rationale: onmsctl source convert --explain {}\n",
+                "    For the full rationale: onmsctl event-source convert --explain {}\n",
                 f.code
             ));
         }
@@ -1854,7 +1854,7 @@ mod tests {
     fn explain_ec001_mentions_key_terms() {
         let text = explain(FindingCode::Ec001);
         // Per spec scenario: --explain EC001 mentions "unmodeled",
-        // "structural", and pointer to `source upload`.
+        // "structural", and pointer to `event-source upload`.
         assert!(
             text.contains("unmodeled"),
             "EC001 explainer must say 'unmodeled'"
@@ -1864,8 +1864,8 @@ mod tests {
             "EC001 explainer must describe its structural-only scope"
         );
         assert!(
-            text.contains("source upload"),
-            "EC001 explainer must point to the source upload fallback"
+            text.contains("event-source upload"),
+            "EC001 explainer must point to the event-source upload fallback"
         );
     }
 }

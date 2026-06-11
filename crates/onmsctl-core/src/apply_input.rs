@@ -10,7 +10,7 @@
 //! same three input shapes: a single file, a directory, or a glob
 //! pattern. This module owns the classification logic so per-
 //! capability copies can't drift. Provisioning's `requisition apply
-//! -f` and eventconf's `source apply -f` both call into
+//! -f` and eventconf's `apply -f` both call into
 //! [`resolve_apply_input`] with their extension filter.
 //!
 //! See `openspec/changes/harden-provisioning-and-eventconf-parity/design.md`

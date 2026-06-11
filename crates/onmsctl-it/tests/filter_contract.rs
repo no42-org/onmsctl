@@ -16,7 +16,7 @@
 //!
 //! If Horizon's controller changes its required-params posture or wrapper
 //! field name, one of these tests fails and the rename is caught here
-//! before users hit it in `source list` / `source apply`.
+//! before users hit it in `event-source list` / `apply`.
 
 use onmsctl_eventconf::{EventConfApi, EventFilter, EventInSourceFilter, SourceFilter};
 use onmsctl_it::harness_or_skip;

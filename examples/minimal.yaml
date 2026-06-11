@@ -1,10 +1,10 @@
-# Minimal EventSource — the smallest document that `onmsctl source apply`
+# Minimal EventSource — the smallest document that `onmsctl apply`
 # accepts. metadata.name MUST contain at least one '.' (the prefix before
 # the first '.' becomes the server-derived vendor: here, "vendor-example").
 #
 # Apply against a configured context:
 #
-#     onmsctl source apply -f examples/minimal.yaml --diff
+#     onmsctl apply -f examples/minimal.yaml --diff
 #
 apiVersion: eventconf.opennms.org/v1
 kind: EventSource
