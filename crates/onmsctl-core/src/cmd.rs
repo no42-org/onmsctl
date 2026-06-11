@@ -13,7 +13,7 @@
 //!
 //! Classification is defined by whether the variant would normally cause
 //! an HTTP mutation against the server. A command that only writes to
-//! local files (e.g. `source convert`, `source download`) is
+//! local files (e.g. `event-source convert`, `event-source download`) is
 //! [`CmdKind::Read`]; only commands that POST / PUT / PATCH / DELETE
 //! against the server are [`CmdKind::Write`]. Runtime flags such as
 //! `--dry-run` do not change the classification — the variant's *capability*

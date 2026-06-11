@@ -2,7 +2,7 @@ EC001 — Unmodeled element dropped on conversion
 
 Rule
 ----
-`onmsctl source convert` maintains an explicit allowlist of `<event>`
+`onmsctl event-source convert` maintains an explicit allowlist of `<event>`
 direct-child element names that the local YAML schema models and
 round-trips through `apply` cleanly. After typed deserialization,
 the converter performs a structural pass over the XML and, for every
@@ -48,8 +48,8 @@ How to fix
 
 2. KEEP THE XML — if upgrading isn't an option and you depend on the
    dropped element's behavior, keep the eventconf XML alongside the
-   YAML in git and use `onmsctl source upload <file.xml>` instead of
-   `source apply -f <file.yaml>`. The XML upload path is full-fidelity
+   YAML in git and use `onmsctl event-source upload <file.xml>` instead of
+   `apply -f <file.yaml>`. The XML upload path is full-fidelity
    and preserves elements `onmsctl`'s YAML schema doesn't model.
 
 3. FILE AN ISSUE — if the element name doesn't ring a bell or you

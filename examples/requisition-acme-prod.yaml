@@ -3,7 +3,7 @@
 # Composite kind: Requisition example covering every modeled field
 # (per task 10.4 of the add-provisioning-capability change).
 #
-# Pair with `onmsctl requisition apply -f examples/requisition-acme-prod.yaml
+# Pair with `onmsctl apply -f examples/requisition-acme-prod.yaml
 # --dry-run --diff` to see the structured diff against a live Horizon.
 apiVersion: provisioning.opennms.org/v1
 kind: Requisition

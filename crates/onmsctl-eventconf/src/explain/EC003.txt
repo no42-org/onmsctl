@@ -30,7 +30,7 @@ How to fix
    converting, or pass `--name <override>` to set the metadata.name
    explicitly:
 
-       onmsctl source convert eventconf.xml --name vendor.x.events
+       onmsctl event-source convert eventconf.xml --name vendor.x.events
 
 2. If the input is genuinely a master eventconf.xml file, do not convert
    it as a source. See EC002 for the relevant note about master-file

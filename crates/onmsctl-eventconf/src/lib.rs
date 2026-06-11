@@ -13,7 +13,7 @@
 //!   Event type with nested Mask/Logmsg/AlarmData/etc.).
 //! - [`xml::*`] — JSON Event ↔ eventconf XML conversion plus the
 //!   master-file synthesis and stable canonicalization functions.
-//! - [`cmd::*`] — clap subcommand definitions for `onmsctl source ...`
+//! - [`cmd::*`] — clap subcommand definitions for `onmsctl event-source ...`
 //!   and `onmsctl event ...`.
 //! - `TableRow` impls for the public DTOs so the binary's `-o table`
 //!   path renders them via comfy-table.

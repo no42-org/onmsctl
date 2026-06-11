@@ -1,9 +1,10 @@
-# Single Event payload for `onmsctl event add --source <id> -f <file>`.
+# Single Event payload — the JSON body for `POST /eventconf/sources/{id}/events`.
 #
 # This is NOT an EventSource document — it has no `apiVersion` / `kind` /
-# `spec` envelope. The fields below are posted directly to
-# `POST /eventconf/sources/{id}/events` and become a new event under the
-# named source.
+# `spec` envelope, and there is no imperative `event add` verb. The fields
+# below are posted directly to `POST /eventconf/sources/{id}/events` (e.g.
+# via curl) and become a new event under the named source. To manage events
+# declaratively, use an `EventSource` document with `onmsctl apply` instead.
 #
 # Field names are kebab-case (`event-label`, `alarm-data`, …) to match
 # Horizon's eventconf Event JSON shape; camelCase variants are rejected
@@ -15,10 +16,10 @@
 # names (uppercase), not the XML attribute values used in the
 # eventconf XML — this template intentionally omits those fields
 # until the wire-shape audit lands. For the full set of fields, push
-# the events via XML upload or `source apply` instead.
+# the events via XML upload or `onmsctl apply` instead.
 #
 # For the declarative full-source workflow, see `examples/full.yaml` and
-# `onmsctl source apply`.
+# `onmsctl apply`.
 uei: uei.opennms.org/example/customEvent
 event-label: Example custom event
 severity: Warning

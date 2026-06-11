@@ -66,8 +66,8 @@ $BIN version          # sanity-check the build before continuing (see §2)
 
 ### Known server-side quirks to expect (so results aren't misread as failures)
 
-- **NMS-19810** — `source list` can return empty even when sources exist. Use
-  `source names-and-ids` to verify eventconf state (the runbook already does).
+- **NMS-19810** — `event-source list` can return empty even when sources exist. Use
+  `event-source names-and-ids` to verify eventconf state (the runbook already does).
 - **NMS-19813** — the eventconf upload needs the `name="upload"` multipart
   workaround, which `onmsctl` applies automatically; a raw upload by other tools
   may 400. (This is the bug gating the v0.1.0 release.)
@@ -119,7 +119,7 @@ CFG="--config $RB/config.yaml"
 # Requisition convert — emits YAML + PR### findings on stderr.
 $BIN requisition convert --explain PR001          # prints rule rationale, exit 0
 # Source convert — emits EventSource YAML + EC### findings.
-$BIN source convert --explain EC001               # prints rule rationale, exit 0
+$BIN event-source convert --explain EC001               # prints rule rationale, exit 0
 ```
 **Pass:** both print rationale text and exit 0. (Convert runs with **no** config
 and **no** keyring — verify by adding `--config /no/such/file`; it still works.)
@@ -248,7 +248,7 @@ $BIN apply -f "$DESIRED/" -o table; echo "exit=$?"
 each row `Created`; exit **0**. Verify:
 ```sh
 $BIN iam user get onmsctl-rb-user
-$BIN source names-and-ids | grep onmsctl-rb     # source list may be empty (NMS-19810); use names-and-ids
+$BIN event-source names-and-ids | grep onmsctl-rb     # source list may be empty (NMS-19810); use names-and-ids
 $BIN requisition get onmsctl-rb-req 2>/dev/null || $BIN requisition status onmsctl-rb-req
 ```
 
@@ -317,12 +317,12 @@ Mutation moved to `apply -f`; these are the verbs that stay imperative.
 ### 6.1 eventconf
 
 ```sh
-$BIN source names-and-ids                 # {id,name} listing (works despite NMS-19810)
-$BIN source get <id>                      # one source
-$BIN source download <id> -O /tmp/rb.xml  # raw eventconf XML
-$BIN source upload /tmp/rb.xml            # raw upload round-trip
+$BIN event-source names-and-ids                 # {id,name} listing (works despite NMS-19810)
+$BIN event-source get <id>                      # one source
+$BIN event-source download <id> -O /tmp/rb.xml  # raw eventconf XML
+$BIN event-source upload /tmp/rb.xml            # raw upload round-trip
 $BIN event list --source <id>             # events for a source (read-only)
-$BIN source delete <id>                   # explicit delete (kept)
+$BIN event-source delete <id>                   # explicit delete (kept)
 ```
 
 ### 6.2 provisioning
@@ -361,7 +361,7 @@ $BIN iam user delete onmsctl-rb-user --yes
 
 ```sh
 $BIN requisition apply -f x.yaml   2>&1 | head -1   # expect: unrecognized subcommand
-$BIN source apply -f x.yaml        2>&1 | head -1   # expect: unrecognized subcommand
+$BIN event-source apply -f x.yaml        2>&1 | head -1   # expect: unrecognized subcommand
 $BIN iam apply -f x.yaml           2>&1 | head -1   # expect: unrecognized subcommand
 $BIN iam user create alice         2>&1 | head -1   # expect: unrecognized subcommand
 ```
@@ -382,7 +382,7 @@ $BIN iam user create alice         2>&1 | head -1   # expect: unrecognized subco
 
 ```sh
 # Transport example (exit 4/5): unreachable host.
-$BIN --url http://10.255.255.1:9/opennms --user x source names-and-ids; echo "exit=$?"
+$BIN --url http://10.255.255.1:9/opennms --user x event-source names-and-ids; echo "exit=$?"
 ```
 
 ---
@@ -397,13 +397,13 @@ done
 $BIN iam user list -o json 2>/dev/null | grep -o 'onmsctl-rb[^"]*' | sort -u | while read u; do
   $BIN iam user delete "$u" --yes
 done
-$BIN source names-and-ids -o json 2>/dev/null \
+$BIN event-source names-and-ids -o json 2>/dev/null \
   | python3 -c 'import sys,json;[print(s["id"]) for s in json.load(sys.stdin) if s["name"].startswith("onmsctl-rb")]' \
-  | while read id; do $BIN source delete "$id"; done
+  | while read id; do $BIN event-source delete "$id"; done
 
 # Local temp dirs.
 rm -rf "$RB" "$DESIRED"
 ```
 
-**Done** when `requisition list`, `iam user list`, and `source names-and-ids`
+**Done** when `requisition list`, `iam user list`, and `event-source names-and-ids`
 show no `onmsctl-rb-*` entries.

@@ -163,7 +163,7 @@ pub(crate) fn byte_offset_to_line_col(input: &[u8], offset: usize) -> (usize, us
 }
 
 /// Direct-child element names under `<event>` whose content is preserved
-/// all the way through the `source convert` pipeline into the emitted
+/// all the way through the `event-source convert` pipeline into the emitted
 /// YAML. Anything under `<event>` that is NOT in this list is
 /// "unmodeled" — `convert.rs` emits an `EC001` warning for each event
 /// that contains such elements.
@@ -172,7 +172,7 @@ pub(crate) fn byte_offset_to_line_col(input: &[u8], offset: usize) -> (usize, us
 /// (`XmlEvent`) may model elements that the local YAML schema
 /// (`EventDef`) does not — `<snmp>` is the canonical example pre-
 /// `event-source-snmp`: the XML round-trip carries it through
-/// `source upload`, but `source convert` drops the content at the
+/// `event-source upload`, but `event-source convert` drops the content at the
 /// `EventDef::try_from(&Event)` boundary. Such elements stay OUT of
 /// this allowlist until the corresponding `event-source-*` change
 /// also models them in `EventDef`.

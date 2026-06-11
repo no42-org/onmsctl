@@ -29,7 +29,7 @@
       "type": "object",
       "properties": {
         "alarmType": {
-          "description": "Alarm semantic. Strictly one of:\n  - `1` / `\"raise\"` — raises an alarm, paired with a Resolution\n    event. (Known as `Problem` in the alarmd Java code.)\n  - `2` / `\"resolution\"` — clears a paired Raise by `reductionKey`.\n  - `3` / `\"unresolvable\"` — Raise-class with no auto-clear from\n    the device. Common for hardware-failure traps.\n\nAnything else fails at parse (for YAML inputs) or surfaces as\n`EC007` during `source convert` (for downloaded XML that uses\nan unrecognized integer).",
+          "description": "Alarm semantic. Strictly one of:\n  - `1` / `\"raise\"` — raises an alarm, paired with a Resolution\n    event. (Known as `Problem` in the alarmd Java code.)\n  - `2` / `\"resolution\"` — clears a paired Raise by `reductionKey`.\n  - `3` / `\"unresolvable\"` — Raise-class with no auto-clear from\n    the device. Common for hardware-failure traps.\n\nAnything else fails at parse (for YAML inputs) or surfaces as\n`EC007` during `event-source convert` (for downloaded XML that uses\nan unrecognized integer).",
           "$ref": "#/$defs/AlarmType"
         },
         "autoClean": {
@@ -480,7 +480,7 @@
       "type": "object",
       "properties": {
         "expand": {
-          "description": "Whether eventd should expand `%parm[#N]%` placeholders in `value`\nat event-fire time. Absent on the wire when not set in the source\nYAML — the absent vs explicit `true`/`false` distinction\nround-trips through `source apply` / `source download`.",
+          "description": "Whether eventd should expand `%parm[#N]%` placeholders in `value`\nat event-fire time. Absent on the wire when not set in the source\nYAML — the absent vs explicit `true`/`false` distinction\nround-trips through `apply` / `event-source download`.",
           "type": [
             "boolean",
             "null"
@@ -502,7 +502,7 @@
       ]
     },
     "ScriptDef": {
-      "description": "Embedded executable logic. Mirrors the eventconf XSD's\n`<script language=\"beanshell\">body</script>`. eventd runs the body\nat event-fire time.\n\n**Security note.** Modeling this element in YAML makes it trivial\nto ship server-side code via `source apply`. The threat surface\nalready exists at the eventconf-XML upload path; this change does\nnot introduce new authority. Operators should ensure RBAC on\neventconf write access is appropriately scoped.",
+      "description": "Embedded executable logic. Mirrors the eventconf XSD's\n`<script language=\"beanshell\">body</script>`. eventd runs the body\nat event-fire time.\n\n**Security note.** Modeling this element in YAML makes it trivial\nto ship server-side code via `apply`. The threat surface\nalready exists at the eventconf-XML upload path; this change does\nnot introduce new authority. Operators should ensure RBAC on\neventconf write access is appropriately scoped.",
       "type": "object",
       "properties": {
         "body": {

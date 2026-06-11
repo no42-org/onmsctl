@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//! `onmsctl source ...` subcommands.
+//! `onmsctl event-source ...` subcommands.
 //!
 //! Each variant corresponds to one or more REST endpoints in
 //! `EventConfApi`. The handlers wire flag inputs to API calls and stream
@@ -73,10 +73,10 @@ pub enum SourceCmd {
     /// The XML is the authoritative form; `download → edit → apply` may
     /// drop server-only fields that the local YAML schema doesn't
     /// model. For lossless round-trips, edit the XML directly and
-    /// re-upload via `source upload`.
+    /// re-upload via `event-source upload`.
     ///
     /// With `--format yaml`, the downloaded XML is piped through
-    /// `source convert` and the EventSource YAML is emitted instead.
+    /// `event-source convert` and the EventSource YAML is emitted instead.
     /// Findings (if any) go to stderr just like standalone convert.
     /// Conversion exit codes (1 = warnings, 2 = blocking) propagate to
     /// the process exit code.
@@ -426,7 +426,7 @@ impl SourceCmd {
     }
 }
 
-/// Parsed shape of `onmsctl source convert ...` arguments. Aggregated
+/// Parsed shape of `onmsctl event-source convert ...` arguments. Aggregated
 /// into a struct so the dispatcher and the runner pass the same shape.
 struct ConvertCli {
     inputs: Vec<PathBuf>,
@@ -440,7 +440,7 @@ struct ConvertCli {
     explain: Option<String>,
 }
 
-/// Run `source convert`. Pure local file transform; the eventconf API is
+/// Run `event-source convert`. Pure local file transform; the eventconf API is
 /// not touched. Returns the exit code (0/1/2/3) that the dispatcher
 /// passes to `std::process::exit` only when non-zero — exit code `0`
 /// returns cleanly so destructors run normally.
@@ -550,7 +550,7 @@ fn run_convert(args: ConvertCli) -> Result<i32> {
     Ok(worst_exit)
 }
 
-/// Read a `source convert` input. Caps input at `max_bytes` for both
+/// Read a `event-source convert` input. Caps input at `max_bytes` for both
 /// stdin and file paths. Truncation is **loud** — over-cap inputs error
 /// out before any allocation or downstream parse attempt.
 fn read_input_bytes(path: &Path, max_bytes: u64) -> Result<Vec<u8>> {

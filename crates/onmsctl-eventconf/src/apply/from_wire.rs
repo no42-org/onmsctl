@@ -60,7 +60,7 @@ pub enum WireToLocalError {
     AlarmDataMissingAlarmType,
     /// Event has an `alarm-data` `alarm-type` whose integer value is
     /// outside the accepted set `{1, 2, 3}`. Surfaced as `EC007`
-    /// (Error severity) during `source convert`.
+    /// (Error severity) during `event-source convert`.
     AlarmDataAlarmTypeOutOfRange { value: i32 },
     /// Event has a logmsg child but the inner text is empty / absent.
     LogmsgMissingContent,
