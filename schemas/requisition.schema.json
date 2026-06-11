@@ -148,6 +148,13 @@
         },
         "label": {
           "type": "string"
+        },
+        "location": {
+          "description": "Monitoring (Minion) location that polls this node. Maps to the requisition node's `location` attribute. Omit/empty = Default location.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [

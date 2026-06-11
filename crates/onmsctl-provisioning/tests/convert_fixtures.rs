@@ -136,12 +136,12 @@ fn clean_fixture_without_fs_emits_only_pr004_info() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn unmodeled_elements_fixture_raises_seven_pr001s() {
+fn unmodeled_elements_fixture_raises_six_pr001s() {
     // The fixture deliberately uses every known-unmodeled field in
-    // a single node + interface + service. Catalog (per
-    // flag_unmodeled): @location, @city, node-<meta-data>,
-    // interface.@status, interface.@descr, interface-<meta-data>,
-    // service-<meta-data> = 7 total.
+    // a single node + interface + service. `@location` is a modeled
+    // field now (promoted in convert_node), so the catalog (per
+    // flag_unmodeled) is: @city, node-<meta-data>, interface.@status,
+    // interface.@descr, interface-<meta-data>, service-<meta-data> = 6.
     let r = convert_requisition_xml(UNMODELED_REQ, None, None).unwrap();
     let pr001s: Vec<_> = r
         .findings
@@ -150,11 +150,13 @@ fn unmodeled_elements_fixture_raises_seven_pr001s() {
         .collect();
     assert_eq!(
         pr001s.len(),
-        7,
-        "expected exactly 7 PR001 findings for the catalog of unmodeled fields, got {}: {:#?}",
+        6,
+        "expected exactly 6 PR001 findings for the catalog of unmodeled fields, got {}: {:#?}",
         pr001s.len(),
         pr001s
     );
+    // `@location` is modeled and must not raise PR001.
+    assert!(!pr001s.iter().any(|f| f.message.contains("'location'")));
     // Warnings present → exit code 1 (PR004 also fires as Info but
     // doesn't bump the exit code further).
     assert_eq!(r.exit_code(), 1);

@@ -42,6 +42,10 @@ spec:
   nodes:
     - foreignId: web01
       label: web01.acme.com
+      # Monitoring (Minion) location that polls this node. Omit or leave
+      # empty for the Default location. Maps to the requisition node's
+      # `location` attribute in Horizon.
+      location: labmonkeys-hq
       interfaces:
         - ip: 10.0.0.1
           snmpPrimary: P
