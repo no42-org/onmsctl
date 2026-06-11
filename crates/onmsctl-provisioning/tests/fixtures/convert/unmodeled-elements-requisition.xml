@@ -3,9 +3,11 @@
   Edge-case fixture (task 8.7): exercises every known-unmodeled
   attribute / element so that flag_unmodeled raises one PR001 per
   field. The catalog covered here:
-    - node.@location, @city
+    - node.@city
     - interface.@status, @descr
     - node.<meta-data>, interface.<meta-data>, service.<meta-data>
+  node.@location is present too, but it is a modeled field now
+  (promoted in convert_node) and must NOT raise a PR001.
 -->
 <model-import foreign-source="legacy-site">
   <node foreign-id="web01"

@@ -52,6 +52,19 @@ where
     Ok(s)
 }
 
+/// Deserialize an optional `String`, mapping an explicit empty string to
+/// `None`. Used for `node.location` so the schema's "omit/empty = Default
+/// location" contract holds: a `location: ""` parses as absent, which keeps
+/// the wire body free of a `location` attribute and prevents a spurious diff
+/// against a server that reports an unset location as `null`.
+fn deserialize_optional_non_empty<'de, D>(d: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let opt = Option::<String>::deserialize(d)?;
+    Ok(opt.filter(|s| !s.is_empty()))
+}
+
 /// Deserialize `spec.nodes` and reject structural collisions:
 ///
 /// 1. Duplicate `foreignId` across nodes (would silently overwrite at apply time).
@@ -368,6 +381,19 @@ pub struct Node {
     pub foreign_id: String,
     #[serde(deserialize_with = "deserialize_non_empty")]
     pub label: String,
+    /// Monitoring (Minion) location that polls this node. Maps to the
+    /// requisition node's `location` attribute. Omit/empty = Default
+    /// location. An explicit empty string is coerced to `None` at parse
+    /// so it is byte-equivalent to omission.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_empty",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(
+        description = "Monitoring (Minion) location that polls this node. Maps to the requisition node's `location` attribute. Omit/empty = Default location."
+    )]
+    pub location: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub interfaces: Vec<Interface>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -668,6 +694,51 @@ spec:
         assert!(
             msg.contains("unknown variant") && msg.contains("Primary"),
             "expected an 'unknown variant `Primary`'-style error, got: {msg}"
+        );
+    }
+
+    // -- Node location (issue #18) -----------------------------------------
+
+    #[test]
+    fn node_location_present_omitted_and_empty() {
+        fn loc(yaml_line: &str) -> Option<String> {
+            let yaml = format!(
+                "apiVersion: provisioning.opennms.org/v1\n\
+                 kind: Requisition\n\
+                 metadata:\n  name: acme-prod\n\
+                 spec:\n  nodes:\n    - foreignId: web01\n      label: w\n{yaml_line}"
+            );
+            parse(&yaml).expect("parses").spec.nodes[0].location.clone()
+        }
+
+        // Present → Some.
+        assert_eq!(
+            loc("      location: labmonkeys-hq\n"),
+            Some("labmonkeys-hq".to_string())
+        );
+        // Omitted → None.
+        assert_eq!(loc(""), None);
+        // Empty string → coerced to None (D2: "omit/empty = Default").
+        assert_eq!(loc("      location: \"\"\n"), None);
+    }
+
+    #[test]
+    fn node_without_location_serializes_without_the_key() {
+        let yaml = r#"
+apiVersion: provisioning.opennms.org/v1
+kind: Requisition
+metadata:
+  name: acme-prod
+spec:
+  nodes:
+    - foreignId: web01
+      label: w
+"#;
+        let doc = parse(yaml).expect("parses");
+        let out = serde_norway::to_string(&doc).expect("serializes");
+        assert!(
+            !out.contains("location"),
+            "absent location must not serialize a key; got:\n{out}"
         );
     }
 

@@ -190,7 +190,7 @@ fn build_local(
 ) -> RequisitionLocal {
     // PR001 surfaces XML content that exists in the source but has
     // no place in the local model — both the enumerated catalog
-    // (node.@location / @city / @status / @descr / <meta-data>) AND
+    // (node.@city / interface.@status / @descr / <meta-data>) AND
     // arbitrary custom attrs / child elements captured by the
     // `#[serde(flatten)] extras` on each XML DTO. The data is
     // recorded in a nested `serde_norway::Mapping` (no flat dotted
@@ -227,6 +227,9 @@ fn convert_node(n: &NodeXml) -> Node {
     Node {
         foreign_id: n.foreign_id.clone(),
         label: n.node_label.clone(),
+        // `location` is a modeled field — promote it out of the
+        // unmodeled annotation. An empty attribute coerces to None.
+        location: n.location.clone().filter(|s| !s.is_empty()),
         interfaces: n.interfaces.iter().map(convert_interface).collect(),
         categories: n.categories.iter().map(|c| c.name.clone()).collect(),
         assets,
@@ -294,16 +297,17 @@ fn convert_parameter(p: &ParameterXml) -> Parameter {
 /// unmodeled content:
 ///
 /// 1. **Enumerated catalog**: known-but-unmodeled fields on the
-///    typed XML DTOs (`node.@location`, `@city`, `interface.@status`,
+///    typed XML DTOs (`node.@city`, `interface.@status`,
 ///    `@descr`, all `<meta-data>` elements). PR001 finding text
-///    names each.
+///    names each. (`node.@location` is a modeled field and is
+///    promoted in `convert_node`, not recorded here.)
 /// 2. **Extras passthrough**: anything captured by the
 ///    `#[serde(flatten)] extras` field on each XML DTO — custom
 ///    vendor attrs, unknown child elements, future Horizon
 ///    additions. PR001 finding text names each.
 ///
-/// Annotation keys are XML-attribute-prefix-stripped (`@location` →
-/// `location`) so operators reading the YAML don't have to know
+/// Annotation keys are XML-attribute-prefix-stripped (`@city` →
+/// `city`) so operators reading the YAML don't have to know
 /// about XML's `@` convention. Catalog keys take precedence over
 /// extras when names collide (the catalog is the documented contract;
 /// extras would otherwise duplicate it).
@@ -327,22 +331,8 @@ fn flag_unmodeled(
     let mut nodes_map = serde_norway::Mapping::new();
     for n in &req.nodes {
         let mut node_map = serde_norway::Mapping::new();
-        if let Some(loc) = n.location.as_deref() {
-            findings.push(
-                Finding::new(
-                    FindingCode::Pr001,
-                    format!(
-                        "node '{}': 'location' is not modeled in YAML (preserved as annotation)",
-                        n.foreign_id
-                    ),
-                )
-                .opt_source(src),
-            );
-            node_map.insert(
-                "location".into(),
-                serde_norway::Value::String(loc.to_string()),
-            );
-        }
+        // `location` is now a modeled field (promoted in `convert_node`);
+        // it is no longer captured as unmodeled here.
         if let Some(city) = n.city.as_deref() {
             findings.push(
                 Finding::new(
@@ -720,24 +710,25 @@ mod tests {
             .iter()
             .filter(|f| f.code == FindingCode::Pr001)
             .collect();
-        // Expected catalog findings (REQ_WITH_UNMODELED in this file):
-        //   1. node 'web01' @location
-        //   2. node 'web01' @city
-        //   3. node 'web01' <meta-data> (1 entry)
-        //   4. interface 10.0.0.1 @status
-        //   5. interface 10.0.0.1 @descr
-        //   6. interface 10.0.0.1 <meta-data> (1 entry)
-        // No service-level <meta-data> in the fixture. Total = 6.
+        // Expected catalog findings (REQ_WITH_UNMODELED in this file).
+        // `@location` is now a modeled field and no longer raises PR001:
+        //   1. node 'web01' @city
+        //   2. node 'web01' <meta-data> (1 entry)
+        //   3. interface 10.0.0.1 @status
+        //   4. interface 10.0.0.1 @descr
+        //   5. interface 10.0.0.1 <meta-data> (1 entry)
+        // No service-level <meta-data> in the fixture. Total = 5.
         assert_eq!(
             pr001s.len(),
-            6,
-            "expected exactly 6 PR001 findings, got {}: {:#?}",
+            5,
+            "expected exactly 5 PR001 findings, got {}: {:#?}",
             pr001s.len(),
             pr001s
         );
+        // `location` is modeled — it must NOT raise a PR001.
+        assert!(!pr001s.iter().any(|f| f.message.contains("'location'")));
         // Spot-check the categorization (messages now show stripped
         // YAML keys, not the XML `@` prefix).
-        assert!(pr001s.iter().any(|f| f.message.contains("'location'")));
         assert!(pr001s.iter().any(|f| f.message.contains("'city'")));
         assert!(pr001s.iter().any(|f| f.message.contains("'status'")));
         assert!(pr001s.iter().any(|f| f.message.contains("'descr'")));
@@ -759,13 +750,35 @@ mod tests {
         // string-match brittle YAML formatter output.
         let parsed: serde_norway::Value =
             serde_norway::from_str(yaml).expect("emitted yaml round-trips");
+
+        // `location` is a modeled field — it lands on the node itself,
+        // NOT in the unmodeled annotation.
+        let modeled_nodes = parsed
+            .get("spec")
+            .and_then(|s| s.get("nodes"))
+            .and_then(|n| n.as_sequence())
+            .expect("spec.nodes present");
+        let modeled_web01 = modeled_nodes
+            .iter()
+            .find(|n| n.get("foreignId").and_then(|v| v.as_str()) == Some("web01"))
+            .expect("web01 modeled node present");
+        assert_eq!(
+            modeled_web01.get("location").and_then(|v| v.as_str()),
+            Some("HQ"),
+            "location must be a modeled field"
+        );
+
         let unmodeled = parsed
             .get("metadata")
             .and_then(|m| m.get("x-onmsctl-unmodeled"))
             .expect("x-onmsctl-unmodeled present on metadata");
         let nodes = unmodeled.get("nodes").expect("nodes key present");
         let web01 = nodes.get("web01").expect("web01 node entry present");
-        assert_eq!(web01.get("location").and_then(|v| v.as_str()), Some("HQ"));
+        // location is NOT in the annotation anymore.
+        assert!(
+            web01.get("location").is_none(),
+            "location must not be captured in the unmodeled annotation"
+        );
         assert_eq!(web01.get("city").and_then(|v| v.as_str()), Some("NYC"));
         let node_md = web01
             .get("meta-data")
@@ -836,8 +849,23 @@ mod tests {
             web01.get("legacy-tag").and_then(|v| v.as_str()),
             Some("tag-1")
         );
-        // Catalog field also preserved (location).
-        assert_eq!(web01.get("location").and_then(|v| v.as_str()), Some("HQ"));
+        // `location` is modeled now — it lands on the node, not the
+        // annotation.
+        assert!(web01.get("location").is_none());
+        let modeled_web01 = parsed
+            .get("spec")
+            .and_then(|s| s.get("nodes"))
+            .and_then(|n| n.as_sequence())
+            .and_then(|nodes| {
+                nodes
+                    .iter()
+                    .find(|n| n.get("foreignId").and_then(|v| v.as_str()) == Some("web01.acme.com"))
+            })
+            .expect("web01.acme.com modeled node present");
+        assert_eq!(
+            modeled_web01.get("location").and_then(|v| v.as_str()),
+            Some("HQ")
+        );
 
         // Interface-level extras passthrough.
         let ifaces = web01
@@ -876,6 +904,49 @@ mod tests {
         assert!(
             !yaml.contains("x-onmsctl-unmodeled"),
             "annotation should be absent for clean input, got:\n{yaml}"
+        );
+    }
+
+    #[test]
+    fn convert_promotes_location_to_modeled_field() {
+        // Issue #18: node @location becomes a modeled field, not an
+        // unmodeled annotation entry, and raises no PR001.
+        const REQ: &str = r#"<?xml version="1.0"?>
+<model-import foreign-source="acme">
+  <node foreign-id="web01" node-label="web01" location="DataCenterEast">
+    <interface ip-addr="10.0.0.1" snmp-primary="P"/>
+  </node>
+</model-import>"#;
+        let r = convert_requisition_xml(REQ, None, None).unwrap();
+        // No PR001 for location.
+        assert!(
+            !r.findings
+                .iter()
+                .any(|f| f.code == FindingCode::Pr001 && f.message.contains("location")),
+            "location must not raise PR001; got: {:#?}",
+            r.findings
+        );
+        let yaml = r.yaml.as_ref().expect("yaml emitted");
+        let parsed: serde_norway::Value = serde_norway::from_str(yaml).unwrap();
+        // Modeled field on the node.
+        let node = &parsed
+            .get("spec")
+            .unwrap()
+            .get("nodes")
+            .unwrap()
+            .as_sequence()
+            .unwrap()[0];
+        assert_eq!(
+            node.get("location").and_then(|v| v.as_str()),
+            Some("DataCenterEast")
+        );
+        // Not in the annotation (which is absent entirely here).
+        assert!(
+            parsed
+                .get("metadata")
+                .and_then(|m| m.get("x-onmsctl-unmodeled"))
+                .is_none(),
+            "location-only node must produce no unmodeled annotation; got:\n{yaml}"
         );
     }
 

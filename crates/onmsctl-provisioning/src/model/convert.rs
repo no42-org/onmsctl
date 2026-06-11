@@ -111,6 +111,9 @@ fn node_from_wire(n: &NodeServer) -> Node {
     Node {
         foreign_id: n.foreign_id.clone(),
         label: n.node_label.clone(),
+        // Carry the deployed location into the diff baseline so an
+        // unchanged location re-applies as a no-op (idempotency).
+        location: n.location.clone(),
         interfaces: n.interface.iter().map(interface_from_wire).collect(),
         categories: n.category.iter().map(|c| c.name.clone()).collect(),
         assets,
@@ -207,10 +210,13 @@ fn node_to_wire(n: &Node) -> NodeServer {
     NodeServer {
         foreign_id: n.foreign_id.clone(),
         node_label: n.label.clone(),
-        // Unmodeled-locally fields default to null/empty on POST.
-        // Horizon fills server-managed values; foreign data the
+        // Emit the modeled monitoring location when present; an unset
+        // location stays absent on the wire (skip_serializing_if on the
+        // wire DTO) so existing requisitions remain byte-stable / Default.
+        location: n.location.clone(),
+        // Remaining unmodeled-locally fields default to null/empty on
+        // POST. Horizon fills server-managed values; foreign data the
         // operator didn't author isn't ours to invent.
-        location: None,
         building: None,
         city: None,
         parent_foreign_source: None,
@@ -482,6 +488,79 @@ spec:
         assert_eq!(round_fs.detectors.len(), fs.detectors.len());
         assert_eq!(round_fs.policies.len(), fs.policies.len());
         assert_eq!(round_fs.scan_interval, fs.scan_interval);
+    }
+
+    // -- Node location (issue #18) ---------------------------------------
+
+    #[test]
+    fn location_is_emitted_on_the_wire_when_present() {
+        let yaml = r#"
+apiVersion: provisioning.opennms.org/v1
+kind: Requisition
+metadata: { name: acme-prod }
+spec:
+  nodes:
+    - foreignId: bbone-sw01
+      label: bbone-sw01
+      location: labmonkeys-hq
+"#;
+        let local: RequisitionLocal = serde_norway::from_str(yaml).expect("YAML parses");
+        let (req, _fs) = requisition_to_wire(&local);
+        assert_eq!(req.node[0].location.as_deref(), Some("labmonkeys-hq"));
+    }
+
+    #[test]
+    fn absent_location_is_byte_stable_on_the_wire() {
+        // Acceptance criterion #3: a requisition with no location on any
+        // node produces a POST body with no `location` key at all.
+        let yaml = r#"
+apiVersion: provisioning.opennms.org/v1
+kind: Requisition
+metadata: { name: acme-prod }
+spec:
+  nodes:
+    - foreignId: web01
+      label: w
+"#;
+        let local: RequisitionLocal = serde_norway::from_str(yaml).expect("YAML parses");
+        let (req, _fs) = requisition_to_wire(&local);
+        assert!(req.node[0].location.is_none());
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(
+            !json.contains("location"),
+            "absent location must not appear in the POST body; got: {json}"
+        );
+    }
+
+    #[test]
+    fn location_round_trips_through_wire_and_is_idempotent() {
+        // Acceptance criterion #2: the deployed location flows back into
+        // the diff baseline, so re-applying the same document is a no-op.
+        let yaml = r#"
+apiVersion: provisioning.opennms.org/v1
+kind: Requisition
+metadata: { name: acme-prod }
+spec:
+  nodes:
+    - foreignId: bbone-sw01
+      label: bbone-sw01
+      location: labmonkeys-hq
+"#;
+        let local: RequisitionLocal = serde_norway::from_str(yaml).expect("YAML parses");
+        let (req, _fs) = requisition_to_wire(&local);
+
+        // Simulate the server echoing the requisition back on GET, then
+        // build the remote baseline the diff path would compare against.
+        let remote = requisition_from_wire(&req, None);
+        assert_eq!(
+            remote.spec.nodes[0].location.as_deref(),
+            Some("labmonkeys-hq")
+        );
+        assert_eq!(
+            crate::diff::l1_compare(&local, &remote),
+            crate::diff::L1Result::Unchanged,
+            "re-applying an unchanged location must be a no-op"
+        );
     }
 
     #[test]

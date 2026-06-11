@@ -384,6 +384,7 @@ const STATIC_NAMES: &[&str] = &[
     "nodes",
     "foreignId",
     "label",
+    "location",
     "interfaces",
     "categories",
     "assets",
@@ -834,6 +835,31 @@ mod tests {
                 "{p} should be scan-irrelevant"
             );
         }
+    }
+
+    #[test]
+    fn location_change_is_scan_relevant_and_diffs() {
+        // Issue #18 / decision D3: a monitoring-location change rebinds
+        // the node's Minion poller, so it classifies as scan-relevant
+        // (NOT added to the IRRELEVANT list — it falls through to the
+        // conservative default) and a location-only edit produces a diff.
+        assert_eq!(
+            classify_leaf("spec.nodes[*].location"),
+            ScanRelevance::Relevant
+        );
+
+        let a = doc("  nodes:\n    - foreignId: web01\n      label: w\n      location: hq\n");
+        let b = doc("  nodes:\n    - foreignId: web01\n      label: w\n");
+        assert_ne!(canonicalize(&a), canonicalize(&b));
+        let d = diff_requisition(&a, &b);
+        assert_eq!(d.nodes_modified.len(), 1);
+        assert!(
+            d.nodes_modified[0]
+                .leaves
+                .iter()
+                .any(|c| c.path.ends_with(".location"))
+        );
+        assert!(aggregate_rescan_decision(d.iter_paths()));
     }
 
     #[test]
