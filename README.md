@@ -302,6 +302,33 @@ diff display flags changes the upload would make. `--dry-run` is safe
 for any branch; `apply` itself is idempotent (Horizon's upsert
 path replaces events under an existing basename).
 
+### Export deployed sources back to YAML
+
+The reverse of `apply`: snapshot server-side event sources as
+`kind: EventSource` YAML for git-managed sync (the eventconf twin of
+`requisition export`).
+
+```sh
+# One source (by numeric id or exact name) to stdout
+onmsctl event-source export cisco.foo
+
+# One source to a directory (single <name>.yaml file)
+onmsctl event-source export cisco.foo --out ./sources/
+
+# Every source, one <name>.yaml file each
+onmsctl event-source export --out ./sources/
+```
+
+Both `event-source export` and `event-source download` accept a selector
+that is either a numeric **id** or an exact source **name**, and `--out`
+works with or without a selector. Because the server only emits XML, export
+runs each source through the `convert` migrator — the same `EC###` findings
+apply (to stderr). Bulk export is **continue-on-error**: sources that convert
+are written (warnings included), blocking ones are skipped, a source that
+fails to download is reported and counted, and the process exits with the
+highest severity observed. `--out` is all-or-nothing — every target filename
+is validated before any file is written.
+
 ### Editor integration
 
 JSON Schemas (draft 2020-12) live under [`schemas/`](schemas/), one per
