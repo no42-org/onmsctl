@@ -18,6 +18,7 @@ onmsctl-core = { workspace = true }
 onmsctl-eventconf = { workspace = true }
 onmsctl-iam = { workspace = true }
 onmsctl-provisioning = { workspace = true }
+onmsctl-snmp = { workspace = true }
 clap = { workspace = true }
 clap_complete = { workspace = true }
 tokio = { workspace = true }

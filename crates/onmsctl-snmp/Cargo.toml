@@ -15,9 +15,12 @@ publish = false
 onmsctl-core = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_norway = { workspace = true }
 schemars = { workspace = true }
 zeroize = { workspace = true }
+async-trait = { workspace = true }
 
 [dev-dependencies]
-serde_norway = { workspace = true }
 tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+wiremock = "0.6"

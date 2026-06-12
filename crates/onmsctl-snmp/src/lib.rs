@@ -10,10 +10,15 @@
 //! `kind: SnmpConfig` document, reconciled by whole-config replace. See the
 //! `add-snmp-config-capability` OpenSpec change for the design.
 //!
-//! This first increment carries the **wire-format DTOs** ([`server`]) mirrored
-//! from the v2 JAXB/Jackson types. The local model, conversions, apply handler,
-//! and the `export` / `lookup` verbs land in subsequent increments.
+//! The crate carries the wire-format DTOs ([`server`]), the local model
+//! ([`model`]) with client-side secret references ([`secret`]), the
+//! conversions ([`convert`]) and secret-free idempotency diff ([`diff`]), and
+//! the [`apply`] kind-handler that reconciles a `kind: SnmpConfig` document via
+//! whole-config replace over [`api`]. The `export` / `lookup` verbs land in a
+//! subsequent increment.
 
+pub mod api;
+pub mod apply;
 pub mod convert;
 pub mod diff;
 pub mod model;

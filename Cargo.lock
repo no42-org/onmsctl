@@ -979,6 +979,7 @@ dependencies = [
  "onmsctl-eventconf",
  "onmsctl-iam",
  "onmsctl-provisioning",
+ "onmsctl-snmp",
  "serde",
  "serde_norway",
  "tempfile",
@@ -1083,12 +1084,15 @@ dependencies = [
 name = "onmsctl-snmp"
 version = "0.0.2"
 dependencies = [
+ "async-trait",
  "onmsctl-core",
  "schemars",
  "serde",
  "serde_json",
  "serde_norway",
  "tempfile",
+ "tokio",
+ "wiremock",
  "zeroize",
 ]
 

@@ -15,12 +15,13 @@
 
 use onmsctl_core::Registry;
 use onmsctl_core::kind::precedence::{
-    RANK_EVENT_SOURCE, RANK_REQUISITION, RANK_USER, ranks_are_total_order,
+    RANK_EVENT_SOURCE, RANK_REQUISITION, RANK_SNMP_CONFIG, RANK_USER, ranks_are_total_order,
 };
 
 use onmsctl_eventconf::apply::EventSourceHandler;
 use onmsctl_iam::apply::UserHandler;
 use onmsctl_provisioning::apply::ProvisioningHandler;
+use onmsctl_snmp::apply::SnmpConfigHandler;
 
 /// Build the populated kind registry: every supported `kind` mapped to its
 /// handler and static precedence rank.
@@ -35,6 +36,7 @@ pub fn build() -> Registry {
     let mut reg = Registry::new();
     reg.register(RANK_USER, Box::new(UserHandler));
     reg.register(RANK_EVENT_SOURCE, Box::new(EventSourceHandler));
+    reg.register(RANK_SNMP_CONFIG, Box::new(SnmpConfigHandler));
     reg.register(RANK_REQUISITION, Box::new(ProvisioningHandler));
 
     let ranks: Vec<(&str, u32)> = reg
@@ -56,13 +58,14 @@ mod tests {
     use onmsctl_core::KindHandler;
 
     #[test]
-    fn build_registers_all_three_kinds_at_their_canonical_ranks() {
+    fn build_registers_all_kinds_at_their_canonical_ranks() {
         let reg = build();
-        assert_eq!(reg.len(), 3, "exactly the three v0.1 kinds are wired");
+        assert_eq!(reg.len(), 4, "exactly the wired kinds are present");
         // Key off each handler's own `kind()` so the test can't drift from the
         // registration site if a KIND constant changes.
         assert_eq!(reg.rank(UserHandler.kind()), Some(RANK_USER));
         assert_eq!(reg.rank(EventSourceHandler.kind()), Some(RANK_EVENT_SOURCE));
+        assert_eq!(reg.rank(SnmpConfigHandler.kind()), Some(RANK_SNMP_CONFIG));
         assert_eq!(reg.rank(ProvisioningHandler.kind()), Some(RANK_REQUISITION));
     }
 }

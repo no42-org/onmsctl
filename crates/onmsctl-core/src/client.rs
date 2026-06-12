@@ -92,6 +92,19 @@ impl MultipartPart {
             body: body.into(),
         }
     }
+
+    /// A JSON part. `/snmp-config/upload` is a multipart `Attachment` like
+    /// `/eventconf/upload`, but its body is the `SnmpConfig` JSON rather than
+    /// XML. The field name stays `"upload"` for the same CXF
+    /// `@Multipart("upload")` compatibility reason as [`Self::xml`].
+    pub fn json(filename: impl Into<String>, body: impl Into<Vec<u8>>) -> Self {
+        Self {
+            field_name: "upload".into(),
+            filename: filename.into(),
+            content_type: "application/json".into(),
+            body: body.into(),
+        }
+    }
 }
 
 impl OnmsClient {
@@ -313,6 +326,31 @@ impl OnmsClient {
         let req = self.inner.request(Method::POST, url).multipart(form);
         let resp = self.send(req, Method::POST, path).await?;
         json_or_no_content(resp, Method::POST, path).await
+    }
+
+    /// `POST` with `multipart/form-data`, discarding the response body. Same
+    /// rationale as [`Self::post_drain`]: `/snmp-config/upload` replies with an
+    /// empty body (no JSON to decode), which [`Self::multipart`]'s JSON decode
+    /// would treat as a transport error.
+    pub async fn multipart_drain(&self, path: &str, parts: &[MultipartPart]) -> Result<()> {
+        let url = self.url_for(path)?;
+        let mut form = reqwest::multipart::Form::new();
+        for p in parts {
+            let part = reqwest::multipart::Part::bytes(p.body.clone())
+                .file_name(p.filename.clone())
+                .mime_str(&p.content_type)
+                .map_err(|e| {
+                    Error::Config(format!(
+                        "multipart part '{}': invalid content-type '{}': {e}",
+                        p.filename, p.content_type
+                    ))
+                })?;
+            form = form.part(p.field_name.clone(), part);
+        }
+        let req = self.inner.request(Method::POST, url).multipart(form);
+        let resp = self.send(req, Method::POST, path).await?;
+        let _ = resp.bytes().await?;
+        Ok(())
     }
 
     // -- internals -----------------------------------------------------------
