@@ -71,6 +71,57 @@ pub struct KeyringRef {
     pub account: String,
 }
 
+/// A resolved secret, zeroized on drop.
+pub type SecretString = zeroize::Zeroizing<String>;
+
+/// Resolve a [`SecretRef`] to its plaintext at apply time. Write-only: the
+/// caller injects the value into the wire payload and never reads it back.
+///
+/// Mirrors IAM's `resolve_password_ref`; keyring resolution reuses the shared
+/// `onmsctl_core::auth::read_keyring_secret`. An empty resolved value is an
+/// error (an empty community/passphrase is almost always a misconfiguration).
+///
+/// NOTE: file resolution reads + trims a single trailing newline but does not
+/// yet enforce file-mode hardening (IAM's `resolve_from_file` refuses
+/// world-writable / warns on world-readable). That check should be hoisted to
+/// a shared helper and reused here — tracked for a follow-up.
+pub fn resolve_secret_ref(r: &SecretRef) -> onmsctl_core::Result<SecretString> {
+    use onmsctl_core::Error;
+    let value = match r {
+        SecretRef::FromEnv(s) => std::env::var(&s.from_env).map_err(|_| {
+            Error::Config(format!(
+                "secret fromEnv: environment variable {:?} is not set",
+                s.from_env
+            ))
+        })?,
+        SecretRef::FromFile(s) => {
+            let raw = std::fs::read_to_string(&s.from_file).map_err(|e| {
+                Error::Config(format!("secret fromFile {}: {e}", s.from_file.display()))
+            })?;
+            // Trim a single trailing newline (handles `\n` and `\r\n`).
+            let trimmed = raw.strip_suffix('\n').unwrap_or(&raw);
+            let trimmed = trimmed.strip_suffix('\r').unwrap_or(trimmed);
+            trimmed.to_string()
+        }
+        SecretRef::FromKeyring(s) => onmsctl_core::auth::read_keyring_secret(
+            &s.from_keyring.service,
+            &s.from_keyring.account,
+        )
+        .map_err(|e| {
+            Error::Config(format!(
+                "secret fromKeyring (service={:?}, account={:?}): {e}",
+                s.from_keyring.service, s.from_keyring.account
+            ))
+        })?,
+    };
+    if value.is_empty() {
+        return Err(Error::Config(
+            "resolved SNMP secret is empty; refusing to send an empty credential".into(),
+        ));
+    }
+    Ok(SecretString::new(value))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

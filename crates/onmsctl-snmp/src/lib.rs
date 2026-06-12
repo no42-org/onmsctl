@@ -14,6 +14,8 @@
 //! from the v2 JAXB/Jackson types. The local model, conversions, apply handler,
 //! and the `export` / `lookup` verbs land in subsequent increments.
 
+pub mod convert;
+pub mod diff;
 pub mod model;
 pub mod secret;
 pub mod server;
