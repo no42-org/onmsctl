@@ -81,8 +81,11 @@ pub enum SourceCmd {
     /// Conversion exit codes (1 = warnings, 2 = blocking) propagate to
     /// the process exit code.
     Download {
-        /// Source id.
-        id: i64,
+        /// Source selector: a numeric source **id**, or an exact source
+        /// **name** (resolved server-side). A value that parses as an
+        /// integer is always treated as an id, so a source whose literal
+        /// name is numeric is reachable only by its id.
+        target: String,
         /// Write to this file (default: stdout).
         #[arg(short = 'O', long)]
         output_file: Option<PathBuf>,
@@ -94,6 +97,34 @@ pub enum SourceCmd {
         /// stderr).
         #[arg(long, default_value = "xml")]
         format: String,
+    },
+
+    /// Export server event sources to `kind: EventSource` YAML — the reverse
+    /// of `onmsctl apply -f`.
+    ///
+    /// With a selector (id or exact name) exports that one source; with no
+    /// selector exports every source on the server. `--out <dir>` writes one
+    /// `<name>.yaml` per source; otherwise YAML goes to stdout (`---`-joined
+    /// for multiple sources).
+    ///
+    /// Export routes through the `event-source convert` migrator (the server
+    /// only emits XML), so the same `EC###` findings apply — see
+    /// `event-source convert --explain <code>`. In bulk mode it is
+    /// continue-on-error: sources that convert are written (warnings
+    /// included), blocking sources are skipped and reported, and the process
+    /// exits with the maximum conversion severity observed.
+    Export {
+        /// Source selector: numeric id or exact name. Omit to export every
+        /// source on the server.
+        selector: Option<String>,
+        /// Write one `<name>.yaml` per source into this directory instead of
+        /// stdout. Source names containing path-unsafe characters are
+        /// rejected.
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Overwrite existing `<name>.yaml` files in the `--out` directory.
+        #[arg(long)]
+        force: bool,
     },
 
     /// List the names of all eventconf sources.
@@ -172,6 +203,7 @@ impl onmsctl_core::Classify for SourceCmd {
             | SourceCmd::Names
             | SourceCmd::NamesAndIds
             | SourceCmd::Download { .. }
+            | SourceCmd::Export { .. }
             | SourceCmd::Convert { .. } => Read,
             // Issue POST / PUT / PATCH / DELETE.
             SourceCmd::Delete { .. } | SourceCmd::Upload { .. } => Write,
@@ -312,12 +344,15 @@ impl SourceCmd {
                 }
             }
             SourceCmd::Download {
-                id,
+                target,
                 output_file,
                 force,
                 format,
             } => {
-                ensure_positive_id(id, "source id")?;
+                // Resolve id-or-name to an id (numeric → id; else exact-name
+                // lookup). The xml path needs only the id; the yaml path
+                // below fetches the name via get_source as before.
+                let (id, _name) = crate::export::resolve_source_selector(&api, &target).await?;
                 let bytes = api.download_source_xml(id).await?;
                 let format = format.to_ascii_lowercase();
                 let (out_bytes, is_yaml, exit_code) = match format.as_str() {
@@ -390,8 +425,51 @@ impl SourceCmd {
                 // yaml produced warnings (exit 1). Blocking findings
                 // (exit 2) already terminated the process via
                 // std::process::exit in the conversion branch above.
+                // Flush first — process::exit skips destructors, so an
+                // unflushed tail could be lost on a warning-exit.
+                {
+                    use std::io::Write;
+                    let _ = std::io::stdout().flush();
+                }
                 if exit_code != 0 {
                     std::process::exit(exit_code);
+                }
+            }
+            SourceCmd::Export {
+                selector,
+                out,
+                force,
+            } => {
+                let outcomes = match selector {
+                    Some(sel) => vec![crate::export::export_by_selector(&api, &sel).await?],
+                    None => crate::export::export_all(&api).await?,
+                };
+
+                // All findings/file-layout/exit-code logic lives in
+                // `render_export` so it is unit-testable without spawning the
+                // binary. Pass unlocked stdout/stderr — each write locks
+                // transiently, so the trailing summary `eprintln!` is safe.
+                let summary = crate::export::render_export(
+                    &outcomes,
+                    out.as_deref(),
+                    force,
+                    &mut std::io::stdout(),
+                    &mut std::io::stderr(),
+                )?;
+                // Flush before any `process::exit` below so piped YAML on a
+                // warning/partial exit isn't truncated (exit skips destructors).
+                use std::io::Write;
+                let _ = std::io::stdout().flush();
+                let loc = match &out {
+                    Some(dir) => format!(" to {}", dir.display()),
+                    None => String::new(),
+                };
+                eprintln!(
+                    "exported {} source(s){loc} ({} with warnings, {} skipped, {} failed)",
+                    summary.written, summary.warned, summary.skipped, summary.failed,
+                );
+                if summary.exit_code != 0 {
+                    std::process::exit(summary.exit_code);
                 }
             }
             SourceCmd::Names => {

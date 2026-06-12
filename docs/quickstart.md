@@ -249,14 +249,31 @@ onmsctl apply -f my-source.yaml --dry-run --diff   # preview
 onmsctl apply -f my-source.yaml                     # apply
 ```
 
-### Inspect and download
+### Inspect, download, and export
 
 ```sh
-onmsctl event-source list                      # filter / sort / page
+onmsctl event-source list                          # filter / sort / page
 onmsctl event-source get <id>
-onmsctl event-source download <id> -O out.xml  # round-trip the raw XML
-onmsctl event list --source <id>         # events for a source
+onmsctl event-source download <id|name> -O out.xml # raw XML for one source
+onmsctl event list --source <id>                   # events for a source
 ```
+
+`download` and `export` accept a selector that is either a numeric **id** or
+an exact source **name**.
+
+Snapshot server sources back to git-managed YAML — the reverse of `apply`:
+
+```sh
+onmsctl event-source export cisco.foo            # one source → stdout (YAML)
+onmsctl event-source export cisco.foo --out ./s/  # one source → ./s/cisco.foo.yaml
+onmsctl event-source export --out ./sources/      # every source → one file each
+```
+
+Export routes through the `convert` migrator, so it carries the same `EC###`
+findings (to stderr). In bulk it is continue-on-error: warnings are written,
+blocking and download-failed sources are reported and counted, and the exit
+code reflects the highest severity seen. `--out` validates every target
+filename before writing anything (all-or-nothing).
 
 ## 7. GitOps for provisioning requisitions
 
