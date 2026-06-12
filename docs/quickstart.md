@@ -82,11 +82,11 @@ onmsctl version
 ```
 
 ```
-onmsctl 0.0.1
+onmsctl 0.0.2
 capabilities:
-  - eventconf 0.0.1
-  - provisioning 0.0.1
-  - iam 0.0.1
+  - eventconf 0.0.2
+  - provisioning 0.0.2
+  - iam 0.0.2
 ```
 
 The capability list grows as the binary links new capability crates.
