@@ -1083,8 +1083,11 @@ dependencies = [
 name = "onmsctl-snmp"
 version = "0.0.2"
 dependencies = [
+ "onmsctl-core",
+ "schemars",
  "serde",
  "serde_json",
+ "serde_norway",
 ]
 
 [[package]]
