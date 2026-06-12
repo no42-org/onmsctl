@@ -108,10 +108,8 @@ capabilities:
 ```
 
 Each capability owns its own subcommand tree (`event-source` / `event`,
-`requisition`, `iam`) and ships its own JSON Schemas, validators, and
-HTTP client wrappers. New capabilities are added as workspace
-members; this list grows verbatim from `onmsctl_<cap>::{CAPABILITY_NAME,
-VERSION}`.
+`requisition`, `iam`) and JSON Schemas; the version list grows as
+capability crates are linked into the workspace.
 
 ---
 
@@ -145,16 +143,11 @@ contexts:
 
 ### Credentials
 
-`auth.basic` accepts exactly one of `password` / `password-file` /
-`keyring`. `auth.bearer` accepts the same shapes as `token` /
-`token-file` / `keyring`.
-
-| Field | Notes |
-|---|---|
-| `password` / `token` | Inline plain-text. Convenient, leaks if the config leaks. |
-| `password-file` / `token-file` | Mode `0600` recommended; trailing newlines stripped. |
-| `keyring` | OS keyring. macOS Keychain and Windows Credential Manager work out of the box. On Linux the default build links only the kernel keyutils backend; for GNOME Keyring / KWallet support rebuild with `--features keyring/sync-secret-service` (adds a `libdbus-1` build dependency). |
-
+`auth.basic` / `auth.bearer` each take exactly one credential source:
+inline (`password` / `token` — leaks if the config does), a file
+(`password-file` / `token-file`, mode `0600`), or the OS `keyring`
+(macOS Keychain / Windows Credential Manager out of the box; Linux GNOME
+Keyring / KWallet needs a rebuild with `--features keyring/sync-secret-service`).
 Resolution at request time:
 
 ```
@@ -168,10 +161,9 @@ onmsctl config view                  # current config (secrets redacted)
 onmsctl config use-context staging   # atomic rewrite of current-context
 ```
 
-`config view` redacts inline `password` / `token` strings; file and
-keyring references remain visible (they are pointers, not secrets).
-`config use-context` resolves symlinks before writing so a symlinked
-`config.yaml` writes through to the upstream file.
+`config view` redacts inline secrets (file / keyring references are
+pointers, so they stay visible). For the full credential and context
+walkthrough, see the [Quick Start](docs/quickstart.md#3-configure-a-context).
 
 ### Override precedence
 

@@ -1,0 +1,18 @@
+# Copyright 2026 Ronny Trommer <ronny@no42.org>
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "onmsctl-snmp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "SNMP configuration capability for onmsctl: declarative kind: SnmpConfig via /rest/v2/snmp-config, plus snmp export / lookup"
+publish = false
+
+[dependencies]
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
