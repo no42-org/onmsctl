@@ -27,9 +27,12 @@ fn blank_secrets(c: &mut server::Configuration) {
     c.encrypted = None;
 }
 
-/// Canonical, secret-free byte form of a wire config. Same logical content →
-/// identical bytes regardless of secret values or list ordering.
-pub fn canonical_nonsecret(cfg: &server::SnmpConfig) -> Vec<u8> {
+/// Canonical, secret-free form of a wire config as a struct: secrets blanked
+/// and the order-insensitive lists sorted into a deterministic order. Two
+/// logically-equal configs produce equal canonical structs regardless of
+/// secret values or list ordering. The handler uses this for per-tier `--diff`
+/// comparison; [`canonical_nonsecret`] is its byte form for idempotency.
+pub fn canonical_struct(cfg: &server::SnmpConfig) -> server::SnmpConfig {
     let mut c = cfg.clone();
     blank_secrets(&mut c.defaults);
 
@@ -49,7 +52,13 @@ pub fn canonical_nonsecret(cfg: &server::SnmpConfig) -> Vec<u8> {
     }
     c.profiles.profile.sort_by(|a, b| a.label.cmp(&b.label));
 
-    serde_json::to_vec(&c).expect("wire config serializes as JSON")
+    c
+}
+
+/// Canonical, secret-free byte form of a wire config. Same logical content →
+/// identical bytes regardless of secret values or list ordering.
+pub fn canonical_nonsecret(cfg: &server::SnmpConfig) -> Vec<u8> {
+    serde_json::to_vec(&canonical_struct(cfg)).expect("wire config serializes as JSON")
 }
 
 /// Stable sort key for a definition: location, then joined selectors.

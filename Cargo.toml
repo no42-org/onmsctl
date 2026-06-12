@@ -61,6 +61,7 @@ onmsctl-core = { path = "crates/onmsctl-core", version = "=0.0.2" }
 onmsctl-eventconf = { path = "crates/onmsctl-eventconf", version = "=0.0.2" }
 onmsctl-iam = { path = "crates/onmsctl-iam", version = "=0.0.2" }
 onmsctl-provisioning = { path = "crates/onmsctl-provisioning", version = "=0.0.2" }
+onmsctl-snmp = { path = "crates/onmsctl-snmp", version = "=0.0.2" }
 
 [profile.release]
 strip = "symbols"

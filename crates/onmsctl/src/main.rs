@@ -333,7 +333,7 @@ fn config_path_from(merged: &Overrides) -> Result<PathBuf> {
 /// pin a specific binary build.
 fn print_version() -> Result<()> {
     let s = format!(
-        "onmsctl {}\ncapabilities:\n  - {} {}\n  - {} {}\n  - {} {}\n",
+        "onmsctl {}\ncapabilities:\n  - {} {}\n  - {} {}\n  - {} {}\n  - {} {}\n",
         env!("CARGO_PKG_VERSION"),
         onmsctl_eventconf::CAPABILITY_NAME,
         onmsctl_eventconf::VERSION,
@@ -341,6 +341,8 @@ fn print_version() -> Result<()> {
         onmsctl_provisioning::VERSION,
         onmsctl_iam::CAPABILITY_NAME,
         onmsctl_iam::VERSION,
+        onmsctl_snmp::CAPABILITY_NAME,
+        onmsctl_snmp::VERSION,
     );
     write_stdout(s.as_bytes())
 }

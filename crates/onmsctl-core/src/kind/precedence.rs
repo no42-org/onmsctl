@@ -6,14 +6,15 @@
 //! Kind-precedence data (Decision C / D7).
 //!
 //! Pure `kind → rank` data — no capability types — so it can live in core.
-//! Documents apply in ascending rank order. Today's three kinds are
-//! independent, so these ranks encode no real dependency; they establish the
-//! ordering mechanism for a future dependent kind. Because the ordering is a
-//! strict total order, "acyclic" reduces to "every rank is distinct"
+//! Documents apply in ascending rank order. Today's kinds are independent, so
+//! these ranks encode no real dependency; they establish the ordering
+//! mechanism for a future dependent kind. Because the ordering is a strict
+//! total order, "acyclic" reduces to "every rank is distinct"
 //! ([`ranks_are_total_order`]), checked by a unit test.
 
 pub const RANK_USER: u32 = 100;
 pub const RANK_EVENT_SOURCE: u32 = 200;
+pub const RANK_SNMP_CONFIG: u32 = 250;
 pub const RANK_REQUISITION: u32 = 300;
 
 /// The authoritative precedence table. The binary uses these ranks when wiring
@@ -21,6 +22,7 @@ pub const RANK_REQUISITION: u32 = 300;
 pub const KNOWN_RANKS: &[(&str, u32)] = &[
     ("User", RANK_USER),
     ("EventSource", RANK_EVENT_SOURCE),
+    ("SnmpConfig", RANK_SNMP_CONFIG),
     ("Requisition", RANK_REQUISITION),
 ];
 
