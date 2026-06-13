@@ -4,7 +4,7 @@
  */
 
 //! Local (YAML) model for `kind: SnmpConfig` — the operator-facing document
-//! that `onmsctl apply -f` reconciles against `/rest/v2/snmp-config`.
+//! that `onmsctl apply -f` reconciles against `/api/v2/snmp-config`.
 //!
 //! Singleton: there is one snmp-config per Horizon, so `metadata.name` is fixed
 //! to the literal `default`. The `spec` carries `defaults` (the fallback
