@@ -91,3 +91,6 @@ schema:  ## Regenerate every committed schemas/*.schema.json from the Rust types
 	cargo run --quiet --release --example gen_schema -p onmsctl-iam \
 		> schemas/iam-user.schema.json.tmp \
 		&& mv schemas/iam-user.schema.json.tmp schemas/iam-user.schema.json
+	cargo run --quiet --release --example gen_schema -p onmsctl-snmp \
+		> schemas/snmp-config.schema.json.tmp \
+		&& mv schemas/snmp-config.schema.json.tmp schemas/snmp-config.schema.json
