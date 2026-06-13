@@ -1,0 +1,697 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SnmpConfigLocal",
+  "description": "A `kind: SnmpConfig` document.",
+  "type": "object",
+  "properties": {
+    "apiVersion": {
+      "type": "string"
+    },
+    "kind": {
+      "type": "string"
+    },
+    "metadata": {
+      "$ref": "#/$defs/Metadata"
+    },
+    "spec": {
+      "$ref": "#/$defs/Spec"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "spec"
+  ],
+  "$defs": {
+    "DefinitionLocal": {
+      "description": "A per-target override. At least one selector is required (see [`validate`]).",
+      "type": "object",
+      "properties": {
+        "authPassphrase": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SecretRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "authProtocol": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "contextEngineId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "contextName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "engineId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enterpriseId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ipMatches": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "location": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "maxRepetitions": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "maxRequestSize": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "maxVarsPerPdu": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "port": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "privacyPassphrase": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SecretRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "privacyProtocol": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "profileLabel": {
+          "description": "Assign a named profile (must match a `spec.profiles[].label`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "proxyHost": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ranges": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RangeLocal"
+          }
+        },
+        "readCommunity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SecretRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "retries": {
+          "description": "Friendly alias for the wire's `retry`.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "securityLevel": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SecurityLevel"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "securityName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "specifics": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "timeout": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "ttl": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "version": {
+          "description": "`v1` / `v2c` / `v3`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "writeCommunity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SecretRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "FromEnvRef": {
+      "type": "object",
+      "properties": {
+        "fromEnv": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "fromEnv"
+      ]
+    },
+    "FromFileRef": {
+      "type": "object",
+      "properties": {
+        "fromFile": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "fromFile"
+      ]
+    },
+    "FromKeyringRef": {
+      "type": "object",
+      "properties": {
+        "fromKeyring": {
+          "$ref": "#/$defs/KeyringRef"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "fromKeyring"
+      ]
+    },
+    "KeyringRef": {
+      "description": "Service + account tuple identifying a keyring entry.",
+      "type": "object",
+      "properties": {
+        "account": {
+          "type": "string"
+        },
+        "service": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "service",
+        "account"
+      ]
+    },
+    "Metadata": {
+      "description": "Document metadata. `name` must equal [`SINGLETON_NAME`].",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ]
+    },
+    "Params": {
+      "description": "The SNMP parameter set shared by `defaults`, each `profile`, and each\n`definition`. Every field is optional; absent fields inherit the server's\nschema defaults (or, on a definition/profile, the `defaults` tier).",
+      "type": "object",
+      "properties": {
+        "authPassphrase": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SecretRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "authProtocol": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "contextEngineId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "contextName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "engineId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enterpriseId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "maxRepetitions": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "maxRequestSize": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "maxVarsPerPdu": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "port": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "privacyPassphrase": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SecretRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "privacyProtocol": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "proxyHost": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "readCommunity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SecretRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "retries": {
+          "description": "Friendly alias for the wire's `retry`.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "securityLevel": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SecurityLevel"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "securityName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timeout": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "ttl": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "version": {
+          "description": "`v1` / `v2c` / `v3`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "writeCommunity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SecretRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "ProfileLocal": {
+      "description": "A named parameter template. `label` is required.",
+      "type": "object",
+      "properties": {
+        "authPassphrase": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SecretRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "authProtocol": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "contextEngineId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "contextName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "engineId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enterpriseId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "filterExpression": {
+          "description": "OpenNMS filter expression (wire `filter`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "label": {
+          "type": "string"
+        },
+        "maxRepetitions": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "maxRequestSize": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "maxVarsPerPdu": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "port": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "privacyPassphrase": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SecretRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "privacyProtocol": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "proxyHost": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "readCommunity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SecretRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "retries": {
+          "description": "Friendly alias for the wire's `retry`.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "securityLevel": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SecurityLevel"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "securityName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timeout": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "ttl": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "version": {
+          "description": "`v1` / `v2c` / `v3`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "writeCommunity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SecretRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "label"
+      ]
+    },
+    "RangeLocal": {
+      "description": "An inclusive IP range.",
+      "type": "object",
+      "properties": {
+        "begin": {
+          "type": "string"
+        },
+        "end": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "begin",
+        "end"
+      ]
+    },
+    "SecretRef": {
+      "description": "Reference to where a secret value is loaded from at apply time.\n\nUntagged enum, each variant a strict `deny_unknown_fields` wrapper — so a\nmapping carrying two source keys is unknown to every wrapper and parse\nfails, giving \"exactly one of the three\" structurally (same strategy as\nIAM's `PasswordRef`).",
+      "anyOf": [
+        {
+          "description": "Read the secret from a local file (mode-checked at resolve time).",
+          "$ref": "#/$defs/FromFileRef"
+        },
+        {
+          "description": "Read the secret from an environment variable.",
+          "$ref": "#/$defs/FromEnvRef"
+        },
+        {
+          "description": "Read the secret from the OS keyring under `service`/`account`.",
+          "$ref": "#/$defs/FromKeyringRef"
+        }
+      ]
+    },
+    "SecurityLevel": {
+      "description": "SNMPv3 security level (maps to the wire int 1/2/3).",
+      "type": "string",
+      "enum": [
+        "noAuthNoPriv",
+        "authNoPriv",
+        "authPriv"
+      ]
+    },
+    "Spec": {
+      "description": "The SNMP configuration body.",
+      "type": "object",
+      "properties": {
+        "defaults": {
+          "description": "Fallback parameters applied when no definition matches.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Params"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "definitions": {
+          "description": "Per-target overrides.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DefinitionLocal"
+          }
+        },
+        "profiles": {
+          "description": "Named, reusable parameter templates.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProfileLocal"
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
