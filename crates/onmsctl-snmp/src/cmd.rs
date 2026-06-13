@@ -131,11 +131,14 @@ impl TableRow for LookupResult {
         let a = &self.agent;
         let dash = || "-".to_string();
         // v3 → security identity; v1/v2c → (already-masked) read community.
-        // Fall back to security-field presence so a v3 agent whose response
-        // omits `versionAsString` isn't mis-shown as a community.
-        let is_v3 = a.version_as_string.as_deref() == Some("v3")
-            || a.security_name.is_some()
-            || a.security_level.is_some();
+        // Trust `versionAsString` when present (a confirmed getter). Only when
+        // it is absent do we fall back — on `securityName`, which is null for
+        // v1/v2c, NOT on `securityLevel` (a Java `int` the server serializes on
+        // every response, so it can't discriminate the version).
+        let is_v3 = match a.version_as_string.as_deref() {
+            Some(v) => v == "v3",
+            None => a.security_name.as_deref().is_some_and(|n| !n.is_empty()),
+        };
         let credential = if is_v3 {
             match (&a.security_name, a.security_level) {
                 (Some(name), Some(level)) => format!("{name} (level {level})"),
@@ -396,6 +399,40 @@ mod tests {
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].location, "Default");
+    }
+
+    #[test]
+    fn v2c_row_shows_community_even_when_security_level_is_present() {
+        // The server serializes `securityLevel` (a Java int) on every response,
+        // including v1/v2c — it must NOT flip the credential to a v3 identity.
+        let r = LookupResult {
+            ip: "10.0.0.1".into(),
+            location: "Default".into(),
+            agent: server::SnmpAgentConfig {
+                version_as_string: Some("v2c".into()),
+                security_level: Some(1),
+                read_community: Some(MASKED.into()),
+                ..Default::default()
+            },
+        };
+        let row = r.row();
+        assert_eq!(row[2], "v2c"); // VERSION
+        assert_eq!(row[6], MASKED); // CREDENTIAL = community, not an identity
+    }
+
+    #[test]
+    fn v3_row_shows_security_identity() {
+        let r = LookupResult {
+            ip: "10.0.0.2".into(),
+            location: "Default".into(),
+            agent: server::SnmpAgentConfig {
+                version_as_string: Some("v3".into()),
+                security_name: Some("monitor".into()),
+                security_level: Some(3),
+                ..Default::default()
+            },
+        };
+        assert_eq!(r.row()[6], "monitor (level 3)");
     }
 
     #[test]
