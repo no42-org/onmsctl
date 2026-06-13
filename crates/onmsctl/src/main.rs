@@ -119,6 +119,9 @@ enum TopCmd {
     /// Manage users and roles (IAM).
     #[command(subcommand)]
     Iam(onmsctl_iam::IamCmd),
+    /// Inspect SNMP configuration (export, lookup).
+    #[command(subcommand)]
+    Snmp(onmsctl_snmp::SnmpCmd),
     /// Print the binary version and linked capability list.
     Version,
     /// Inspect or switch the active configuration.
@@ -302,6 +305,12 @@ async fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
         TopCmd::Iam(cmd) => {
+            let ctx = resolve_context(&merged)?;
+            refuse_if_read_only(&ctx, cmd.kind())?;
+            cmd.run(&ctx).await?;
+            Ok(())
+        }
+        TopCmd::Snmp(cmd) => {
             let ctx = resolve_context(&merged)?;
             refuse_if_read_only(&ctx, cmd.kind())?;
             cmd.run(&ctx).await?;
