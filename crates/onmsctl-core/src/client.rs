@@ -328,11 +328,14 @@ impl OnmsClient {
         json_or_no_content(resp, Method::POST, path).await
     }
 
-    /// `POST` with `multipart/form-data`, discarding the response body. Same
-    /// rationale as [`Self::post_drain`]: `/snmp-config/upload` replies with an
-    /// empty body (no JSON to decode), which [`Self::multipart`]'s JSON decode
-    /// would treat as a transport error.
-    pub async fn multipart_drain(&self, path: &str, parts: &[MultipartPart]) -> Result<()> {
+    /// `POST` with `multipart/form-data`, returning the response body as text
+    /// (empty `String` for a 204 / empty body). Unlike [`Self::multipart`] it
+    /// does not assume a JSON body, so it serves endpoints like
+    /// `/snmp-config/upload` whose success reply may be empty: the caller
+    /// inspects the returned text and decides (e.g. a non-empty CXF
+    /// `{ errors: [...] }` envelope means the upload was rejected even though
+    /// the HTTP status was 2xx). Non-2xx is still surfaced as `Err` by `send`.
+    pub async fn multipart_text(&self, path: &str, parts: &[MultipartPart]) -> Result<String> {
         let url = self.url_for(path)?;
         let mut form = reqwest::multipart::Form::new();
         for p in parts {
@@ -349,8 +352,7 @@ impl OnmsClient {
         }
         let req = self.inner.request(Method::POST, url).multipart(form);
         let resp = self.send(req, Method::POST, path).await?;
-        let _ = resp.bytes().await?;
-        Ok(())
+        Ok(resp.text().await?)
     }
 
     // -- internals -----------------------------------------------------------

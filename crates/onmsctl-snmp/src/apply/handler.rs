@@ -140,19 +140,20 @@ impl KindHandler for SnmpConfigHandler {
 /// definition/profile counts. Both sides are canonicalized first (secrets
 /// blanked, lists sorted) so the per-tier equality is meaningful.
 fn render_diff(deployed: &SnmpConfig, desired: &SnmpConfig) -> String {
+    let [defaults_ok, definitions_ok, profiles_ok] = diff::tiers_match(desired, deployed);
     let have = diff::canonical_struct(deployed);
     let want = diff::canonical_struct(desired);
-    let flag = |same: bool| if same { "unchanged" } else { "changed" };
+    let flag = |ok: bool| if ok { "unchanged" } else { "changed" };
     format!(
         "snmp-config: whole-config replace via upload\n  \
          defaults:    {}\n  \
          definitions: {} ({} deployed -> {} desired)\n  \
          profiles:    {} ({} deployed -> {} desired)",
-        flag(have.defaults == want.defaults),
-        flag(have.definition == want.definition),
+        flag(defaults_ok),
+        flag(definitions_ok),
         have.definition.len(),
         want.definition.len(),
-        flag(have.profiles.profile == want.profiles.profile),
+        flag(profiles_ok),
         have.profiles.profile.len(),
         want.profiles.profile.len(),
     )
