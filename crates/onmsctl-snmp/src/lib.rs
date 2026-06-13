@@ -24,6 +24,7 @@ pub mod convert;
 pub mod diff;
 pub mod model;
 pub mod secret;
+pub mod select;
 pub mod server;
 
 pub use cmd::SnmpCmd;

@@ -150,6 +150,71 @@ impl SnmpProfiles {
     }
 }
 
+/// The effective agent configuration OpenNMS would use for one IP at one
+/// location — the response of `GET /api/v2/snmp-config/lookup` (the `lookup`
+/// verb). This is the *merged* result (defaults ⊕ matching definition ⊕
+/// profile), not a tier of the stored config, so it is its own type.
+///
+/// Field names are the camelCase bean-property names Jackson emits from
+/// `SnmpAgentConfig`'s getters (e.g. `versionAsString`, `authPassPhrase`); the
+/// one exception is `TTL` (the getter is `getTTL`, so the property keeps both
+/// capitals). Permissive on deserialize.
+///
+/// NOTE: derived from the DTO + the v2 IT test getters, not a captured live
+/// response — confirm the exact key casing against a real Horizon (task 9.2).
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SnmpAgentConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proxy_for: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub port: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retries: Option<i32>,
+    /// SNMP version as the friendly string (`v1` / `v2c` / `v3`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version_as_string: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_vars_per_pdu: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_repetitions: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_request_size: Option<i32>,
+    /// Getter is `getTTL`, so the JSON key keeps both capitals.
+    #[serde(rename = "TTL", skip_serializing_if = "Option::is_none")]
+    pub ttl: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub security_level: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub security_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_protocol: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_pass_phrase: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub priv_protocol: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub priv_pass_phrase: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub read_community: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub write_community: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub engine_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_engine_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enterprise_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile_label: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
