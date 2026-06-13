@@ -16,8 +16,22 @@
 
 use onmsctl_core::client::MultipartPart;
 use onmsctl_core::{Error, OnmsClient, Result};
+use serde::Deserialize;
 
 use crate::server::SnmpConfig;
+
+/// Tolerant view of an upload response body used only to detect a rejection.
+/// Horizon's CXF multipart `/upload` handlers report per-file failures in an
+/// `errors` array even on HTTP 200 (the eventconf sibling's `UploadResult` has
+/// the same `{ success, errors }` shape). We don't model success entries —
+/// only enough to fail loudly when the server rejected the config. `#[serde(default)]`
+/// keeps an empty or partial body from breaking the parse; a body that isn't
+/// this shape at all simply yields no `errors` and is treated as success.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct UploadResponse {
+    errors: Vec<serde_json::Value>,
+}
 
 /// REST base for the v2 snmp-config singleton. No leading slash: the client
 /// joins it onto the context URL (which ends in `/`), matching the eventconf
@@ -42,14 +56,37 @@ impl<'a> SnmpConfigApi<'a> {
 
     /// `POST /api/v2/snmp-config/upload` — whole-config replace. The serialized
     /// `SnmpConfig` JSON is wrapped as a multipart `upload` part (the endpoint
-    /// is a CXF multipart `Attachment`); the response carries no
-    /// caller-actionable body, so it is drained.
+    /// is a CXF multipart `Attachment`). Success is an empty (or non-error)
+    /// body; a non-2xx is surfaced by the client, and a 2xx body carrying a
+    /// non-empty `errors` envelope is treated as a rejection — so a
+    /// content-rejected upload is not mistaken for success.
     pub async fn upload_config(&self, cfg: &SnmpConfig) -> Result<()> {
         let body = serde_json::to_vec(cfg)
             .map_err(|e| Error::Config(format!("serialize snmp-config for upload: {e}")))?;
         let part = MultipartPart::json("snmp-config.json", body);
-        self.client
-            .multipart_drain(&format!("{BASE}/upload"), &[part])
-            .await
+        let resp = self
+            .client
+            .multipart_text(&format!("{BASE}/upload"), &[part])
+            .await?;
+        let trimmed = resp.trim();
+        if trimmed.is_empty() {
+            return Ok(());
+        }
+        // A recognizable error envelope on a 2xx means the server rejected the
+        // config; anything else (an empty/benign body) is success.
+        if let Ok(parsed) = serde_json::from_str::<UploadResponse>(trimmed)
+            && !parsed.errors.is_empty()
+        {
+            let detail = parsed
+                .errors
+                .iter()
+                .map(|e| e.to_string())
+                .collect::<Vec<_>>()
+                .join("; ");
+            return Err(Error::Config(format!(
+                "snmp-config upload rejected by the server: {detail}"
+            )));
+        }
+        Ok(())
     }
 }

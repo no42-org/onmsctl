@@ -30,8 +30,8 @@ fn blank_secrets(c: &mut server::Configuration) {
 /// Canonical, secret-free form of a wire config as a struct: secrets blanked
 /// and the order-insensitive lists sorted into a deterministic order. Two
 /// logically-equal configs produce equal canonical structs regardless of
-/// secret values or list ordering. The handler uses this for per-tier `--diff`
-/// comparison; [`canonical_nonsecret`] is its byte form for idempotency.
+/// secret values or list ordering. Both [`unchanged`] and the handler's
+/// `--diff` summary build on it.
 pub fn canonical_struct(cfg: &server::SnmpConfig) -> server::SnmpConfig {
     let mut c = cfg.clone();
     blank_secrets(&mut c.defaults);
@@ -55,12 +55,6 @@ pub fn canonical_struct(cfg: &server::SnmpConfig) -> server::SnmpConfig {
     c
 }
 
-/// Canonical, secret-free byte form of a wire config. Same logical content →
-/// identical bytes regardless of secret values or list ordering.
-pub fn canonical_nonsecret(cfg: &server::SnmpConfig) -> Vec<u8> {
-    serde_json::to_vec(&canonical_struct(cfg)).expect("wire config serializes as JSON")
-}
-
 /// Stable sort key for a definition: location, then joined selectors.
 fn def_key(d: &server::Definition) -> (String, String, String, String) {
     let ranges = d
@@ -77,9 +71,91 @@ fn def_key(d: &server::Definition) -> (String, String, String, String) {
     )
 }
 
-/// `true` when the two configs are equivalent ignoring secret values.
+/// `true` when the non-secret params the `desired` config explicitly sets all
+/// match `deployed`; params absent from `desired` are ignored. Under
+/// whole-config replace the server fills unset params with its schema defaults,
+/// so a freshly-applied minimal document — whose `GET` then comes back with
+/// those defaults populated — must still read as unchanged (exact byte equality
+/// would re-upload forever). Secrets are blanked by [`canonical_struct`] and so
+/// always compare equal.
+///
+/// LIMITATION: because an absent param is "don't care", *removing* a previously
+/// set param from the document to fall back to the server default is not
+/// detected as a change here. Detecting that needs the server's schema defaults
+/// from a live payload (change task 9.2).
+fn config_subset_match(desired: &server::Configuration, deployed: &server::Configuration) -> bool {
+    macro_rules! field_ok {
+        ($($f:ident),+ $(,)?) => {
+            $( (desired.$f.is_none() || desired.$f == deployed.$f) )&&+
+        };
+    }
+    field_ok!(
+        port,
+        retry,
+        timeout,
+        ttl,
+        proxy_host,
+        version,
+        read_community,
+        write_community,
+        max_vars_per_pdu,
+        max_repetitions,
+        max_request_size,
+        encrypted,
+        security_name,
+        security_level,
+        auth_protocol,
+        auth_passphrase,
+        privacy_protocol,
+        privacy_passphrase,
+        context_name,
+        engine_id,
+        context_engine_id,
+        enterprise_id,
+    )
+}
+
+/// Per-tier idempotency verdict `[defaults, definitions, profiles]`, each `true`
+/// when that tier is unchanged. Definition/profile **membership** is compared
+/// exactly (the upload is a whole replace, so a definition present on one side
+/// only is a change), while each tier's SNMP params use the subset semantics of
+/// [`config_subset_match`]. Both lists are canonicalized (sorted) first, so the
+/// element-wise zip is aligned by selector/label.
+pub fn tiers_match(desired: &server::SnmpConfig, deployed: &server::SnmpConfig) -> [bool; 3] {
+    let want = canonical_struct(desired);
+    let have = canonical_struct(deployed);
+
+    let defaults = config_subset_match(&want.defaults, &have.defaults);
+
+    let definitions = want.definition.len() == have.definition.len()
+        && want.definition.iter().zip(&have.definition).all(|(a, b)| {
+            a.specific == b.specific
+                && a.range == b.range
+                && a.ip_match == b.ip_match
+                && a.location == b.location
+                && a.profile_label == b.profile_label
+                && config_subset_match(&a.config, &b.config)
+        });
+
+    let profiles = want.profiles.profile.len() == have.profiles.profile.len()
+        && want
+            .profiles
+            .profile
+            .iter()
+            .zip(&have.profiles.profile)
+            .all(|(a, b)| {
+                a.label == b.label
+                    && a.filter == b.filter
+                    && config_subset_match(&a.config, &b.config)
+            });
+
+    [defaults, definitions, profiles]
+}
+
+/// `true` when the deployed config already satisfies the desired document
+/// (every tier unchanged per [`tiers_match`]).
 pub fn unchanged(desired: &server::SnmpConfig, deployed: &server::SnmpConfig) -> bool {
-    canonical_nonsecret(desired) == canonical_nonsecret(deployed)
+    tiers_match(desired, deployed) == [true, true, true]
 }
 
 #[cfg(test)]
@@ -151,5 +227,57 @@ mod tests {
             vec![def("hq", &["10.0.0.1"]), def("dc", &["10.0.1.1"])],
         );
         assert!(!unchanged(&a, &b));
+    }
+
+    #[test]
+    fn server_defaulted_fields_are_unchanged() {
+        // Desired sets only `version`; the deployed config (as a real GET
+        // returns it) carries server-filled defaults the document omits. The
+        // subset comparison must treat those extras as "don't care".
+        let desired = server::SnmpConfig {
+            defaults: server::Configuration {
+                version: Some("v2c".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let deployed = server::SnmpConfig {
+            defaults: server::Configuration {
+                version: Some("v2c".into()),
+                port: Some(161),
+                retry: Some(1),
+                timeout: Some(1800),
+                max_repetitions: Some(10),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(
+            unchanged(&desired, &deployed),
+            "server-defaulted fields the document omits must not trigger a re-upload"
+        );
+    }
+
+    #[test]
+    fn a_param_the_document_sets_must_match() {
+        // The document explicitly sets `port`; the deployed value differs, so
+        // this IS a change (subset only ignores params the document omits).
+        let desired = server::SnmpConfig {
+            defaults: server::Configuration {
+                version: Some("v2c".into()),
+                port: Some(1161),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let deployed = server::SnmpConfig {
+            defaults: server::Configuration {
+                version: Some("v2c".into()),
+                port: Some(161),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(!unchanged(&desired, &deployed));
     }
 }
