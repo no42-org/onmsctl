@@ -131,7 +131,12 @@ impl TableRow for LookupResult {
         let a = &self.agent;
         let dash = || "-".to_string();
         // v3 → security identity; v1/v2c → (already-masked) read community.
-        let credential = if a.version_as_string.as_deref() == Some("v3") {
+        // Fall back to security-field presence so a v3 agent whose response
+        // omits `versionAsString` isn't mis-shown as a community.
+        let is_v3 = a.version_as_string.as_deref() == Some("v3")
+            || a.security_name.is_some()
+            || a.security_level.is_some();
+        let credential = if is_v3 {
             match (&a.security_name, a.security_level) {
                 (Some(name), Some(level)) => format!("{name} (level {level})"),
                 (Some(name), None) => name.clone(),

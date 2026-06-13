@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//! Wire-format DTOs for `/rest/v2/snmp-config`.
+//! Wire-format DTOs for `/api/v2/snmp-config`.
 //!
 //! Mirrored from the OpenNMS JAXB/Jackson types `SnmpConfig`, `Configuration`,
 //! `Definition`, `SnmpProfile`, and `Range`. The v2 JSON is **camelCase** (the
@@ -130,7 +130,7 @@ pub struct SnmpProfiles {
     pub profile: Vec<SnmpProfile>,
 }
 
-/// The whole SNMP configuration (`SnmpConfig`, root of `/rest/v2/snmp-config`):
+/// The whole SNMP configuration (`SnmpConfig`, root of `/api/v2/snmp-config`):
 /// the default `Configuration` (flattened/inline) plus the definition list and
 /// the profiles wrapper.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -193,11 +193,14 @@ pub struct SnmpAgentConfig {
     pub security_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auth_protocol: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// The Jackson getter is `getAuthPassPhrase` → `authPassPhrase`, but the
+    /// stored-config DTO uses `authPassphrase` (lowercase p); accept both so a
+    /// live response in either casing can't silently drop the (masked) secret.
+    #[serde(alias = "authPassphrase", skip_serializing_if = "Option::is_none")]
     pub auth_pass_phrase: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub priv_protocol: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(alias = "privPassphrase", skip_serializing_if = "Option::is_none")]
     pub priv_pass_phrase: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub read_community: Option<String>,
