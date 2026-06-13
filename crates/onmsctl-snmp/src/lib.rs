@@ -19,11 +19,14 @@
 
 pub mod api;
 pub mod apply;
+pub mod cmd;
 pub mod convert;
 pub mod diff;
 pub mod model;
 pub mod secret;
 pub mod server;
+
+pub use cmd::SnmpCmd;
 
 /// Capability name surfaced by the binary's `version` subcommand.
 pub const CAPABILITY_NAME: &str = "snmp";
