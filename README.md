@@ -334,6 +334,12 @@ validation via [`yaml-language-server`](https://github.com/redhat-developer/yaml
 
 # For kind: Requisition
 # yaml-language-server: $schema=https://raw.githubusercontent.com/no42-org/onmsctl/main/schemas/requisition.schema.json
+
+# For kind: User
+# yaml-language-server: $schema=https://raw.githubusercontent.com/no42-org/onmsctl/main/schemas/iam-user.schema.json
+
+# For kind: SnmpConfig
+# yaml-language-server: $schema=https://raw.githubusercontent.com/no42-org/onmsctl/main/schemas/snmp-config.schema.json
 ```
 
 Pin to a release tag for stability or reference a clone with

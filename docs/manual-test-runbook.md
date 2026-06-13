@@ -357,7 +357,23 @@ $BIN iam user delete onmsctl-rb-user --yes
 **Pass:** `iam user` exposes only `list`/`get`/`delete`/`set-password`/`export`
 (no `create`/`update`/`role`). `iam apply` no longer exists.
 
-### 6.4 Verify removed verbs are gone
+### 6.4 snmp
+
+```sh
+$BIN snmp export -O /tmp/rb-snmp.yaml                    # deployed config → kind: SnmpConfig YAML
+$BIN apply -f /tmp/rb-snmp.yaml --dry-run --diff         # re-applying the export round-trips
+$BIN snmp lookup <ip>                                    # effective params; multi-location discovery
+$BIN snmp lookup <ip> --location <loc> --show-secrets    # one location, reveal community/passphrases
+```
+**Pass:** `snmp export` emits a `kind: SnmpConfig` document whose secret fields
+are `fromEnv` placeholders (no cleartext); re-applying that export with
+`--dry-run` reports `Unchanged` (idempotent round-trip); `snmp lookup` masks
+community / passphrase values unless `--show-secrets`. The real `apply` of a
+`kind: SnmpConfig` is a **whole-config replace** — exercise it only against a
+throwaway server (capture the original via `snmp export` first; a faithful
+restore re-uploads the captured raw config).
+
+### 6.5 Verify removed verbs are gone
 
 ```sh
 $BIN requisition apply -f x.yaml   2>&1 | head -1   # expect: unrecognized subcommand
