@@ -100,11 +100,12 @@ alongside each linked capability:
 
 ```
 $ onmsctl version
-onmsctl 0.0.2
+onmsctl 0.1.0
 capabilities:
-  - eventconf 0.0.2
-  - provisioning 0.0.2
-  - iam 0.0.2
+  - eventconf 0.1.0
+  - provisioning 0.1.0
+  - iam 0.1.0
+  - snmp 0.1.0
 ```
 
 Each capability owns its own subcommand tree (`event-source` / `event`,
