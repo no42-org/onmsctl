@@ -29,6 +29,18 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Deserialize helper: treat an explicit JSON `null` as `T::default()`.
+/// `#[serde(default)]` alone only covers a *missing* field — but the live v2
+/// `GET /api/v2/snmp-config` sends `"profiles": null` (and may send `null` for
+/// an empty list), which would otherwise fail to deserialize into a struct/Vec.
+fn null_to_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 /// The SNMP parameter set shared by defaults, definitions, and profiles
 /// (`Configuration` in OpenNMS). Every field is optional; absent fields take
 /// the server's schema defaults.
@@ -126,7 +138,11 @@ pub struct SnmpProfile {
 /// The `profiles` wrapper: `{ "profile": [ … ] }`.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct SnmpProfiles {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "null_to_default",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub profile: Vec<SnmpProfile>,
 }
 
@@ -138,9 +154,17 @@ pub struct SnmpProfiles {
 pub struct SnmpConfig {
     #[serde(flatten)]
     pub defaults: Configuration,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "null_to_default",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub definition: Vec<Definition>,
-    #[serde(default, skip_serializing_if = "SnmpProfiles::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "null_to_default",
+        skip_serializing_if = "SnmpProfiles::is_empty"
+    )]
     pub profiles: SnmpProfiles,
 }
 
@@ -184,8 +208,9 @@ pub struct SnmpAgentConfig {
     pub max_repetitions: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_request_size: Option<i32>,
-    /// Getter is `getTTL`, so the JSON key keeps both capitals.
-    #[serde(rename = "TTL", skip_serializing_if = "Option::is_none")]
+    /// The live lookup response serializes this lowercase as `ttl`; accept
+    /// `TTL` too in case a different code path emits the getter-cased name.
+    #[serde(alias = "TTL", skip_serializing_if = "Option::is_none")]
     pub ttl: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub security_level: Option<i32>,
@@ -337,5 +362,37 @@ mod tests {
         let j = r#"{ "version": "v1", "totallyNewField": 42, "definition": [] }"#;
         let cfg: SnmpConfig = serde_json::from_str(j).expect("forward-compatible");
         assert_eq!(cfg.defaults.version.as_deref(), Some("v1"));
+    }
+
+    #[test]
+    fn explicit_null_profiles_deserialize_as_empty() {
+        // The live v2 GET sends `"profiles": null` (and an empty config could
+        // send `null` lists). `#[serde(default)]` alone does NOT cover an
+        // explicit null — the `null_to_default` deserializer must.
+        let j = r#"{ "version": "v2c", "definition": null, "profiles": null }"#;
+        let cfg: SnmpConfig = serde_json::from_str(j).expect("null collections tolerated");
+        assert_eq!(cfg.defaults.version.as_deref(), Some("v2c"));
+        assert!(cfg.definition.is_empty());
+        assert!(cfg.profiles.profile.is_empty());
+    }
+
+    #[test]
+    fn agent_config_lookup_shape_deserializes() {
+        // Shape captured from a live `GET /api/v2/snmp-config/lookup` (secret
+        // values scrubbed): `ttl` is lowercase, `version` is numeric (ignored),
+        // `version3` is an unmodeled bool, and the v3 passphrases are capital-P.
+        let j = r#"{
+            "address": "192.168.8.8", "version3": false, "port": 161,
+            "version": 2, "versionAsString": "v2c", "timeout": 1800, "retries": 1,
+            "securityName": "snmpUser", "readCommunity": "scrubbed",
+            "writeCommunity": "scrubbed", "authPassPhrase": null,
+            "privPassPhrase": null, "securityLevel": 1, "ttl": 7000,
+            "maxRepetitions": 2, "maxVarsPerPdu": 10, "maxRequestSize": 65535
+        }"#;
+        let a: SnmpAgentConfig = serde_json::from_str(j).expect("lookup shape parses");
+        assert_eq!(a.version_as_string.as_deref(), Some("v2c"));
+        assert_eq!(a.ttl, Some(7000)); // lowercase `ttl` populates
+        assert_eq!(a.port, Some(161));
+        assert_eq!(a.read_community.as_deref(), Some("scrubbed"));
     }
 }
