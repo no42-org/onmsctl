@@ -18,7 +18,7 @@ use onmsctl_core::client::MultipartPart;
 use onmsctl_core::{Error, OnmsClient, Result};
 use serde::Deserialize;
 
-use crate::server::SnmpConfig;
+use crate::server::{SnmpAgentConfig, SnmpConfig};
 
 /// Tolerant view of an upload response body used only to detect a rejection.
 /// Horizon's CXF multipart `/upload` handlers report per-file failures in an
@@ -52,6 +52,17 @@ impl<'a> SnmpConfigApi<'a> {
     /// defaults + definitions + profiles).
     pub async fn get_config(&self) -> Result<SnmpConfig> {
         self.client.get(BASE, &[]).await
+    }
+
+    /// `GET /api/v2/snmp-config/lookup?ipAddress=&location=` — the effective
+    /// (merged) agent config OpenNMS would use for `ip` at `location`.
+    pub async fn lookup_for_ip(&self, ip: &str, location: &str) -> Result<SnmpAgentConfig> {
+        self.client
+            .get(
+                &format!("{BASE}/lookup"),
+                &[("ipAddress", ip), ("location", location)],
+            )
+            .await
     }
 
     /// `POST /api/v2/snmp-config/upload` — whole-config replace. The serialized
