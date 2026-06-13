@@ -176,7 +176,30 @@ fn placeholder(env_name: &str, wire_value: &Option<String>) -> Option<SecretRef>
     })
 }
 
-fn config_to_params(c: &server::Configuration) -> Params {
+/// Uppercase a tier label into a shell-identifier-safe fragment (non-alphanumeric
+/// → `_`), used to build a per-occurrence env placeholder name.
+fn sanitize(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_uppercase()
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+/// The env-var name for a secret `field` at a given `scope` (tier). Per
+/// occurrence — distinct tiers get distinct names — so an exported config whose
+/// `defaults` and a `definition` carry *different* communities round-trips
+/// faithfully: the operator sets each env var independently. (A single fixed
+/// name per field would collapse them on re-apply.)
+fn secret_env(field: &str, scope: &str) -> String {
+    format!("SNMP_{field}_{scope}")
+}
+
+fn config_to_params(c: &server::Configuration, scope: &str) -> Params {
     Params {
         version: c.version.clone(),
         port: c.port,
@@ -184,17 +207,20 @@ fn config_to_params(c: &server::Configuration) -> Params {
         retries: c.retry,
         ttl: c.ttl,
         proxy_host: c.proxy_host.clone(),
-        read_community: placeholder("SNMP_READ_COMMUNITY", &c.read_community),
-        write_community: placeholder("SNMP_WRITE_COMMUNITY", &c.write_community),
+        read_community: placeholder(&secret_env("READ_COMMUNITY", scope), &c.read_community),
+        write_community: placeholder(&secret_env("WRITE_COMMUNITY", scope), &c.write_community),
         max_repetitions: c.max_repetitions,
         max_vars_per_pdu: c.max_vars_per_pdu,
         max_request_size: c.max_request_size,
         security_name: c.security_name.clone(),
         security_level: c.security_level.and_then(level_from_wire),
         auth_protocol: c.auth_protocol.clone(),
-        auth_passphrase: placeholder("SNMP_AUTH_PASSPHRASE", &c.auth_passphrase),
+        auth_passphrase: placeholder(&secret_env("AUTH_PASSPHRASE", scope), &c.auth_passphrase),
         privacy_protocol: c.privacy_protocol.clone(),
-        privacy_passphrase: placeholder("SNMP_PRIVACY_PASSPHRASE", &c.privacy_passphrase),
+        privacy_passphrase: placeholder(
+            &secret_env("PRIVACY_PASSPHRASE", scope),
+            &c.privacy_passphrase,
+        ),
         context_name: c.context_name.clone(),
         engine_id: c.engine_id.clone(),
         context_engine_id: c.context_engine_id.clone(),
@@ -213,34 +239,54 @@ pub fn from_wire(wire: &server::SnmpConfig) -> SnmpConfigLocal {
             name: crate::model::SINGLETON_NAME.to_string(),
         },
         spec: Spec {
-            defaults: Some(config_to_params(&wire.defaults)),
+            defaults: Some(config_to_params(&wire.defaults, "DEFAULTS")),
             profiles: wire
                 .profiles
                 .profile
                 .iter()
-                .map(|p| ProfileLocal {
-                    params: config_to_params(&p.config),
-                    label: p.label.clone().unwrap_or_default(),
-                    filter_expression: p.filter.clone(),
+                .enumerate()
+                .map(|(i, p)| {
+                    let label = p.label.clone().unwrap_or_default();
+                    // Profile labels are the unique reference key; fall back to
+                    // the index for an (unexpected) unlabeled profile.
+                    let scope = if label.is_empty() {
+                        format!("PROFILE_{i}")
+                    } else {
+                        format!("PROFILE_{}", sanitize(&label))
+                    };
+                    ProfileLocal {
+                        params: config_to_params(&p.config, &scope),
+                        label,
+                        filter_expression: p.filter.clone(),
+                    }
                 })
                 .collect(),
             definitions: wire
                 .definition
                 .iter()
-                .map(|d| DefinitionLocal {
-                    params: config_to_params(&d.config),
-                    specifics: d.specific.clone(),
-                    ranges: d
-                        .range
-                        .iter()
-                        .map(|r| RangeLocal {
-                            begin: r.begin.clone(),
-                            end: r.end.clone(),
-                        })
-                        .collect(),
-                    ip_matches: d.ip_match.clone(),
-                    location: d.location.clone(),
-                    profile_label: d.profile_label.clone(),
+                .enumerate()
+                .map(|(i, d)| {
+                    // The index guarantees uniqueness (two definitions can share
+                    // a location); the location adds readability.
+                    let scope = match d.location.as_deref() {
+                        Some(loc) if !loc.is_empty() => format!("DEF_{i}_{}", sanitize(loc)),
+                        _ => format!("DEF_{i}"),
+                    };
+                    DefinitionLocal {
+                        params: config_to_params(&d.config, &scope),
+                        specifics: d.specific.clone(),
+                        ranges: d
+                            .range
+                            .iter()
+                            .map(|r| RangeLocal {
+                                begin: r.begin.clone(),
+                                end: r.end.clone(),
+                            })
+                            .collect(),
+                        ip_matches: d.ip_match.clone(),
+                        location: d.location.clone(),
+                        profile_label: d.profile_label.clone(),
+                    }
                 })
                 .collect(),
         },
@@ -325,5 +371,41 @@ spec:
         assert_eq!(p.retries, Some(1)); // retry → retries
         // A placeholder reference is emitted instead.
         assert!(matches!(&p.read_community, Some(SecretRef::FromEnv(_))));
+    }
+
+    #[test]
+    fn from_wire_gives_each_tier_a_distinct_placeholder() {
+        // defaults and a definition carry DIFFERENT communities — the exported
+        // placeholders must differ so the operator can set them independently
+        // (a single fixed name would collapse them on re-apply).
+        let wire = server::SnmpConfig {
+            defaults: server::Configuration {
+                read_community: Some("default-ro".into()),
+                ..Default::default()
+            },
+            definition: vec![server::Definition {
+                config: server::Configuration {
+                    read_community: Some("def-ro".into()),
+                    ..Default::default()
+                },
+                location: Some("nyc-dc".into()),
+                specific: vec!["10.0.0.1".into()],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let local = from_wire(&wire);
+        let env_of = |r: &Option<SecretRef>| match r {
+            Some(SecretRef::FromEnv(e)) => e.from_env.clone(),
+            _ => panic!("expected a fromEnv placeholder"),
+        };
+        let defaults_env = env_of(&local.spec.defaults.as_ref().unwrap().read_community);
+        let def_env = env_of(&local.spec.definitions[0].params.read_community);
+        assert_eq!(defaults_env, "SNMP_READ_COMMUNITY_DEFAULTS");
+        assert_eq!(def_env, "SNMP_READ_COMMUNITY_DEF_0_NYC_DC");
+        assert_ne!(
+            defaults_env, def_env,
+            "distinct tiers must export distinct placeholders"
+        );
     }
 }
