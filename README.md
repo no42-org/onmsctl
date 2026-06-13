@@ -725,6 +725,115 @@ every modeled field with inline notes.
 
 ---
 
+## SNMP configuration (`kind: SnmpConfig`)
+
+Manage Horizon's SNMP configuration (`snmp-config.xml`: `defaults` +
+`profiles` + `definitions`) declaratively via `onmsctl apply -f`, and read
+it back with the `snmp export` / `snmp lookup` verbs. Targets
+`/api/v2/snmp-config` on Horizon.
+
+`SnmpConfig` is a **singleton** — there is one snmp-config per Horizon, so
+`metadata.name` is fixed to `default`. The document is the source of truth
+for the entire snmp-config: apply reconciles it by **whole-config replace**
+(pull the deployed config, compare ignoring secret values, and re-upload the
+full config only when it differs). Parameters you omit take the server's
+schema defaults after apply.
+
+### Declarative apply (`onmsctl apply -f`)
+
+```sh
+# Preview — plan only, no writes. --diff prints a concise per-tier summary
+# (defaults / definitions / profiles) to stderr. Safe in any context,
+# including --read-only (a dry-run apply classifies as a Read verb).
+onmsctl apply -f examples/snmp-config.yaml --dry-run --diff
+
+# Real apply — whole-config replace. An unchanged config issues no write.
+onmsctl apply -f examples/snmp-config.yaml
+```
+
+Validation runs at parse time, before any HTTP: a definition must declare at
+least one selector (`specifics` / `ranges` / `ipMatches`), `ipMatches` cannot
+be combined with `specifics`/`ranges` in one definition, IPs/ranges must be
+syntactically valid, and a `profileLabel` must name a declared profile. A
+non-`default` `metadata.name`, or a second `SnmpConfig` document in the same
+apply, is refused.
+
+### Secret references — communities and v3 passphrases are never inline
+
+A literal community string or passphrase is **rejected at parse time**.
+Reference an external secret instead, with exactly one source — the same
+shape as IAM's `passwordRef`:
+
+```yaml
+readCommunity:    { fromEnv: ONMS_SNMP_READ_COMMUNITY }
+authPassphrase:   { fromKeyring: { service: onmsctl, account: snmp-auth } }
+privacyPassphrase: { fromFile: /run/secrets/snmp-priv }
+```
+
+Secrets are **write-only**: resolved at apply and sent on every upload, but
+**excluded from the idempotency comparison** (a redacted/echoed value on the
+server can't produce a spurious diff). A secret rotation with no other change
+is therefore not auto-detected — make a substantive change alongside it, or
+re-apply deliberately. `snmp export` emits every secret as a reference
+placeholder, never cleartext.
+
+### `snmp export` — snapshot the deployed config
+
+```sh
+onmsctl snmp export                       # kind: SnmpConfig YAML to stdout
+onmsctl snmp export -O snmp-config.yaml    # write to a file
+onmsctl snmp export -o json                # the same model as JSON
+```
+
+The reverse of `apply`: `GET`s the config and emits an equivalent
+`kind: SnmpConfig` document. Secret fields come out as `fromEnv` placeholders
+— the exported doc is safe to commit, but wire up the real secret references
+before re-applying it.
+
+### `snmp lookup` — effective parameters for an agent
+
+```sh
+# Every location whose definition selector matches the IP (one row each),
+# falling back to the Default location when none match. Secrets masked.
+onmsctl snmp lookup 192.168.8.8
+
+# A specific location, revealing the community / passphrases.
+onmsctl snmp lookup 192.168.8.8 --location labmonkeys-hq --show-secrets
+
+# Several IPs at once, as JSON.
+onmsctl snmp lookup 10.0.0.1 10.0.0.2 -o json
+```
+
+Reports the effective `SnmpAgentConfig` OpenNMS would use for each agent (the
+web UI's SNMP lookup). Output is version-aware — the community for v1/v2c, the
+security identity for v3 — and honors `-o table|json|yaml`. Community strings
+and passphrases are **masked by default**; pass `--show-secrets` to reveal
+them. Without `--location`, locations are discovered by matching each
+definition's `specifics`/`ranges`/`ipMatches` against the IP; a location
+reached only through a profile `filterExpression` (server-evaluated) is not
+auto-discovered — pass `--location` explicitly for those.
+
+### Workflow: configure SNMP *before* provisioning
+
+`SnmpConfig` applies **before** `Requisition` in a co-located
+`onmsctl apply -f ./dir/` (its kind-precedence rank is lower), so a directory
+holding both configures SNMP first, then imports the nodes — the order
+Horizon needs to collect on first import. There is **no automatic
+provisioning rescan** triggered by an SNMP change: updating SNMP for nodes
+that are *already* imported requires a manual rescan to pick up the new
+parameters:
+
+```sh
+onmsctl apply -f snmp-config.yaml                  # change SNMP
+onmsctl requisition import <foreign-source> --rescan-existing
+```
+
+The example [`examples/snmp-config.yaml`](examples/snmp-config.yaml) covers
+`defaults`, a v3 `profile`, and selector-based `definitions` with inline
+notes.
+
+---
+
 ## Aliases and read-only contexts
 
 ### Top-level verb aliases

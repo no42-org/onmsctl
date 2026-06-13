@@ -24,10 +24,11 @@ linked binary that bundles three capabilities — **eventconf**
 - [6. GitOps for event configuration](#6-gitops-for-event-configuration)
 - [7. GitOps for provisioning requisitions](#7-gitops-for-provisioning-requisitions)
 - [8. Managing IAM users](#8-managing-iam-users)
-- [9. Global flags and environment variables](#9-global-flags-and-environment-variables)
-- [10. Output formats and exit codes](#10-output-formats-and-exit-codes)
-- [11. Shell completion](#11-shell-completion)
-- [12. Troubleshooting](#12-troubleshooting)
+- [9. SNMP configuration](#9-snmp-configuration)
+- [10. Global flags and environment variables](#10-global-flags-and-environment-variables)
+- [11. Output formats and exit codes](#11-output-formats-and-exit-codes)
+- [12. Shell completion](#12-shell-completion)
+- [13. Troubleshooting](#13-troubleshooting)
 
 ---
 
@@ -393,7 +394,39 @@ onmsctl iam user set-password jdoe --from-keyring myservice/jdoe
 lockout) or strip your own protected role / delete your own account
 (self-lockout) — see exit codes `13`–`15`.
 
-## 9. Global flags and environment variables
+## 9. SNMP configuration
+
+Manage Horizon's SNMP configuration declaratively (`kind: SnmpConfig`) and
+read it back with the `snmp` verbs. It is a **singleton** — one snmp-config
+per server, so `metadata.name` is always `default` — reconciled by
+whole-config replace.
+
+```sh
+# Preview, then apply the whole-server SNMP config.
+onmsctl apply -f examples/snmp-config.yaml --dry-run --diff
+onmsctl apply -f examples/snmp-config.yaml
+
+# Snapshot the deployed config back to YAML (secrets become placeholders).
+onmsctl snmp export -O snmp-config.yaml
+
+# Show the effective SNMP params for an agent (community/passphrases masked).
+onmsctl snmp lookup 192.168.8.8
+onmsctl snmp lookup 192.168.8.8 --location labmonkeys-hq --show-secrets
+```
+
+Communities and v3 passphrases are **never inline** — reference them with
+`fromEnv` / `fromFile` / `fromKeyring` (the same shape as IAM's `passwordRef`),
+and they're write-only (masked on `lookup`, placeholders on `export`).
+
+**Order matters:** in a directory holding both, `SnmpConfig` applies *before*
+`Requisition`, so SNMP is configured before nodes import. There's no automatic
+rescan — to push an SNMP change to already-imported nodes, re-import:
+`onmsctl requisition import <foreign-source> --rescan-existing`.
+
+See [`examples/snmp-config.yaml`](../examples/snmp-config.yaml) and the SNMP
+section of the [README](../README.md#snmp-configuration-kind-snmpconfig).
+
+## 10. Global flags and environment variables
 
 These work on (almost) every command:
 
@@ -421,7 +454,7 @@ flags  >  environment  >  active context  >  built-in default
 Top-level verbs have short aliases: `event-source`→`evtsrc`, `event`→`evt`,
 `requisition`→`req`, `config`→`cfg`.
 
-## 10. Output formats and exit codes
+## 11. Output formats and exit codes
 
 Pick a machine-readable format for scripting:
 
@@ -450,7 +483,7 @@ Exit codes are stable and safe to branch on:
 | 14 | `apply` refused: would strip the caller's own protected role / account (self-lockout) |
 | 15 | `apply` refused: caller identity unavailable, so the self-lockout check can't run |
 
-## 11. Shell completion
+## 12. Shell completion
 
 ```sh
 # Bash
@@ -465,7 +498,7 @@ onmsctl completion fish > ~/.config/fish/completions/onmsctl.fish
 
 Supported shells: `bash`, `zsh`, `fish`, `elvish`, `powershell`.
 
-## 12. Troubleshooting
+## 13. Troubleshooting
 
 - **`onmsctl version` shows the wrong/old binary** — check `which onmsctl`;
   a release binary in `/usr/local/bin` may shadow a `cargo install` one in

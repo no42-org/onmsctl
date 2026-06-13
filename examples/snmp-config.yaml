@@ -1,0 +1,55 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/no42-org/onmsctl/main/schemas/snmp-config.schema.json
+#
+# kind: SnmpConfig — the whole-server SNMP configuration as one declarative
+# document (OpenSpec add-snmp-config-capability). It is a SINGLETON: there is
+# one snmp-config per Horizon, so metadata.name is always `default`.
+# `onmsctl apply -f` reconciles it by whole-config replace against
+# /api/v2/snmp-config:
+#
+#   onmsctl apply -f examples/snmp-config.yaml --dry-run --diff
+#
+apiVersion: snmp.opennms.org/v1
+kind: SnmpConfig
+metadata:
+  name: default
+spec:
+  # Fallback parameters applied to any agent no definition matches.
+  defaults:
+    version: v2c
+    port: 161
+    timeout: 1800
+    retries: 1
+    # Secrets are NEVER inline — a literal string is rejected at parse time.
+    # Reference exactly one source: fromEnv / fromFile / fromKeyring. They are
+    # write-only: resolved at apply, never read back, and `snmp export` emits
+    # them as reference placeholders, never cleartext.
+    readCommunity: { fromEnv: ONMS_SNMP_READ_COMMUNITY }
+
+  # Named, reusable parameter templates. A definition adopts one by label.
+  profiles:
+    - label: core-v3
+      version: v3
+      securityName: monitor
+      securityLevel: authPriv          # noAuthNoPriv | authNoPriv | authPriv
+      authProtocol: SHA
+      authPassphrase: { fromKeyring: { service: onmsctl, account: snmp-auth } }
+      privacyProtocol: AES
+      privacyPassphrase: { fromFile: /run/secrets/snmp-priv }
+      # Optional OpenNMS filter expression (evaluated server-side).
+      filterExpression: "categoryName == 'Routers'"
+
+  # Per-target overrides. Each definition needs at least one selector:
+  # `specifics` (exact IPs), `ranges` (begin/end), or `ipMatches` (IPLIKE) —
+  # and `ipMatches` cannot be combined with `specifics`/`ranges` in the same
+  # definition.
+  definitions:
+    - location: labmonkeys-hq
+      specifics: [192.168.8.8]
+      ranges:
+        - { begin: 10.0.0.1, end: 10.0.0.254 }
+      # Adopt a profile by its label (must name a declared spec.profiles[].label).
+      profileLabel: core-v3
+    - location: nyc-dc
+      ipMatches: ["10.12.*.*"]
+      version: v2c
+      readCommunity: { fromEnv: ONMS_SNMP_NYC_COMMUNITY }
