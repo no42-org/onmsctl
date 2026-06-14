@@ -197,7 +197,7 @@ impl KindHandler for SnmpConfigHandler {
                 SINGLETON_NAME,
                 Action::Update,
                 format!("{message} ({})", errs.join("; ")),
-                "verify connectivity (and that the server exposes the Trapd REST API) and re-apply",
+                "resolve the reported error(s) and re-apply",
             )
         } else {
             let changed =

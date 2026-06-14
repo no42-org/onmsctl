@@ -15,12 +15,14 @@
 //!
 //! `execute()` is the **composite reconcile** (design D4): write the definition
 //! first (create/update/unchanged), then — only if that succeeded — `attach` each
-//! desired `suppress` target (ensure-present). Each gets its own outcome: the
-//! definition is `Created`/`Updated`/`Unchanged`, attachments are `Ensured`
-//! (the attachment set is not readable, so we can only guarantee presence). A
-//! failed attach is a `Failed` outcome; if the definition write fails, attaches
-//! are `Skipped` (not attempted). Reducing suppression is `maintenance delete` +
-//! re-apply — apply never detaches (it cannot read the current attachment set).
+//! desired `suppress` target (ensure-present, since the attachment set is not
+//! readable). The kind-router requires exactly one outcome per document, so the
+//! definition status and every attachment result are folded into ONE
+//! `ApplyOutcome`: its status is the definition's, downgraded to `Failed` if the
+//! definition write or any attach failed; its message lists the ensured/failed
+//! targets and its `details` carries the structured per-target list. Reducing
+//! suppression is `maintenance delete` + re-apply — apply never detaches (it
+//! cannot read the current attachment set).
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
