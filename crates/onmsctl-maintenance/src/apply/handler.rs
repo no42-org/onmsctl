@@ -788,10 +788,7 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/api/v2/nodes"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({ "count": 0, "totalCount": 0, "node": [] })),
-            )
+            .respond_with(ResponseTemplate::new(204))
             .mount(&server)
             .await;
         Mock::given(method("GET"))
@@ -834,10 +831,7 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/api/v2/nodes"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({ "count": 0, "totalCount": 0, "node": [] })),
-            )
+            .respond_with(ResponseTemplate::new(204))
             .mount(&server)
             .await;
         let doc = "apiVersion: maintenance.opennms.org/v1\nkind: Maintenance\nmetadata:\n  name: win\nspec:\n  schedule:\n    type: daily\n    times:\n      - { begins: \"22:00:00\", ends: \"23:00:00\" }\n  devices:\n    categories: [Empty]\n  suppress:\n    notifications: true\n";

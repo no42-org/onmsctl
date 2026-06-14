@@ -124,11 +124,20 @@ impl<'a> MaintenanceApi<'a> {
     /// nodeIds via one v2 search: `GET api/v2/nodes?_s=<fiql>&limit=0`. `limit=0`
     /// returns all matches; a truncated response (`count < totalCount`) is an
     /// error rather than a silent subset.
+    ///
+    /// A search that matches **nothing** returns HTTP `204 No Content` (verified
+    /// against a live Horizon) — which the JSON client surfaces as a 204 error;
+    /// we map it to an empty result (no matches), not a failure.
     pub async fn search_node_ids(&self, fiql: &str) -> Result<Vec<i64>> {
-        let list: NodeList = self
+        let list: NodeList = match self
             .client
             .get("api/v2/nodes", &[("_s", fiql), ("limit", "0")])
-            .await?;
+            .await
+        {
+            Ok(list) => list,
+            Err(Error::HttpStatus { status: 204, .. }) => return Ok(Vec::new()),
+            Err(e) => return Err(e),
+        };
         if let (Some(c), Some(t)) = (list.count, list.total_count)
             && c < t
         {
@@ -291,6 +300,24 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("truncated"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn search_node_ids_treats_204_as_no_matches() {
+        // A zero-match search returns 204 No Content on a live Horizon — must be
+        // an empty result, not an error.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v2/nodes"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+        let client = client_for(&server);
+        let ids = MaintenanceApi::new(&client)
+            .search_node_ids("category.name==Empty")
+            .await
+            .expect("204 → empty, not an error");
+        assert!(ids.is_empty());
     }
 
     #[tokio::test]
