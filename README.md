@@ -925,9 +925,10 @@ then **attaches** it to each declared daemon: `polling`→pollerd, `thresholds`�
 
 - **Attachments are ensure-present.** The REST API can't read which daemons an
   outage is attached to, so onmsctl re-issues the (idempotent) attach every apply
-  and reports it `Ensured` — it cannot *detach*. **Removing a `suppress` entry
-  from the manifest does not detach it.** To reduce suppression, run
-  `onmsctl maintenance delete <name>` (removes it from all daemons) and re-apply.
+  and records the ensured/failed targets in the window's outcome message — it
+  cannot *detach*. **Removing a `suppress` entry from the manifest does not
+  detach it.** To reduce suppression, run `onmsctl maintenance delete <name>`
+  (removes it from all daemons) and re-apply.
 - **Explicit packages, server timezone, foreignId nodes.** There is no default
   package — `polling`/`thresholds`/`collection` require an explicit `packages`
   list. Times are interpreted in the **server's** timezone. Nodes are named by

@@ -31,10 +31,6 @@ use crate::model::{KIND, SINGLETON_NAME, SnmpConfigLocal};
 use crate::server::{SnmpConfig, TrapdConfig};
 use crate::{convert, diff};
 
-/// Display name for the trap-daemon sub-resource in per-resource outcomes, so a
-/// merged apply reports the snmp-config and trap-daemon halves distinctly.
-const TRAPD_NAME: &str = "default (trapd)";
-
 /// Handler for `kind: SnmpConfig` documents.
 #[derive(Default)]
 pub struct SnmpConfigHandler;
@@ -81,7 +77,6 @@ impl KindHandler for SnmpConfigHandler {
         let desired = convert::to_wire(&local);
         let agent_unchanged = diff::unchanged(&desired, &deployed);
 
-        let mut previews = vec![agent_preview(agent_unchanged)];
         let mut diff_sections = Vec::new();
         if !agent_unchanged {
             diff_sections.push(render_diff(&deployed, &desired));
@@ -97,7 +92,6 @@ impl KindHandler for SnmpConfigHandler {
             let deployed_t = trapd_api.get_config().await?.unwrap_or_default();
             let desired_t = convert::trapd_to_wire(t);
             let uc = diff::trapd_unchanged(&desired_t, &deployed_t);
-            previews.push(trapd_preview(uc));
             if !uc {
                 diff_sections.push(render_trapd_diff(&deployed_t, &desired_t));
             }
@@ -106,10 +100,13 @@ impl KindHandler for SnmpConfigHandler {
             None
         };
 
+        // ONE preview row per document (the kind-router contract): the singleton
+        // SnmpConfig, summarizing the agent and (optional) trap-daemon halves.
+        let preview = config_preview(agent_unchanged, trapd_unchanged);
         let diff_text = (!diff_sections.is_empty()).then(|| diff_sections.join("\n\n"));
 
         Ok(Plan::new(
-            previews,
+            vec![preview],
             Box::new(SnmpExecPayload {
                 local,
                 agent_unchanged,
@@ -131,110 +128,123 @@ impl KindHandler for SnmpConfigHandler {
         let client = OnmsClient::from_context(ctx)?;
 
         // There is no cross-endpoint transaction. Write the snmp-config (agent)
-        // half first (lower blast radius), then the trap-daemon half, emitting a
-        // distinct outcome for each so a mid-apply failure is reported precisely
-        // rather than masked as overall success.
-        let mut outcomes = Vec::new();
-
-        if payload.agent_unchanged {
-            outcomes.push(agent_preview(true));
+        // half first (lower blast radius), then the trap-daemon half, and fold
+        // both into ONE outcome for the singleton document (the kind-router
+        // contract is one outcome per document). The status is the worst of the
+        // two, and the message names each half, so a mid-apply failure is
+        // reported precisely rather than masked.
+        let mut agent_err: Option<String> = None;
+        let agent_word = if payload.agent_unchanged {
+            "in sync"
         } else {
             // Resolve secrets only now, on the real-apply path.
             let wire = convert::to_wire_resolved(&payload.local)?;
             let snmp_api = SnmpConfigApi::new(&client);
-            outcomes.push(match snmp_api.upload_config(&wire).await {
-                Ok(()) => ApplyOutcome::new(
-                    KIND,
-                    SINGLETON_NAME,
-                    Action::Update,
-                    OutcomeStatus::Updated,
-                    "snmp-config replaced",
-                ),
-                Err(e) => ApplyOutcome::failed(
-                    KIND,
-                    SINGLETON_NAME,
-                    Action::Update,
-                    e.to_string(),
-                    "verify connectivity and re-apply",
-                ),
-            });
-        }
+            match snmp_api.upload_config(&wire).await {
+                Ok(()) => "replaced",
+                Err(e) => {
+                    agent_err = Some(e.to_string());
+                    "FAILED"
+                }
+            }
+        };
 
-        if let Some(trapd_unchanged) = payload.trapd_unchanged {
-            if trapd_unchanged {
-                outcomes.push(trapd_preview(true));
-            } else {
+        let mut trapd_err: Option<String> = None;
+        let trapd_word: Option<&str> = match payload.trapd_unchanged {
+            None => None,
+            Some(true) => Some("in sync"),
+            Some(false) => {
                 let t = payload
                     .local
                     .spec
                     .trapd
                     .as_ref()
                     .expect("trapd_unchanged is Some only when spec.trapd is present");
-                // Resolve passphrases into a Failed outcome (not an Err) so the
-                // already-recorded agent outcome is preserved in the report.
-                let outcome = match convert::trapd_to_wire_resolved(t) {
+                Some(match convert::trapd_to_wire_resolved(t) {
                     Ok(wire) => {
                         let trapd_api = TrapdConfigApi::new(&client);
                         match trapd_api.update_config(&wire).await {
-                            Ok(()) => ApplyOutcome::new(
-                                KIND,
-                                TRAPD_NAME,
-                                Action::Update,
-                                OutcomeStatus::Updated,
-                                "trap-daemon config updated",
-                            ),
-                            Err(e) => ApplyOutcome::failed(
-                                KIND,
-                                TRAPD_NAME,
-                                Action::Update,
-                                e.to_string(),
-                                "verify the server exposes the Trapd REST API and re-apply",
-                            ),
+                            Ok(()) => "updated",
+                            Err(e) => {
+                                trapd_err = Some(e.to_string());
+                                "FAILED"
+                            }
                         }
                     }
-                    Err(e) => ApplyOutcome::failed(
-                        KIND,
-                        TRAPD_NAME,
-                        Action::Update,
-                        e.to_string(),
-                        "resolve the trap-daemon passphrase reference and re-apply",
-                    ),
-                };
-                outcomes.push(outcome);
+                    Err(e) => {
+                        trapd_err = Some(e.to_string());
+                        "FAILED"
+                    }
+                })
             }
+        };
+
+        let mut message = format!("snmp-config {agent_word}");
+        if let Some(w) = trapd_word {
+            message.push_str(&format!("; trapd {w}"));
         }
 
-        Ok(outcomes)
+        let outcome = if agent_err.is_some() || trapd_err.is_some() {
+            let mut errs = Vec::new();
+            if let Some(e) = agent_err {
+                errs.push(format!("snmp-config: {e}"));
+            }
+            if let Some(e) = trapd_err {
+                errs.push(format!("trapd: {e}"));
+            }
+            ApplyOutcome::failed(
+                KIND,
+                SINGLETON_NAME,
+                Action::Update,
+                format!("{message} ({})", errs.join("; ")),
+                "resolve the reported error(s) and re-apply",
+            )
+        } else {
+            let changed =
+                !payload.agent_unchanged || matches!(payload.trapd_unchanged, Some(false));
+            let (action, status) = if changed {
+                (Action::Update, OutcomeStatus::Updated)
+            } else {
+                (Action::None, OutcomeStatus::Unchanged)
+            };
+            ApplyOutcome::new(KIND, SINGLETON_NAME, action, status, message)
+        };
+
+        Ok(vec![outcome])
     }
 }
 
-/// The snmp-config (agent) per-resource preview/outcome for a given verdict.
-fn agent_preview(unchanged: bool) -> ApplyOutcome {
-    if unchanged {
+/// The single preview row for the snmp-config document, summarizing the agent
+/// and (optional) trap-daemon verdicts. Exactly one row per document.
+fn config_preview(agent_unchanged: bool, trapd_unchanged: Option<bool>) -> ApplyOutcome {
+    let mut message = format!(
+        "snmp-config {}",
+        if agent_unchanged {
+            "in sync"
+        } else {
+            "would replace"
+        }
+    );
+    if let Some(uc) = trapd_unchanged {
+        message.push_str(if uc {
+            "; trapd in sync"
+        } else {
+            "; trapd would update"
+        });
+    }
+    let changed = !agent_unchanged || matches!(trapd_unchanged, Some(false));
+    if changed {
+        let mut o = ApplyOutcome::would(KIND, SINGLETON_NAME, Action::Update);
+        o.message = message;
+        o
+    } else {
         ApplyOutcome::new(
             KIND,
             SINGLETON_NAME,
             Action::None,
             OutcomeStatus::Unchanged,
-            "in sync",
+            message,
         )
-    } else {
-        ApplyOutcome::would(KIND, SINGLETON_NAME, Action::Update)
-    }
-}
-
-/// The trap-daemon per-resource preview/outcome for a given verdict.
-fn trapd_preview(unchanged: bool) -> ApplyOutcome {
-    if unchanged {
-        ApplyOutcome::new(
-            KIND,
-            TRAPD_NAME,
-            Action::None,
-            OutcomeStatus::Unchanged,
-            "in sync",
-        )
-    } else {
-        ApplyOutcome::would(KIND, TRAPD_NAME, Action::Update)
     }
 }
 
@@ -444,19 +454,25 @@ mod tests {
         let handler = SnmpConfigHandler;
 
         let plan = handler.plan(&docs, &params, &ctx).await.unwrap();
-        assert_eq!(plan.preview.len(), 2, "agent + trapd previews");
-        let trapd_preview = plan
-            .preview
-            .iter()
-            .find(|o| o.name == TRAPD_NAME)
-            .expect("a trapd preview");
-        assert_eq!(trapd_preview.action, Action::Update);
+        // One preview row per document (the kind-router contract); it summarizes
+        // both halves and is an Update because the trapd half changed.
+        assert_eq!(plan.preview.len(), 1, "one row per document");
+        assert_eq!(plan.preview[0].action, Action::Update);
+        assert!(
+            plan.preview[0].message.contains("trapd would update"),
+            "preview summarizes the trapd half: {}",
+            plan.preview[0].message
+        );
 
         let outcomes = handler.execute(plan, &params, &ctx).await.unwrap();
-        let agent = outcomes.iter().find(|o| o.name == SINGLETON_NAME).unwrap();
-        let trapd = outcomes.iter().find(|o| o.name == TRAPD_NAME).unwrap();
-        assert_eq!(agent.status, OutcomeStatus::Unchanged);
-        assert_eq!(trapd.status, OutcomeStatus::Updated);
+        assert_eq!(outcomes.len(), 1, "one outcome per document");
+        assert_eq!(outcomes[0].status, OutcomeStatus::Updated);
+        assert!(
+            outcomes[0].message.contains("snmp-config in sync")
+                && outcomes[0].message.contains("trapd updated"),
+            "outcome names both halves: {}",
+            outcomes[0].message
+        );
 
         // The PUT body carries the new port and the resolved passphrase.
         let reqs = server.received_requests().await.unwrap();
@@ -540,9 +556,15 @@ mod tests {
         let handler = SnmpConfigHandler;
 
         let plan = handler.plan(&docs, &params, &ctx).await.unwrap();
+        assert_eq!(plan.preview.len(), 1);
         let outcomes = handler.execute(plan, &params, &ctx).await.unwrap();
-        let trapd = outcomes.iter().find(|o| o.name == TRAPD_NAME).unwrap();
-        assert_eq!(trapd.status, OutcomeStatus::Updated, "create path");
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].status, OutcomeStatus::Updated, "create path");
+        assert!(
+            outcomes[0].message.contains("trapd updated"),
+            "got: {}",
+            outcomes[0].message
+        );
     }
 
     /// An unsupported server (trapd route absent) GET 404s, then PUT 404s →
@@ -578,19 +600,67 @@ mod tests {
             .await
             .unwrap();
 
-        let agent = outcomes.iter().find(|o| o.name == SINGLETON_NAME).unwrap();
-        let trapd = outcomes.iter().find(|o| o.name == TRAPD_NAME).unwrap();
-        assert_eq!(
-            agent.status,
-            OutcomeStatus::Unchanged,
-            "agent half unaffected"
-        );
-        assert_eq!(trapd.status, OutcomeStatus::Failed);
+        // One outcome: the trapd PUT 404 makes the document Failed, but the
+        // message records that the agent half is in sync and carries the version
+        // hint for the failing trapd half.
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].status, OutcomeStatus::Failed);
+        let m = &outcomes[0].message;
         assert!(
-            trapd.message.contains("NMS-19128"),
-            "version hint in trapd failure: {}",
-            trapd.message
+            m.contains("snmp-config in sync"),
+            "agent half reported: {m}"
         );
+        assert!(
+            m.contains("trapd FAILED"),
+            "trapd half reported failed: {m}"
+        );
+        assert!(m.contains("NMS-19128"), "version hint present: {m}");
+    }
+
+    /// Regression guard: drive a SnmpConfig-with-trapd document THROUGH the
+    /// kind-router, which enforces exactly one preview + one outcome per
+    /// document. The earlier two-row design (agent + trapd) is rejected here —
+    /// the bug a direct handler test cannot catch.
+    #[tokio::test]
+    async fn router_path_accepts_one_row_for_snmpconfig_with_trapd() {
+        use onmsctl_core::Registry;
+        use onmsctl_core::kind::apply_documents;
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v2/snmp-config"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "version": "v2c" })),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/v2/trapd/config"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({ "snmpTrapPort": 100, "newSuspectOnTrap": false }),
+            ))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/api/v2/trapd/config"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let mut reg = Registry::new();
+        reg.register(900, Box::new(SnmpConfigHandler));
+        let docs = doc(
+            "  defaults:\n    version: v2c\n  trapd:\n    snmpTrapPort: 162\n    newSuspectOnTrap: false\n",
+        );
+        let outcomes = apply_documents(&reg, docs, &ApplyParams::default(), &ctx_for(&server))
+            .await
+            .expect("router accepts one row per document");
+        assert_eq!(
+            outcomes.len(),
+            1,
+            "one outcome per document through the router"
+        );
+        assert_eq!(outcomes[0].status, OutcomeStatus::Updated);
     }
 
     /// Two SnmpConfig documents in one bucket is a gate error (singleton).

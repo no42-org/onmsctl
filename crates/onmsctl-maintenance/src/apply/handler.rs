@@ -15,12 +15,14 @@
 //!
 //! `execute()` is the **composite reconcile** (design D4): write the definition
 //! first (create/update/unchanged), then — only if that succeeded — `attach` each
-//! desired `suppress` target (ensure-present). Each gets its own outcome: the
-//! definition is `Created`/`Updated`/`Unchanged`, attachments are `Ensured`
-//! (the attachment set is not readable, so we can only guarantee presence). A
-//! failed attach is a `Failed` outcome; if the definition write fails, attaches
-//! are `Skipped` (not attempted). Reducing suppression is `maintenance delete` +
-//! re-apply — apply never detaches (it cannot read the current attachment set).
+//! desired `suppress` target (ensure-present, since the attachment set is not
+//! readable). The kind-router requires exactly one outcome per document, so the
+//! definition status and every attachment result are folded into ONE
+//! `ApplyOutcome`: its status is the definition's, downgraded to `Failed` if the
+//! definition write or any attach failed; its message lists the ensured/failed
+//! targets and its `details` carries the structured per-target list. Reducing
+//! suppression is `maintenance delete` + re-apply — apply never detaches (it
+//! cannot read the current attachment set).
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -102,11 +104,14 @@ impl KindHandler for MaintenanceHandler {
         let client = OnmsClient::from_context(ctx)?;
         let api = MaintenanceApi::new(&client);
 
-        let mut previews = Vec::new();
+        // One preview row per document (the kind-router contract): the window's
+        // definition action carries an attachment summary; the per-attachment
+        // results are folded into the single execute outcome's message/details.
+        let mut previews = Vec::with_capacity(locals.len());
         let mut windows = Vec::with_capacity(locals.len());
         for local in locals {
             let planned = plan_window(local, &api).await?;
-            previews.extend(preview_for(&planned));
+            previews.push(preview_for(&planned));
             windows.push(planned);
         }
 
@@ -144,7 +149,7 @@ impl KindHandler for MaintenanceHandler {
                         "resolve the node reference (import the node) and re-apply",
                     ));
                 }
-                Planned::Ready(rw) => execute_window(*rw, &api, &mut outcomes).await,
+                Planned::Ready(rw) => outcomes.push(execute_window(*rw, &api).await),
             }
         }
         Ok(outcomes)
@@ -197,116 +202,135 @@ fn def_action(rw: &ReadyWindow) -> Action {
     }
 }
 
-/// Plan-phase previews for one window: the definition, then each attach target.
-fn preview_for(planned: &Planned) -> Vec<ApplyOutcome> {
+/// The plan-phase preview for one window — exactly ONE row per document (the
+/// kind-router contract). The window's definition action is the row's action; an
+/// attachment summary rides in the message.
+fn preview_for(planned: &Planned) -> ApplyOutcome {
     match planned {
-        Planned::Failed { name, message } => vec![ApplyOutcome::failed(
+        Planned::Failed { name, message } => ApplyOutcome::failed(
             KIND,
             name.clone(),
             Action::None,
             message.clone(),
             "resolve the node reference (import the node) and re-apply",
-        )],
+        ),
         Planned::Ready(rw) => {
-            let name = &rw.local.metadata.name;
-            let mut out = vec![match def_action(rw) {
+            let name = rw.local.metadata.name.clone();
+            let ensure = ensure_suffix(&rw.targets);
+            match def_action(rw) {
                 Action::None => ApplyOutcome::new(
                     KIND,
-                    name.clone(),
+                    name,
                     Action::None,
                     OutcomeStatus::Unchanged,
-                    "in sync",
+                    format!("in sync{ensure}"),
                 ),
-                action => ApplyOutcome::would(KIND, name.clone(), action),
-            }];
-            for t in &rw.targets {
-                out.push(ApplyOutcome::would(
-                    KIND,
-                    target_name(name, t),
-                    Action::Update,
-                ));
+                action => {
+                    let mut o = ApplyOutcome::would(KIND, name, action);
+                    o.message = format!("{}{ensure}", o.message);
+                    o
+                }
             }
-            out
         }
     }
 }
 
-/// Execute one ready window: definition first, then attaches (ensure-present).
-async fn execute_window(rw: ReadyWindow, api: &MaintenanceApi<'_>, out: &mut Vec<ApplyOutcome>) {
+/// Execute one ready window — the composite reconcile folded into ONE outcome:
+/// write the definition, then (only if that succeeded) ensure each attachment.
+/// The single outcome's status is the definition's, downgraded to `Failed` if
+/// the definition write or any attachment failed; the message summarizes the
+/// attachment results and `details` carries the structured per-target list.
+async fn execute_window(rw: ReadyWindow, api: &MaintenanceApi<'_>) -> ApplyOutcome {
     let name = rw.local.metadata.name.clone();
 
     // -- Definition --
-    let def_ok = if rw.def_unchanged {
-        out.push(ApplyOutcome::new(
-            KIND,
-            name.clone(),
-            Action::None,
-            OutcomeStatus::Unchanged,
-            "in sync",
-        ));
-        true
+    let (def_action_taken, def_status, def_msg) = if rw.def_unchanged {
+        (Action::None, OutcomeStatus::Unchanged, "definition in sync")
+    } else if rw.deployed_exists {
+        (Action::Update, OutcomeStatus::Updated, "definition updated")
     } else {
-        let desired = convert::to_wire(&rw.local, &rw.node_ids);
-        let (action, status, msg) = if rw.deployed_exists {
-            (Action::Update, OutcomeStatus::Updated, "definition updated")
-        } else {
-            (Action::Create, OutcomeStatus::Created, "definition created")
-        };
-        match api.upsert(&desired).await {
-            Ok(()) => {
-                out.push(ApplyOutcome::new(KIND, name.clone(), action, status, msg));
-                true
-            }
-            Err(e) => {
-                out.push(ApplyOutcome::failed(
-                    KIND,
-                    name.clone(),
-                    action,
-                    e.to_string(),
-                    "verify connectivity and re-apply",
-                ));
-                false
-            }
-        }
+        (Action::Create, OutcomeStatus::Created, "definition created")
     };
 
-    // -- Attachments (ensure-present), only if the definition is in place --
+    if !rw.def_unchanged {
+        let desired = convert::to_wire(&rw.local, &rw.node_ids);
+        if let Err(e) = api.upsert(&desired).await {
+            return ApplyOutcome::failed(
+                KIND,
+                name,
+                def_action_taken,
+                format!("definition write failed: {e}; attachments not attempted"),
+                "verify connectivity and re-apply",
+            );
+        }
+    }
+
+    // -- Attachments (ensure-present) — only reached when the definition is in place. --
+    let mut ensured: Vec<String> = Vec::new();
+    let mut failed: Vec<String> = Vec::new();
     for t in &rw.targets {
-        let tname = target_name(&name, t);
-        if !def_ok {
-            out.push(ApplyOutcome::new(
-                KIND,
-                tname,
-                Action::Update,
-                OutcomeStatus::Skipped,
-                "not attempted (definition write failed)",
-            ));
-            continue;
-        }
         match api.attach(&name, t).await {
-            Ok(()) => out.push(ApplyOutcome::new(
-                KIND,
-                tname,
-                Action::Update,
-                OutcomeStatus::Ensured,
-                "attachment ensured",
-            )),
-            Err(e) => out.push(ApplyOutcome::failed(
-                KIND,
-                tname,
-                Action::Update,
-                e.to_string(),
-                "verify the daemon package exists and re-apply",
-            )),
+            Ok(()) => ensured.push(target_label(t)),
+            Err(e) => failed.push(format!("{}: {e}", target_label(t))),
         }
+    }
+
+    let details = serde_json::json!({
+        "definition": def_status.to_string(),
+        "ensured": ensured,
+        "failed": failed,
+    });
+
+    if failed.is_empty() {
+        let msg = if ensured.is_empty() {
+            def_msg.to_string()
+        } else {
+            format!("{def_msg}; ensured {}", ensured.join(", "))
+        };
+        let mut o = ApplyOutcome::new(KIND, name, def_action_taken, def_status, msg);
+        o.details = Some(details);
+        o
+    } else {
+        let ensured_part = if ensured.is_empty() {
+            String::new()
+        } else {
+            format!("; ensured {}", ensured.join(", "))
+        };
+        let mut o = ApplyOutcome::failed(
+            KIND,
+            name,
+            def_action_taken,
+            format!(
+                "{def_msg}{ensured_part}; FAILED to attach {}",
+                failed.join("; ")
+            ),
+            "verify the daemon package(s) exist and re-apply",
+        );
+        o.details = Some(details);
+        o
     }
 }
 
-/// Display name for a per-target outcome, e.g. `weekend [pollerd/prod]`.
-fn target_name(window: &str, t: &AttachTarget) -> String {
+/// `; ensure pollerd/prod, notifd` — the attachment summary appended to a
+/// preview message (empty when there are no targets).
+fn ensure_suffix(targets: &[AttachTarget]) -> String {
+    if targets.is_empty() {
+        String::new()
+    } else {
+        let list = targets
+            .iter()
+            .map(target_label)
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("; ensure {list}")
+    }
+}
+
+/// A compact target label, e.g. `pollerd/prod` or `notifd`.
+fn target_label(t: &AttachTarget) -> String {
     match &t.package {
-        Some(pkg) => format!("{window} [{}/{}]", t.daemon.segment(), pkg),
-        None => format!("{window} [{}]", t.daemon.segment()),
+        Some(pkg) => format!("{}/{}", t.daemon.segment(), pkg),
+        None => t.daemon.segment().to_string(),
     }
 }
 
@@ -410,19 +434,30 @@ mod tests {
             .plan(&docs(&[&daily("win")]), &params, &ctx)
             .await
             .unwrap();
-        // 1 definition preview + 2 attach previews.
-        assert_eq!(plan.preview.len(), 3);
+        // Exactly ONE preview row per document (the kind-router contract).
+        assert_eq!(plan.preview.len(), 1);
         assert_eq!(plan.preview[0].action, Action::Create);
+        assert!(
+            plan.preview[0].message.contains("ensure"),
+            "preview summarizes attachments"
+        );
 
         let outcomes = MaintenanceHandler
             .execute(plan, &params, &ctx)
             .await
             .unwrap();
+        assert_eq!(outcomes.len(), 1, "one outcome per document");
         assert_eq!(outcomes[0].status, OutcomeStatus::Created);
         assert!(
-            outcomes[1..]
-                .iter()
-                .all(|o| o.status == OutcomeStatus::Ensured)
+            outcomes[0].message.contains("pollerd/prod") && outcomes[0].message.contains("notifd"),
+            "outcome summarizes both ensured attachments: {}",
+            outcomes[0].message
+        );
+        // Both attach PUTs were issued.
+        let reqs = server.received_requests().await.unwrap();
+        assert_eq!(
+            reqs.iter().filter(|r| r.method.as_str() == "PUT").count(),
+            2
         );
     }
 
@@ -460,15 +495,16 @@ mod tests {
             .execute(plan, &params, &ctx)
             .await
             .unwrap();
+        assert_eq!(outcomes.len(), 1);
         assert_eq!(
             outcomes[0].status,
             OutcomeStatus::Unchanged,
             "definition in sync"
         );
         assert!(
-            outcomes[1..]
-                .iter()
-                .all(|o| o.status == OutcomeStatus::Ensured)
+            outcomes[0].message.contains("ensured"),
+            "attachments still ensured: {}",
+            outcomes[0].message
         );
         // No POST issued for an unchanged definition.
         let reqs = server.received_requests().await.unwrap();
@@ -514,10 +550,12 @@ mod tests {
             .plan(&docs(&[doc]), &params, &ctx)
             .await
             .unwrap();
+        assert_eq!(plan.preview.len(), 1);
         let outcomes = MaintenanceHandler
             .execute(plan, &params, &ctx)
             .await
             .unwrap();
+        assert_eq!(outcomes.len(), 1);
         assert_eq!(outcomes[0].status, OutcomeStatus::Failed);
         assert!(outcomes[0].message.contains("not yet imported"));
         // No definition POST for a window that failed node resolution.
@@ -565,17 +603,62 @@ mod tests {
             .execute(plan, &params, &ctx)
             .await
             .unwrap();
-        assert_eq!(
-            outcomes[0].status,
-            OutcomeStatus::Created,
-            "definition still created"
+        // One outcome per document; a failed attach makes the document Failed,
+        // but the message records that the definition was created and notifd
+        // ensured — so the partial result is visible, not masked.
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].status, OutcomeStatus::Failed);
+        let m = &outcomes[0].message;
+        assert!(m.contains("definition created"), "got: {m}");
+        assert!(m.contains("ensured notifd"), "notifd ensured recorded: {m}");
+        assert!(
+            m.contains("FAILED to attach pollerd/prod"),
+            "pollerd failure recorded: {m}"
         );
-        let pollerd = outcomes
-            .iter()
-            .find(|o| o.name.contains("pollerd"))
-            .unwrap();
-        assert_eq!(pollerd.status, OutcomeStatus::Failed);
-        let notifd = outcomes.iter().find(|o| o.name.contains("notifd")).unwrap();
-        assert_eq!(notifd.status, OutcomeStatus::Ensured);
+    }
+
+    /// Regression guard: drive the handler THROUGH the kind-router (not directly),
+    /// which enforces exactly one preview + one outcome per document. A composite
+    /// handler that emits a row per sub-resource (definition + each attachment)
+    /// is rejected by the router — the bug a direct handler test cannot catch.
+    #[tokio::test]
+    async fn router_path_accepts_one_row_per_document() {
+        use onmsctl_core::Registry;
+        use onmsctl_core::kind::apply_documents;
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/sched-outages/win"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/rest/sched-outages"))
+            .respond_with(ResponseTemplate::new(201))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/rest/sched-outages/win/pollerd/prod"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/rest/sched-outages/win/notifd"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let mut reg = Registry::new();
+        reg.register(900, Box::new(MaintenanceHandler));
+        let outcomes = apply_documents(
+            &reg,
+            docs(&[&daily("win")]),
+            &ApplyParams::default(),
+            &ctx_for(&server),
+        )
+        .await
+        .expect("router accepts one row per document");
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].status, OutcomeStatus::Created);
     }
 }
