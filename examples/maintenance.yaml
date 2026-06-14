@@ -33,11 +33,19 @@ spec:
       # weekly  → { day: monday,  begins: "HH:mm:ss", ends: "HH:mm:ss" }
       # monthly → { day: "15",    begins: "HH:mm:ss", ends: "HH:mm:ss" }
   devices:
+    # All selectors below are ADDITIVE (union), deduped to nodeIds at apply.
     # An IP, or the single literal `match-any` (= every interface).
     interfaces: [192.168.8.8]
     # Nodes by foreign reference (resolved to the server nodeId at apply).
     nodes:
       - { foreignSource: labmonkeys-hq, foreignId: web01 }
+    # Every node in ANY of these OpenNMS categories (resolved at apply via the
+    # v2 nodes search; snapshot — re-apply to refresh as membership changes).
+    categories: [Routers, Core]
+    # Nodes whose OpenNMS asset-record field matches (the searchable key/value).
+    # NOTE: node meta-data (context:key=value) is NOT searchable by the node API,
+    # so `asset` is the supported key/value selector.
+    asset: { field: city, value: Berlin }
   suppress:
     polling:       { packages: [production] }   # → pollerd package(s)
     thresholds:    { packages: [production] }    # → threshd package(s)

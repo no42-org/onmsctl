@@ -49,6 +49,9 @@ struct ReadyWindow {
     deployed_exists: bool,
     def_unchanged: bool,
     targets: Vec<AttachTarget>,
+    /// Human summary of how the node set resolved (empty unless dynamic
+    /// selectors were used), e.g. ` (nodes: 1 explicit + 12 matched = 13)`.
+    nodes_summary: String,
 }
 
 /// The per-window plan result.
@@ -146,7 +149,7 @@ impl KindHandler for MaintenanceHandler {
                         name,
                         Action::None,
                         message,
-                        "resolve the node reference (import the node) and re-apply",
+                        "fix the device selectors (import the referenced node, or correct the category/asset) and re-apply",
                     ));
                 }
                 Planned::Ready(rw) => outcomes.push(execute_window(*rw, &api).await),
@@ -161,10 +164,21 @@ impl KindHandler for MaintenanceHandler {
 /// `Planned::Failed`.
 async fn plan_window(local: MaintenanceLocal, api: &MaintenanceApi<'_>) -> Result<Planned> {
     let name = local.metadata.name.clone();
-    let mut node_ids = Vec::with_capacity(local.spec.devices.nodes.len());
-    for n in &local.spec.devices.nodes {
+    let devices = &local.spec.devices;
+
+    // Insertion-ordered dedupe across all node selectors (explicit + dynamic).
+    let mut node_ids: Vec<i64> = Vec::new();
+    let mut seen: std::collections::HashSet<i64> = std::collections::HashSet::new();
+    let mut add = |id: i64, ids: &mut Vec<i64>| {
+        if seen.insert(id) {
+            ids.push(id);
+        }
+    };
+
+    // Explicit refs (unchanged): an unresolved ref is a hard per-window failure.
+    for n in &devices.nodes {
         match api.resolve_node(&n.foreign_source, &n.foreign_id).await? {
-            Some(id) => node_ids.push(id),
+            Some(id) => add(id, &mut node_ids),
             None => {
                 return Ok(Planned::Failed {
                     name,
@@ -176,6 +190,42 @@ async fn plan_window(local: MaintenanceLocal, api: &MaintenanceApi<'_>) -> Resul
             }
         }
     }
+    let explicit_count = node_ids.len();
+
+    // Dynamic selectors (categories / asset): one v2 search, unioned + deduped.
+    // A selector matching nothing is a (soft) warning, not a failure.
+    let mut matched_count = 0;
+    if let Some(fiql) = crate::api::build_node_fiql(devices) {
+        let matched = api.search_node_ids(&fiql).await?;
+        matched_count = matched.len();
+        if matched.is_empty() {
+            eprintln!("warning: {name}: node selector matched 0 nodes (`_s={fiql}`)");
+        }
+        for id in matched {
+            add(id, &mut node_ids);
+        }
+    }
+
+    // A window that covers nothing after resolution is almost always a mistake.
+    if node_ids.is_empty() && devices.interfaces.is_empty() {
+        return Ok(Planned::Failed {
+            name,
+            message: "window covers no devices after resolution (no interfaces, and the node \
+                      selectors matched nothing)"
+                .to_string(),
+        });
+    }
+
+    let nodes_summary =
+        if matched_count > 0 || !devices.categories.is_empty() || devices.asset.is_some() {
+            format!(
+                " (nodes: {explicit_count} explicit + {matched_count} matched = {} unique)",
+                node_ids.len()
+            )
+        } else {
+            String::new()
+        };
+
     let deployed = api.get(&name).await?;
     let desired = convert::to_wire(&local, &node_ids);
     let def_unchanged = deployed
@@ -188,6 +238,7 @@ async fn plan_window(local: MaintenanceLocal, api: &MaintenanceApi<'_>) -> Resul
         deployed_exists: deployed.is_some(),
         def_unchanged,
         targets,
+        nodes_summary,
     })))
 }
 
@@ -212,22 +263,23 @@ fn preview_for(planned: &Planned) -> ApplyOutcome {
             name.clone(),
             Action::None,
             message.clone(),
-            "resolve the node reference (import the node) and re-apply",
+            "fix the device selectors (import the referenced node, or correct the category/asset) and re-apply",
         ),
         Planned::Ready(rw) => {
             let name = rw.local.metadata.name.clone();
             let ensure = ensure_suffix(&rw.targets);
+            let nodes = &rw.nodes_summary;
             match def_action(rw) {
                 Action::None => ApplyOutcome::new(
                     KIND,
                     name,
                     Action::None,
                     OutcomeStatus::Unchanged,
-                    format!("in sync{ensure}"),
+                    format!("in sync{ensure}{nodes}"),
                 ),
                 action => {
                     let mut o = ApplyOutcome::would(KIND, name, action);
-                    o.message = format!("{}{ensure}", o.message);
+                    o.message = format!("{}{ensure}{nodes}", o.message);
                     o
                 }
             }
@@ -282,11 +334,12 @@ async fn execute_window(rw: ReadyWindow, api: &MaintenanceApi<'_>) -> ApplyOutco
     });
 
     if failed.is_empty() {
-        let msg = if ensured.is_empty() {
+        let mut msg = if ensured.is_empty() {
             def_msg.to_string()
         } else {
             format!("{def_msg}; ensured {}", ensured.join(", "))
         };
+        msg.push_str(&rw.nodes_summary);
         let mut o = ApplyOutcome::new(KIND, name, def_action_taken, def_status, msg);
         o.details = Some(details);
         o
@@ -377,7 +430,7 @@ mod tests {
     use super::*;
     use onmsctl_core::kind::parse_documents;
     use onmsctl_core::{AuthCreds, OutputFormat, Url};
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn ctx_for(server: &MockServer) -> Context {
@@ -660,5 +713,256 @@ mod tests {
         .expect("router accepts one row per document");
         assert_eq!(outcomes.len(), 1);
         assert_eq!(outcomes[0].status, OutcomeStatus::Created);
+    }
+
+    /// A category selector resolves via the v2 search, unions+dedupes with an
+    /// explicit ref, and the resolved ids reach the outage definition.
+    #[tokio::test]
+    async fn category_selector_resolves_and_dedupes() {
+        let server = MockServer::start().await;
+        // explicit ref hq:web01 -> id 5
+        Mock::given(method("GET"))
+            .and(path("/rest/nodes/hq:web01"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "id": 5 })))
+            .mount(&server)
+            .await;
+        // category Routers -> ids 5 (dup) and 9
+        Mock::given(method("GET"))
+            .and(path("/api/v2/nodes"))
+            .and(query_param("_s", "category.name==Routers"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "count": 2, "totalCount": 2, "node": [ { "id": 5 }, { "id": 9 } ]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/rest/sched-outages/win"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/rest/sched-outages"))
+            .respond_with(ResponseTemplate::new(201))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/rest/sched-outages/win/notifd"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let doc = "apiVersion: maintenance.opennms.org/v1\nkind: Maintenance\nmetadata:\n  name: win\nspec:\n  schedule:\n    type: daily\n    times:\n      - { begins: \"22:00:00\", ends: \"23:00:00\" }\n  devices:\n    nodes:\n      - { foreignSource: hq, foreignId: web01 }\n    categories: [Routers]\n  suppress:\n    notifications: true\n";
+        let ctx = ctx_for(&server);
+        let params = ApplyParams::default();
+        let plan = MaintenanceHandler
+            .plan(&docs(&[doc]), &params, &ctx)
+            .await
+            .unwrap();
+        assert_eq!(plan.preview.len(), 1);
+        let outcomes = MaintenanceHandler
+            .execute(plan, &params, &ctx)
+            .await
+            .unwrap();
+        assert_eq!(outcomes[0].status, OutcomeStatus::Created);
+        // 1 explicit (id 5) + 2 matched (5,9) → 2 unique.
+        assert!(
+            outcomes[0].message.contains("= 2 unique"),
+            "summary: {}",
+            outcomes[0].message
+        );
+        // The POST body carries node ids 5 and 9, each once.
+        let reqs = server.received_requests().await.unwrap();
+        let post = reqs.iter().find(|r| r.method.as_str() == "POST").unwrap();
+        let body = String::from_utf8_lossy(&post.body);
+        assert!(
+            body.contains("\"id\":5") && body.contains("\"id\":9"),
+            "node ids in body: {body}"
+        );
+        assert_eq!(body.matches("\"id\":5").count(), 1, "id 5 deduped");
+    }
+
+    /// A selector matching 0 nodes warns but does not abort a window that still
+    /// covers an interface.
+    #[tokio::test]
+    async fn empty_selector_warns_window_with_interface_proceeds() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v2/nodes"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/rest/sched-outages/win"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/rest/sched-outages"))
+            .respond_with(ResponseTemplate::new(201))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/rest/sched-outages/win/notifd"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let doc = "apiVersion: maintenance.opennms.org/v1\nkind: Maintenance\nmetadata:\n  name: win\nspec:\n  schedule:\n    type: daily\n    times:\n      - { begins: \"22:00:00\", ends: \"23:00:00\" }\n  devices:\n    interfaces: [192.168.8.8]\n    categories: [Empty]\n  suppress:\n    notifications: true\n";
+        let ctx = ctx_for(&server);
+        let params = ApplyParams::default();
+        let plan = MaintenanceHandler
+            .plan(&docs(&[doc]), &params, &ctx)
+            .await
+            .unwrap();
+        let outcomes = MaintenanceHandler
+            .execute(plan, &params, &ctx)
+            .await
+            .unwrap();
+        assert_eq!(
+            outcomes[0].status,
+            OutcomeStatus::Created,
+            "interface-only window still applies"
+        );
+    }
+
+    /// A window whose only selector matches nothing (and has no interfaces) fails.
+    #[tokio::test]
+    async fn empty_window_after_resolution_fails() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v2/nodes"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+        let doc = "apiVersion: maintenance.opennms.org/v1\nkind: Maintenance\nmetadata:\n  name: win\nspec:\n  schedule:\n    type: daily\n    times:\n      - { begins: \"22:00:00\", ends: \"23:00:00\" }\n  devices:\n    categories: [Empty]\n  suppress:\n    notifications: true\n";
+        let ctx = ctx_for(&server);
+        let params = ApplyParams::default();
+        let plan = MaintenanceHandler
+            .plan(&docs(&[doc]), &params, &ctx)
+            .await
+            .unwrap();
+        let outcomes = MaintenanceHandler
+            .execute(plan, &params, &ctx)
+            .await
+            .unwrap();
+        assert_eq!(outcomes[0].status, OutcomeStatus::Failed);
+        assert!(
+            outcomes[0].message.contains("covers no devices"),
+            "got: {}",
+            outcomes[0].message
+        );
+        // No definition POST for an empty window.
+        assert!(
+            server
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .all(|r| r.method.as_str() == "GET")
+        );
+    }
+
+    /// An asset selector resolves via the v2 search and its ids reach the outage.
+    #[tokio::test]
+    async fn asset_selector_resolves() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v2/nodes"))
+            .and(query_param("_s", "assetRecord.city==Berlin"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "count": 1, "totalCount": 1, "node": [ { "id": 7 } ]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/rest/sched-outages/win"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/rest/sched-outages"))
+            .respond_with(ResponseTemplate::new(201))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/rest/sched-outages/win/notifd"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let doc = "apiVersion: maintenance.opennms.org/v1\nkind: Maintenance\nmetadata:\n  name: win\nspec:\n  schedule:\n    type: daily\n    times:\n      - { begins: \"22:00:00\", ends: \"23:00:00\" }\n  devices:\n    asset: { field: city, value: Berlin }\n  suppress:\n    notifications: true\n";
+        let ctx = ctx_for(&server);
+        let params = ApplyParams::default();
+        let plan = MaintenanceHandler
+            .plan(&docs(&[doc]), &params, &ctx)
+            .await
+            .unwrap();
+        let outcomes = MaintenanceHandler
+            .execute(plan, &params, &ctx)
+            .await
+            .unwrap();
+        assert_eq!(outcomes[0].status, OutcomeStatus::Created);
+        let reqs = server.received_requests().await.unwrap();
+        let post = reqs.iter().find(|r| r.method.as_str() == "POST").unwrap();
+        assert!(
+            String::from_utf8_lossy(&post.body).contains("\"id\":7"),
+            "asset-matched node in body"
+        );
+    }
+
+    /// A dynamic-selector window whose re-resolved membership equals the deployed
+    /// definition is `Unchanged` and issues no POST (snapshot re-apply = no-op).
+    #[tokio::test]
+    async fn dynamic_selector_unchanged_does_not_repost() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v2/nodes"))
+            .and(query_param("_s", "category.name==Production"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "count": 1, "totalCount": 1, "node": [ { "id": 2 } ]
+            })))
+            .mount(&server)
+            .await;
+        // Deployed definition already matches the desired (daily 22-23, node 2).
+        Mock::given(method("GET"))
+            .and(path("/rest/sched-outages/win"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "name": "win", "type": "daily",
+                "time": [ { "begins": "22:00:00", "ends": "23:00:00" } ],
+                "node": [ { "id": 2 } ]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/rest/sched-outages/win/notifd"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let doc = "apiVersion: maintenance.opennms.org/v1\nkind: Maintenance\nmetadata:\n  name: win\nspec:\n  schedule:\n    type: daily\n    times:\n      - { begins: \"22:00:00\", ends: \"23:00:00\" }\n  devices:\n    categories: [Production]\n  suppress:\n    notifications: true\n";
+        let ctx = ctx_for(&server);
+        let params = ApplyParams::default();
+        let plan = MaintenanceHandler
+            .plan(&docs(&[doc]), &params, &ctx)
+            .await
+            .unwrap();
+        let outcomes = MaintenanceHandler
+            .execute(plan, &params, &ctx)
+            .await
+            .unwrap();
+        assert_eq!(
+            outcomes[0].status,
+            OutcomeStatus::Unchanged,
+            "membership unchanged → no churn"
+        );
+        assert!(
+            server
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .all(|r| r.method.as_str() != "POST"),
+            "unchanged dynamic-selector window must not re-POST the definition"
+        );
     }
 }

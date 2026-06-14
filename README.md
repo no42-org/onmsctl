@@ -899,10 +899,12 @@ spec:
     type: specific            # specific | daily | weekly | monthly
     times:
       - { begins: "20-Jun-2026 22:00:00", ends: "21-Jun-2026 04:00:00" }
-  devices:
+  devices:                       # selectors are additive (union), deduped to nodeIds
     interfaces: [192.168.8.8]  # an IP, or the single literal `match-any`
     nodes:
       - { foreignSource: hq, foreignId: web01 }   # resolved to a nodeId at apply
+    categories: [Routers, Core]                   # every node in ANY listed category
+    asset: { field: city, value: Berlin }         # searchable asset key/value
   suppress:
     polling:       { packages: [production] }      # explicit packages required
     notifications: true                            # global (no package)
@@ -936,6 +938,16 @@ then **attaches** it to each declared daemon: `polling`→pollerd, `thresholds`�
   resolved at apply; an un-imported node fails that window with a clear message —
   which is why `Maintenance` applies after `Requisition` (the import is async, so
   a node reference may need a follow-up apply; prefer `interfaces`/`match-any`).
+- **Dynamic node selectors (`categories`, `asset`).** Target a *set* of nodes
+  without listing each: `categories` selects every node in **any** listed
+  category; `asset: { field, value }` selects nodes whose OpenNMS asset field
+  matches. Both resolve via the v2 nodes search at apply and union with explicit
+  `nodes` (deduped). They are a **snapshot** — `apply` re-resolves, so re-apply
+  refreshes the set as membership changes (unchanged ⇒ `Unchanged`, changed ⇒
+  `Updated`); `--dry-run` shows what each selector expanded to. A selector
+  matching nothing warns; a window covering nothing fails. Node **meta-data**
+  (`context:key=value`) is *not* searchable by the node API, so `asset` is the
+  supported key/value selector.
 
 No server version gate is needed — the scheduled-outages API is present in every
 supported Horizon/Meridian.

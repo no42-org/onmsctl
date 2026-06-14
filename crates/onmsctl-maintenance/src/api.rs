@@ -16,7 +16,8 @@ use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use serde::Deserialize;
 
 use crate::diff::AttachTarget;
-use crate::server::{Outage, Outages};
+use crate::model::Devices;
+use crate::server::{NodeList, Outage, Outages};
 
 const BASE: &str = "rest/sched-outages";
 
@@ -119,6 +120,45 @@ impl<'a> MaintenanceApi<'a> {
         }
     }
 
+    /// Resolve a set of dynamic node selectors (categories / asset) to server
+    /// nodeIds via one v2 search: `GET api/v2/nodes?_s=<fiql>&limit=0`. `limit=0`
+    /// returns all matches; a truncated response (`count < totalCount`) is an
+    /// error rather than a silent subset.
+    ///
+    /// A search that matches **nothing** returns HTTP `204 No Content` (verified
+    /// against a live Horizon) — which the JSON client surfaces as a 204 error;
+    /// we map it to an empty result (no matches), not a failure.
+    pub async fn search_node_ids(&self, fiql: &str) -> Result<Vec<i64>> {
+        let list: NodeList = match self
+            .client
+            .get("api/v2/nodes", &[("_s", fiql), ("limit", "0")])
+            .await
+        {
+            Ok(list) => list,
+            Err(Error::HttpStatus { status: 204, .. }) => return Ok(Vec::new()),
+            Err(e) => return Err(e),
+        };
+        let ids: Vec<i64> = list
+            .node
+            .iter()
+            .map(|n| node_id_from_value(&n.id))
+            .collect::<Result<_>>()?;
+        // Guard truncation against the ids we actually received (not the server's
+        // self-reported `count`, which could equal `totalCount` while the array
+        // is short). When `totalCount` is present and exceeds what we got, fail
+        // rather than silently cover a subset.
+        if let Some(total) = list.total_count
+            && (ids.len() as i64) < total
+        {
+            return Err(Error::Config(format!(
+                "node search matched {total} nodes but only {} were returned (truncated) — \
+                 refusing to cover a subset",
+                ids.len()
+            )));
+        }
+        Ok(ids)
+    }
+
     /// `GET /rest/sched-outages/interfaceInOutage/{ip}` — is the interface
     /// currently in any scheduled outage? (`text/plain` `true`/`false`).
     pub async fn interface_in_outage(&self, ip: &str) -> Result<bool> {
@@ -154,24 +194,47 @@ struct NodeIdResp {
 
 impl NodeIdResp {
     fn id(&self) -> Result<i64> {
-        match &self.id {
-            serde_json::Value::Number(n) => n
-                .as_i64()
-                .ok_or_else(|| Error::Config(format!("node id is not an integer: {n}"))),
-            serde_json::Value::String(s) => s
-                .parse::<i64>()
-                .map_err(|_| Error::Config(format!("node id {s:?} is not an integer"))),
-            other => Err(Error::Config(format!("unexpected node id shape: {other}"))),
-        }
+        node_id_from_value(&self.id)
     }
+}
+
+/// Parse an OpenNMS node `id` that the REST API may serialize as a JSON string
+/// or number into an `i64`.
+fn node_id_from_value(v: &serde_json::Value) -> Result<i64> {
+    match v {
+        serde_json::Value::Number(n) => n
+            .as_i64()
+            .ok_or_else(|| Error::Config(format!("node id is not an integer: {n}"))),
+        serde_json::Value::String(s) => s
+            .parse::<i64>()
+            .map_err(|_| Error::Config(format!("node id {s:?} is not an integer"))),
+        other => Err(Error::Config(format!("unexpected node id shape: {other}"))),
+    }
+}
+
+/// Build the FIQL `_s` value for the dynamic node selectors, or `None` when no
+/// `categories`/`asset` are set. All clauses are OR-joined (`,`) so the search
+/// returns the **union** of every selector (`category.name==A,category.name==B,
+/// assetRecord.<field>==<value>`).
+pub fn build_node_fiql(devices: &Devices) -> Option<String> {
+    let mut clauses: Vec<String> = devices
+        .categories
+        .iter()
+        .map(|c| format!("category.name=={c}"))
+        .collect();
+    if let Some(a) = &devices.asset {
+        clauses.push(format!("assetRecord.{}=={}", a.field, a.value));
+    }
+    (!clauses.is_empty()).then(|| clauses.join(","))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::diff::Daemon;
+    use crate::model::{AssetSelector, Devices, NodeRef};
     use onmsctl_core::{AuthCreds, Url};
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn client_for(server: &MockServer) -> OnmsClient {
@@ -180,6 +243,88 @@ mod tests {
             AuthCreds::basic("admin", "secret"),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn build_node_fiql_or_joins_categories_and_asset() {
+        let d = Devices {
+            categories: vec!["Routers".into(), "Core".into()],
+            asset: Some(AssetSelector {
+                field: "city".into(),
+                value: "Berlin".into(),
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            build_node_fiql(&d).as_deref(),
+            Some("category.name==Routers,category.name==Core,assetRecord.city==Berlin")
+        );
+        // No dynamic selectors → None (only explicit nodes / interfaces).
+        let none = Devices {
+            nodes: vec![NodeRef {
+                foreign_source: "hq".into(),
+                foreign_id: "web01".into(),
+            }],
+            ..Default::default()
+        };
+        assert!(build_node_fiql(&none).is_none());
+    }
+
+    #[tokio::test]
+    async fn search_node_ids_sends_query_and_parses_ids() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v2/nodes"))
+            .and(query_param("_s", "category.name==Routers"))
+            .and(query_param("limit", "0"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "count": 2, "totalCount": 2,
+                "node": [ { "id": 1 }, { "id": "2" } ]
+            })))
+            .mount(&server)
+            .await;
+        let client = client_for(&server);
+        let ids = MaintenanceApi::new(&client)
+            .search_node_ids("category.name==Routers")
+            .await
+            .unwrap();
+        assert_eq!(ids, vec![1, 2]);
+    }
+
+    #[tokio::test]
+    async fn search_node_ids_errors_on_truncation() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v2/nodes"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "count": 10, "totalCount": 250, "node": []
+            })))
+            .mount(&server)
+            .await;
+        let client = client_for(&server);
+        let err = MaintenanceApi::new(&client)
+            .search_node_ids("category.name==Big")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("truncated"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn search_node_ids_treats_204_as_no_matches() {
+        // A zero-match search returns 204 No Content on a live Horizon — must be
+        // an empty result, not an error.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v2/nodes"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+        let client = client_for(&server);
+        let ids = MaintenanceApi::new(&client)
+            .search_node_ids("category.name==Empty")
+            .await
+            .expect("204 → empty, not an error");
+        assert!(ids.is_empty());
     }
 
     #[tokio::test]
