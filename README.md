@@ -880,6 +880,67 @@ notes.
 
 ---
 
+## Maintenance windows (`kind: Maintenance`)
+
+Plan a **maintenance window** — for a period, stop OpenNMS polling,
+notifications, and threshold (and optionally collection) evaluation on chosen
+devices, so a patch night doesn't generate noise or false outages. `Maintenance`
+maps to an OpenNMS **scheduled outage** (`poll-outages.xml`, the v1
+`/rest/sched-outages` service). It is **named and multi-instance** — one document
+per window, `metadata.name` = the outage name — reconciled like requisitions.
+
+```yaml
+apiVersion: maintenance.opennms.org/v1
+kind: Maintenance
+metadata:
+  name: weekend-patching
+spec:
+  schedule:
+    type: specific            # specific | daily | weekly | monthly
+    times:
+      - { begins: "20-Jun-2026 22:00:00", ends: "21-Jun-2026 04:00:00" }
+  devices:
+    interfaces: [192.168.8.8]  # an IP, or the single literal `match-any`
+    nodes:
+      - { foreignSource: hq, foreignId: web01 }   # resolved to a nodeId at apply
+  suppress:
+    polling:       { packages: [production] }      # explicit packages required
+    notifications: true                            # global (no package)
+```
+
+```sh
+onmsctl apply -f examples/maintenance.yaml --dry-run --diff
+onmsctl apply -f examples/maintenance.yaml
+onmsctl maintenance list
+onmsctl maintenance status 192.168.8.8 12        # IP or nodeId → in a window now?
+onmsctl maintenance delete weekend-patching       # full teardown
+```
+
+**How it reconciles (composite).** Apply writes the outage **definition**
+(create/update, diffed against the server — a true `Created`/`Updated`/`Unchanged`),
+then **attaches** it to each declared daemon: `polling`→pollerd, `thresholds`→threshd,
+`collection`→collectd (each **per package**), and `notifications`→notifd (global).
+
+**Two things to know:**
+
+- **Attachments are ensure-present.** The REST API can't read which daemons an
+  outage is attached to, so onmsctl re-issues the (idempotent) attach every apply
+  and reports it `Ensured` — it cannot *detach*. **Removing a `suppress` entry
+  from the manifest does not detach it.** To reduce suppression, run
+  `onmsctl maintenance delete <name>` (removes it from all daemons) and re-apply.
+- **Explicit packages, server timezone, foreignId nodes.** There is no default
+  package — `polling`/`thresholds`/`collection` require an explicit `packages`
+  list. Times are interpreted in the **server's** timezone. Nodes are named by
+  `{foreignSource, foreignId}` (server nodeIds aren't stable in GitOps) and
+  resolved at apply; an un-imported node fails that window with a clear message —
+  which is why `Maintenance` applies after `Requisition` (the import is async, so
+  a node reference may need a follow-up apply; prefer `interfaces`/`match-any`).
+
+No server version gate is needed — the scheduled-outages API is present in every
+supported Horizon/Meridian.
+
+---
+
 ## Aliases and read-only contexts
 
 ### Top-level verb aliases

@@ -1,0 +1,210 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MaintenanceLocal",
+  "description": "A `kind: Maintenance` document.",
+  "type": "object",
+  "properties": {
+    "apiVersion": {
+      "type": "string"
+    },
+    "kind": {
+      "type": "string"
+    },
+    "metadata": {
+      "$ref": "#/$defs/Metadata"
+    },
+    "spec": {
+      "$ref": "#/$defs/Spec"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "spec"
+  ],
+  "$defs": {
+    "DaemonSuppress": {
+      "description": "The package list for one per-package daemon (pollerd / threshd / collectd).",
+      "type": "object",
+      "properties": {
+        "packages": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "packages"
+      ]
+    },
+    "Devices": {
+      "description": "Which devices the window covers.",
+      "type": "object",
+      "properties": {
+        "interfaces": {
+          "description": "IP addresses, or the single literal `match-any` (= all interfaces).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "nodes": {
+          "description": "Nodes by foreign reference (resolved to the server nodeId at apply).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/NodeRef"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "Metadata": {
+      "description": "Document metadata. `name` is the scheduled-outage name.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ]
+    },
+    "NodeRef": {
+      "description": "A node foreign reference. Server nodeIds are not stable in GitOps, so the\nmanifest names nodes by `{foreignSource, foreignId}` and onmsctl resolves the\nnodeId at apply.",
+      "type": "object",
+      "properties": {
+        "foreignId": {
+          "type": "string"
+        },
+        "foreignSource": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "foreignSource",
+        "foreignId"
+      ]
+    },
+    "Schedule": {
+      "description": "When the window is in effect.",
+      "type": "object",
+      "properties": {
+        "times": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TimeWindow"
+          }
+        },
+        "type": {
+          "$ref": "#/$defs/ScheduleType"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "times"
+      ]
+    },
+    "ScheduleType": {
+      "description": "Outage recurrence type (maps to the server `type` attribute).",
+      "type": "string",
+      "enum": [
+        "specific",
+        "daily",
+        "weekly",
+        "monthly"
+      ]
+    },
+    "Spec": {
+      "description": "The maintenance-window body.",
+      "type": "object",
+      "properties": {
+        "devices": {
+          "$ref": "#/$defs/Devices"
+        },
+        "schedule": {
+          "$ref": "#/$defs/Schedule"
+        },
+        "suppress": {
+          "$ref": "#/$defs/Suppress"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "schedule",
+        "devices",
+        "suppress"
+      ]
+    },
+    "Suppress": {
+      "description": "Which daemons honor the window. Each of `polling`/`thresholds`/`collection`\nrequires an explicit, non-empty package list (there is no default package);\n`notifications` is global.",
+      "type": "object",
+      "properties": {
+        "collection": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DaemonSuppress"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "notifications": {
+          "type": "boolean"
+        },
+        "polling": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DaemonSuppress"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "thresholds": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DaemonSuppress"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "TimeWindow": {
+      "description": "One start/end window. `day` is required for `weekly` (a weekday) and\n`monthly` (a day-of-month 1–31), and forbidden for `specific`/`daily`.",
+      "type": "object",
+      "properties": {
+        "begins": {
+          "type": "string"
+        },
+        "day": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ends": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "begins",
+        "ends"
+      ]
+    }
+  }
+}
