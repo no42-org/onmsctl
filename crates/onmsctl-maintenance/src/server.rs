@@ -93,6 +93,30 @@ pub struct Node {
     pub id: i64,
 }
 
+/// Minimal view of the v2 `GET /api/v2/nodes?_s=…` list response: the node ids
+/// plus the paging counts used to detect truncation. The `node` element may
+/// arrive as a single object or be absent; `id` is a string or a number on the
+/// wire. Permissive — we ignore everything else the node carries.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct NodeList {
+    #[serde(
+        deserialize_with = "one_or_many",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub node: Vec<NodeIdRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub count: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_count: Option<i64>,
+}
+
+/// One node entry — only the `id` is modeled (string or number on the wire).
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct NodeIdRef {
+    pub id: serde_json::Value,
+}
+
 /// The `GET /rest/sched-outages` collection wrapper (`{ "outage": [ … ] }`).
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Outages {

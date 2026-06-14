@@ -91,6 +91,23 @@ pub struct Devices {
     /// Nodes by foreign reference (resolved to the server nodeId at apply).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub nodes: Vec<NodeRef>,
+    /// Select every node in ANY of the named OpenNMS categories (resolved to
+    /// nodeIds at apply via the v2 nodes search). Additive with `nodes`/`asset`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub categories: Vec<String>,
+    /// Select nodes whose OpenNMS asset-record `field` equals `value` (the
+    /// searchable key/value). Node meta-data (`context:key=value`) is NOT
+    /// searchable by the node-list API, so it is intentionally not a selector.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asset: Option<AssetSelector>,
+}
+
+/// A single asset-record `field == value` selector.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AssetSelector {
+    pub field: String,
+    pub value: String,
 }
 
 /// A node foreign reference. Server nodeIds are not stable in GitOps, so the
@@ -169,16 +186,27 @@ impl MaintenanceLocal {
 
     fn validate_devices(&self) -> Result<()> {
         let d = &self.spec.devices;
-        if d.interfaces.is_empty() && d.nodes.is_empty() {
+        if d.interfaces.is_empty()
+            && d.nodes.is_empty()
+            && d.categories.is_empty()
+            && d.asset.is_none()
+        {
             return Err(cfg(
-                "spec.devices must declare at least one selector (interfaces and/or nodes)".into(),
+                "spec.devices must declare at least one selector (interfaces, nodes, categories, \
+                 and/or asset)"
+                    .into(),
             ));
         }
         let has_match_any = d.interfaces.iter().any(|i| i == MATCH_ANY);
-        if has_match_any && (d.interfaces.len() > 1 || !d.nodes.is_empty()) {
+        if has_match_any
+            && (d.interfaces.len() > 1
+                || !d.nodes.is_empty()
+                || !d.categories.is_empty()
+                || d.asset.is_some())
+        {
             return Err(cfg(
                 "spec.devices: `match-any` selects every interface and cannot be combined with \
-                 other interfaces or nodes"
+                 other interfaces, nodes, categories, or asset"
                     .into(),
             ));
         }
@@ -195,6 +223,23 @@ impl MaintenanceLocal {
                     "spec.devices.nodes[{i}]: foreignSource and foreignId must both be non-empty"
                 )));
             }
+        }
+        for (i, c) in d.categories.iter().enumerate() {
+            if c.trim().is_empty() {
+                return Err(cfg(format!(
+                    "spec.devices.categories[{i}] must not be empty"
+                )));
+            }
+            reject_fiql_metachar(&format!("spec.devices.categories[{i}]"), c)?;
+        }
+        if let Some(a) = &d.asset {
+            if a.field.trim().is_empty() || a.value.trim().is_empty() {
+                return Err(cfg(
+                    "spec.devices.asset.field and asset.value must both be non-empty".into(),
+                ));
+            }
+            reject_fiql_metachar("spec.devices.asset.field", &a.field)?;
+            reject_fiql_metachar("spec.devices.asset.value", &a.value)?;
         }
         Ok(())
     }
@@ -258,6 +303,21 @@ impl MaintenanceLocal {
 
 fn cfg(m: String) -> Error {
     Error::Config(m)
+}
+
+/// Reject a selector value that contains a FIQL metacharacter (`,` `;` `=` `(`
+/// `)`), which would corrupt the `_s` search query built from it.
+fn reject_fiql_metachar(field: &str, value: &str) -> Result<()> {
+    if let Some(c) = value
+        .chars()
+        .find(|c| matches!(c, ',' | ';' | '=' | '(' | ')'))
+    {
+        return Err(cfg(format!(
+            "{field}: value {value:?} contains the disallowed character {c:?} \
+             (FIQL metacharacters , ; = ( ) are not permitted in a selector)"
+        )));
+    }
+    Ok(())
 }
 
 /// Validate one time window against its schedule type, returning a message
@@ -563,6 +623,79 @@ spec:
             "apiVersion: maintenance.opennms.org/v1\nkind: Maintenance\nmetadata: { name: w }\nspec:\n  schedule: { type: daily, times: [ { begins: \"01:00:00\", ends: \"02:00:00\" } ] }\n  devices: { interfaces: [match-any] }\n  suppress: { notifications: true }\n  bogus: 1\n",
         );
         assert!(err.is_err());
+    }
+
+    #[test]
+    fn categories_and_asset_count_as_selectors() {
+        let doc = valid_with(
+            "    type: daily\n    times:\n      - { begins: \"01:00:00\", ends: \"02:00:00\" }\n",
+            "    categories: [Routers, Core]\n    asset: { field: city, value: Berlin }\n",
+            "    notifications: true\n",
+        );
+        doc.validate()
+            .expect("categories/asset are valid selectors");
+        assert_eq!(doc.spec.devices.categories, vec!["Routers", "Core"]);
+        assert_eq!(doc.spec.devices.asset.as_ref().unwrap().field, "city");
+    }
+
+    #[test]
+    fn empty_category_is_rejected() {
+        let doc = valid_with(
+            "    type: daily\n    times:\n      - { begins: \"01:00:00\", ends: \"02:00:00\" }\n",
+            "    categories: [\"\"]\n",
+            "    notifications: true\n",
+        );
+        assert!(
+            doc.validate()
+                .unwrap_err()
+                .to_string()
+                .contains("must not be empty")
+        );
+    }
+
+    #[test]
+    fn fiql_metachar_in_category_is_rejected() {
+        let doc = valid_with(
+            "    type: daily\n    times:\n      - { begins: \"01:00:00\", ends: \"02:00:00\" }\n",
+            "    categories: [\"Routers,Core\"]\n",
+            "    notifications: true\n",
+        );
+        assert!(
+            doc.validate()
+                .unwrap_err()
+                .to_string()
+                .contains("disallowed character")
+        );
+    }
+
+    #[test]
+    fn asset_requires_field_and_value() {
+        let doc = valid_with(
+            "    type: daily\n    times:\n      - { begins: \"01:00:00\", ends: \"02:00:00\" }\n",
+            "    asset: { field: city, value: \"\" }\n",
+            "    notifications: true\n",
+        );
+        assert!(
+            doc.validate()
+                .unwrap_err()
+                .to_string()
+                .contains("must both be non-empty")
+        );
+    }
+
+    #[test]
+    fn match_any_with_categories_is_rejected() {
+        let doc = valid_with(
+            "    type: daily\n    times:\n      - { begins: \"01:00:00\", ends: \"02:00:00\" }\n",
+            "    interfaces: [match-any]\n    categories: [Routers]\n",
+            "    notifications: true\n",
+        );
+        assert!(
+            doc.validate()
+                .unwrap_err()
+                .to_string()
+                .contains("match-any")
+        );
     }
 
     #[test]

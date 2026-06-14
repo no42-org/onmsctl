@@ -25,6 +25,23 @@
     "spec"
   ],
   "$defs": {
+    "AssetSelector": {
+      "description": "A single asset-record `field == value` selector.",
+      "type": "object",
+      "properties": {
+        "field": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "field",
+        "value"
+      ]
+    },
     "DaemonSuppress": {
       "description": "The package list for one per-package daemon (pollerd / threshd / collectd).",
       "type": "object",
@@ -45,6 +62,24 @@
       "description": "Which devices the window covers.",
       "type": "object",
       "properties": {
+        "asset": {
+          "description": "Select nodes whose OpenNMS asset-record `field` equals `value` (the\nsearchable key/value). Node meta-data (`context:key=value`) is NOT\nsearchable by the node-list API, so it is intentionally not a selector.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AssetSelector"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "categories": {
+          "description": "Select every node in ANY of the named OpenNMS categories (resolved to\nnodeIds at apply via the v2 nodes search). Additive with `nodes`/`asset`.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "interfaces": {
           "description": "IP addresses, or the single literal `match-any` (= all interfaces).",
           "type": "array",
