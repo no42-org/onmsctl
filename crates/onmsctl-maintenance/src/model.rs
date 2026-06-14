@@ -306,15 +306,17 @@ fn cfg(m: String) -> Error {
 }
 
 /// Reject a selector value that contains a FIQL metacharacter (`,` `;` `=` `(`
-/// `)`), which would corrupt the `_s` search query built from it.
+/// `)`) — which would corrupt the `_s` query structure — or the wildcard `*`,
+/// which would silently widen an intended exact `==value` match and select more
+/// nodes than the operator named.
 fn reject_fiql_metachar(field: &str, value: &str) -> Result<()> {
     if let Some(c) = value
         .chars()
-        .find(|c| matches!(c, ',' | ';' | '=' | '(' | ')'))
+        .find(|c| matches!(c, ',' | ';' | '=' | '(' | ')' | '*'))
     {
         return Err(cfg(format!(
             "{field}: value {value:?} contains the disallowed character {c:?} \
-             (FIQL metacharacters , ; = ( ) are not permitted in a selector)"
+             (FIQL metacharacters , ; = ( ) and the wildcard * are not permitted in a selector)"
         )));
     }
     Ok(())

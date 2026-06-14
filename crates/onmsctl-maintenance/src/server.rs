@@ -26,16 +26,21 @@ where
     D: Deserializer<'de>,
     T: Deserialize<'de>,
 {
+    // `Many` (a sequence) MUST be tried before `One`: serde can deserialize a
+    // struct positionally from a sequence, so a single-element array like
+    // `[{ "id": 7 }]` would otherwise match `One(T)` with the field bound to the
+    // wrong (nested) value. Trying `Many` first parses arrays correctly; a bare
+    // single object falls through to `One`.
     #[derive(Deserialize)]
     #[serde(untagged)]
     enum OneOrMany<T> {
-        One(T),
         Many(Vec<T>),
+        One(T),
     }
     Ok(match Option::<OneOrMany<T>>::deserialize(deserializer)? {
         None => Vec::new(),
-        Some(OneOrMany::One(x)) => vec![x],
         Some(OneOrMany::Many(v)) => v,
+        Some(OneOrMany::One(x)) => vec![x],
     })
 }
 
@@ -164,6 +169,28 @@ mod tests {
         assert_eq!(o.time.len(), 1);
         assert_eq!(o.interface[0].address, "match-any");
         assert!(o.node.is_empty());
+    }
+
+    #[test]
+    fn one_or_many_single_element_array_is_not_misparsed() {
+        // Regression: a SINGLE-element array must not be deserialized as a
+        // positional struct (serde allows struct-from-sequence). Both a
+        // one-element and a single-object `interface` must yield the same value.
+        let arr: Outage = serde_json::from_str(
+            r#"{ "name": "w", "type": "daily", "interface": [ { "address": "10.0.0.1" } ] }"#,
+        )
+        .unwrap();
+        let obj: Outage = serde_json::from_str(
+            r#"{ "name": "w", "type": "daily", "interface": { "address": "10.0.0.1" } }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            arr.interface,
+            vec![Interface {
+                address: "10.0.0.1".into()
+            }]
+        );
+        assert_eq!(arr.interface, obj.interface);
     }
 
     #[test]

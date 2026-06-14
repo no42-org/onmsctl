@@ -149,7 +149,7 @@ impl KindHandler for MaintenanceHandler {
                         name,
                         Action::None,
                         message,
-                        "resolve the node reference (import the node) and re-apply",
+                        "fix the device selectors (import the referenced node, or correct the category/asset) and re-apply",
                     ));
                 }
                 Planned::Ready(rw) => outcomes.push(execute_window(*rw, &api).await),
@@ -263,7 +263,7 @@ fn preview_for(planned: &Planned) -> ApplyOutcome {
             name.clone(),
             Action::None,
             message.clone(),
-            "resolve the node reference (import the node) and re-apply",
+            "fix the device selectors (import the referenced node, or correct the category/asset) and re-apply",
         ),
         Planned::Ready(rw) => {
             let name = rw.local.metadata.name.clone();
@@ -859,6 +859,110 @@ mod tests {
                 .unwrap()
                 .iter()
                 .all(|r| r.method.as_str() == "GET")
+        );
+    }
+
+    /// An asset selector resolves via the v2 search and its ids reach the outage.
+    #[tokio::test]
+    async fn asset_selector_resolves() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v2/nodes"))
+            .and(query_param("_s", "assetRecord.city==Berlin"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "count": 1, "totalCount": 1, "node": [ { "id": 7 } ]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/rest/sched-outages/win"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/rest/sched-outages"))
+            .respond_with(ResponseTemplate::new(201))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/rest/sched-outages/win/notifd"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let doc = "apiVersion: maintenance.opennms.org/v1\nkind: Maintenance\nmetadata:\n  name: win\nspec:\n  schedule:\n    type: daily\n    times:\n      - { begins: \"22:00:00\", ends: \"23:00:00\" }\n  devices:\n    asset: { field: city, value: Berlin }\n  suppress:\n    notifications: true\n";
+        let ctx = ctx_for(&server);
+        let params = ApplyParams::default();
+        let plan = MaintenanceHandler
+            .plan(&docs(&[doc]), &params, &ctx)
+            .await
+            .unwrap();
+        let outcomes = MaintenanceHandler
+            .execute(plan, &params, &ctx)
+            .await
+            .unwrap();
+        assert_eq!(outcomes[0].status, OutcomeStatus::Created);
+        let reqs = server.received_requests().await.unwrap();
+        let post = reqs.iter().find(|r| r.method.as_str() == "POST").unwrap();
+        assert!(
+            String::from_utf8_lossy(&post.body).contains("\"id\":7"),
+            "asset-matched node in body"
+        );
+    }
+
+    /// A dynamic-selector window whose re-resolved membership equals the deployed
+    /// definition is `Unchanged` and issues no POST (snapshot re-apply = no-op).
+    #[tokio::test]
+    async fn dynamic_selector_unchanged_does_not_repost() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v2/nodes"))
+            .and(query_param("_s", "category.name==Production"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "count": 1, "totalCount": 1, "node": [ { "id": 2 } ]
+            })))
+            .mount(&server)
+            .await;
+        // Deployed definition already matches the desired (daily 22-23, node 2).
+        Mock::given(method("GET"))
+            .and(path("/rest/sched-outages/win"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "name": "win", "type": "daily",
+                "time": [ { "begins": "22:00:00", "ends": "23:00:00" } ],
+                "node": [ { "id": 2 } ]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/rest/sched-outages/win/notifd"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let doc = "apiVersion: maintenance.opennms.org/v1\nkind: Maintenance\nmetadata:\n  name: win\nspec:\n  schedule:\n    type: daily\n    times:\n      - { begins: \"22:00:00\", ends: \"23:00:00\" }\n  devices:\n    categories: [Production]\n  suppress:\n    notifications: true\n";
+        let ctx = ctx_for(&server);
+        let params = ApplyParams::default();
+        let plan = MaintenanceHandler
+            .plan(&docs(&[doc]), &params, &ctx)
+            .await
+            .unwrap();
+        let outcomes = MaintenanceHandler
+            .execute(plan, &params, &ctx)
+            .await
+            .unwrap();
+        assert_eq!(
+            outcomes[0].status,
+            OutcomeStatus::Unchanged,
+            "membership unchanged → no churn"
+        );
+        assert!(
+            server
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .all(|r| r.method.as_str() != "POST"),
+            "unchanged dynamic-selector window must not re-POST the definition"
         );
     }
 }

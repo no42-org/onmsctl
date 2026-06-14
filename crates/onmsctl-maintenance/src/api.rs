@@ -138,18 +138,25 @@ impl<'a> MaintenanceApi<'a> {
             Err(Error::HttpStatus { status: 204, .. }) => return Ok(Vec::new()),
             Err(e) => return Err(e),
         };
-        if let (Some(c), Some(t)) = (list.count, list.total_count)
-            && c < t
-        {
-            return Err(Error::Config(format!(
-                "node search matched {t} nodes but only {c} were returned (truncated) — \
-                 refusing to cover a subset"
-            )));
-        }
-        list.node
+        let ids: Vec<i64> = list
+            .node
             .iter()
             .map(|n| node_id_from_value(&n.id))
-            .collect()
+            .collect::<Result<_>>()?;
+        // Guard truncation against the ids we actually received (not the server's
+        // self-reported `count`, which could equal `totalCount` while the array
+        // is short). When `totalCount` is present and exceeds what we got, fail
+        // rather than silently cover a subset.
+        if let Some(total) = list.total_count
+            && (ids.len() as i64) < total
+        {
+            return Err(Error::Config(format!(
+                "node search matched {total} nodes but only {} were returned (truncated) — \
+                 refusing to cover a subset",
+                ids.len()
+            )));
+        }
+        Ok(ids)
     }
 
     /// `GET /rest/sched-outages/interfaceInOutage/{ip}` — is the interface
