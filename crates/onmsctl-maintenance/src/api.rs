@@ -120,7 +120,7 @@ impl<'a> MaintenanceApi<'a> {
         }
     }
 
-    /// Resolve a set of dynamic node selectors (categories / asset) to server
+    /// Resolve a set of dynamic node selectors (categories / locations / asset) to server
     /// nodeIds via one v2 search: `GET api/v2/nodes?_s=<fiql>&limit=0`. `limit=0`
     /// returns all matches; a truncated response (`count < totalCount`) is an
     /// error rather than a silent subset.
@@ -213,15 +213,21 @@ fn node_id_from_value(v: &serde_json::Value) -> Result<i64> {
 }
 
 /// Build the FIQL `_s` value for the dynamic node selectors, or `None` when no
-/// `categories`/`asset` are set. All clauses are OR-joined (`,`) so the search
-/// returns the **union** of every selector (`category.name==A,category.name==B,
-/// assetRecord.<field>==<value>`).
+/// `categories`/`locations`/`asset` are set. All clauses are OR-joined (`,`) so
+/// the search returns the **union** of every selector
+/// (`category.name==A,location.locationName==L,assetRecord.<field>==<value>`).
 pub fn build_node_fiql(devices: &Devices) -> Option<String> {
     let mut clauses: Vec<String> = devices
         .categories
         .iter()
         .map(|c| format!("category.name=={c}"))
         .collect();
+    clauses.extend(
+        devices
+            .locations
+            .iter()
+            .map(|l| format!("location.locationName=={l}")),
+    );
     if let Some(a) = &devices.asset {
         clauses.push(format!("assetRecord.{}=={}", a.field, a.value));
     }
@@ -259,6 +265,19 @@ mod tests {
             build_node_fiql(&d).as_deref(),
             Some("category.name==Routers,category.name==Core,assetRecord.city==Berlin")
         );
+        // Locations OR-join in alongside categories/asset.
+        let with_loc = Devices {
+            categories: vec!["Routers".into()],
+            locations: vec!["Berlin".into(), "Default".into()],
+            ..Default::default()
+        };
+        assert_eq!(
+            build_node_fiql(&with_loc).as_deref(),
+            Some(
+                "category.name==Routers,location.locationName==Berlin,location.locationName==Default"
+            )
+        );
+
         // No dynamic selectors → None (only explicit nodes / interfaces).
         let none = Devices {
             nodes: vec![NodeRef {

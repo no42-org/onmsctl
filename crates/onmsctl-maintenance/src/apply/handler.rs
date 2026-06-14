@@ -192,7 +192,7 @@ async fn plan_window(local: MaintenanceLocal, api: &MaintenanceApi<'_>) -> Resul
     }
     let explicit_count = node_ids.len();
 
-    // Dynamic selectors (categories / asset): one v2 search, unioned + deduped.
+    // Dynamic selectors (categories / locations / asset): one v2 search, unioned + deduped.
     // A selector matching nothing is a (soft) warning, not a failure.
     let mut matched_count = 0;
     if let Some(fiql) = crate::api::build_node_fiql(devices) {
@@ -216,15 +216,18 @@ async fn plan_window(local: MaintenanceLocal, api: &MaintenanceApi<'_>) -> Resul
         });
     }
 
-    let nodes_summary =
-        if matched_count > 0 || !devices.categories.is_empty() || devices.asset.is_some() {
-            format!(
-                " (nodes: {explicit_count} explicit + {matched_count} matched = {} unique)",
-                node_ids.len()
-            )
-        } else {
-            String::new()
-        };
+    let nodes_summary = if matched_count > 0
+        || !devices.categories.is_empty()
+        || !devices.locations.is_empty()
+        || devices.asset.is_some()
+    {
+        format!(
+            " (nodes: {explicit_count} explicit + {matched_count} matched = {} unique)",
+            node_ids.len()
+        )
+    } else {
+        String::new()
+    };
 
     let deployed = api.get(&name).await?;
     let desired = convert::to_wire(&local, &node_ids);
@@ -907,6 +910,54 @@ mod tests {
         assert!(
             String::from_utf8_lossy(&post.body).contains("\"id\":7"),
             "asset-matched node in body"
+        );
+    }
+
+    /// A location selector resolves via the v2 search (location.locationName).
+    #[tokio::test]
+    async fn location_selector_resolves() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v2/nodes"))
+            .and(query_param("_s", "location.locationName==Berlin"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "count": 1, "totalCount": 1, "node": [ { "id": 3 } ]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/rest/sched-outages/win"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/rest/sched-outages"))
+            .respond_with(ResponseTemplate::new(201))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/rest/sched-outages/win/notifd"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let doc = "apiVersion: maintenance.opennms.org/v1\nkind: Maintenance\nmetadata:\n  name: win\nspec:\n  schedule:\n    type: daily\n    times:\n      - { begins: \"22:00:00\", ends: \"23:00:00\" }\n  devices:\n    locations: [Berlin]\n  suppress:\n    notifications: true\n";
+        let ctx = ctx_for(&server);
+        let params = ApplyParams::default();
+        let plan = MaintenanceHandler
+            .plan(&docs(&[doc]), &params, &ctx)
+            .await
+            .unwrap();
+        let outcomes = MaintenanceHandler
+            .execute(plan, &params, &ctx)
+            .await
+            .unwrap();
+        assert_eq!(outcomes[0].status, OutcomeStatus::Created);
+        let reqs = server.received_requests().await.unwrap();
+        let post = reqs.iter().find(|r| r.method.as_str() == "POST").unwrap();
+        assert!(
+            String::from_utf8_lossy(&post.body).contains("\"id\":3"),
+            "location-matched node in body"
         );
     }
 

@@ -95,6 +95,12 @@ pub struct Devices {
     /// nodeIds at apply via the v2 nodes search). Additive with `nodes`/`asset`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub categories: Vec<String>,
+    /// Select every node at ANY of the named OpenNMS monitoring (Minion)
+    /// locations (resolved to nodeIds at apply). Additive with the other
+    /// selectors. Selects whole nodes by id — the outage model has no location
+    /// field, so an interface IP cannot be scoped to a location.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub locations: Vec<String>,
     /// Select nodes whose OpenNMS asset-record `field` equals `value` (the
     /// searchable key/value). Node meta-data (`context:key=value`) is NOT
     /// searchable by the node-list API, so it is intentionally not a selector.
@@ -189,11 +195,12 @@ impl MaintenanceLocal {
         if d.interfaces.is_empty()
             && d.nodes.is_empty()
             && d.categories.is_empty()
+            && d.locations.is_empty()
             && d.asset.is_none()
         {
             return Err(cfg(
                 "spec.devices must declare at least one selector (interfaces, nodes, categories, \
-                 and/or asset)"
+                 locations, and/or asset)"
                     .into(),
             ));
         }
@@ -202,11 +209,12 @@ impl MaintenanceLocal {
             && (d.interfaces.len() > 1
                 || !d.nodes.is_empty()
                 || !d.categories.is_empty()
+                || !d.locations.is_empty()
                 || d.asset.is_some())
         {
             return Err(cfg(
                 "spec.devices: `match-any` selects every interface and cannot be combined with \
-                 other interfaces, nodes, categories, or asset"
+                 other interfaces, nodes, categories, locations, or asset"
                     .into(),
             ));
         }
@@ -231,6 +239,14 @@ impl MaintenanceLocal {
                 )));
             }
             reject_fiql_metachar(&format!("spec.devices.categories[{i}]"), c)?;
+        }
+        for (i, l) in d.locations.iter().enumerate() {
+            if l.trim().is_empty() {
+                return Err(cfg(format!(
+                    "spec.devices.locations[{i}] must not be empty"
+                )));
+            }
+            reject_fiql_metachar(&format!("spec.devices.locations[{i}]"), l)?;
         }
         if let Some(a) = &d.asset {
             if a.field.trim().is_empty() || a.value.trim().is_empty() {
@@ -638,6 +654,62 @@ spec:
             .expect("categories/asset are valid selectors");
         assert_eq!(doc.spec.devices.categories, vec!["Routers", "Core"]);
         assert_eq!(doc.spec.devices.asset.as_ref().unwrap().field, "city");
+    }
+
+    #[test]
+    fn locations_count_as_selector_and_validate() {
+        let doc = valid_with(
+            "    type: daily\n    times:\n      - { begins: \"01:00:00\", ends: \"02:00:00\" }\n",
+            "    locations: [Berlin, Default]\n",
+            "    notifications: true\n",
+        );
+        doc.validate().expect("locations are a valid selector");
+        assert_eq!(doc.spec.devices.locations, vec!["Berlin", "Default"]);
+    }
+
+    #[test]
+    fn empty_location_is_rejected() {
+        let doc = valid_with(
+            "    type: daily\n    times:\n      - { begins: \"01:00:00\", ends: \"02:00:00\" }\n",
+            "    locations: [\"\"]\n",
+            "    notifications: true\n",
+        );
+        assert!(
+            doc.validate()
+                .unwrap_err()
+                .to_string()
+                .contains("must not be empty")
+        );
+    }
+
+    #[test]
+    fn fiql_metachar_in_location_is_rejected() {
+        let doc = valid_with(
+            "    type: daily\n    times:\n      - { begins: \"01:00:00\", ends: \"02:00:00\" }\n",
+            "    locations: [\"Berlin*\"]\n",
+            "    notifications: true\n",
+        );
+        assert!(
+            doc.validate()
+                .unwrap_err()
+                .to_string()
+                .contains("disallowed character")
+        );
+    }
+
+    #[test]
+    fn match_any_with_locations_is_rejected() {
+        let doc = valid_with(
+            "    type: daily\n    times:\n      - { begins: \"01:00:00\", ends: \"02:00:00\" }\n",
+            "    interfaces: [match-any]\n    locations: [Berlin]\n",
+            "    notifications: true\n",
+        );
+        assert!(
+            doc.validate()
+                .unwrap_err()
+                .to_string()
+                .contains("match-any")
+        );
     }
 
     #[test]

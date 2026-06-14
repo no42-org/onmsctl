@@ -87,6 +87,13 @@
             "type": "string"
           }
         },
+        "locations": {
+          "description": "Select every node at ANY of the named OpenNMS monitoring (Minion)\nlocations (resolved to nodeIds at apply). Additive with the other\nselectors. Selects whole nodes by id — the outage model has no location\nfield, so an interface IP cannot be scoped to a location.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "nodes": {
           "description": "Nodes by foreign reference (resolved to the server nodeId at apply).",
           "type": "array",

@@ -42,6 +42,10 @@ spec:
     # Every node in ANY of these OpenNMS categories (resolved at apply via the
     # v2 nodes search; snapshot — re-apply to refresh as membership changes).
     categories: [Routers, Core]
+    # Every node at ANY of these monitoring (Minion) locations. Selects whole
+    # nodes by id — the outage model has no location field, so an interface IP
+    # cannot be scoped to a location.
+    locations: [Berlin]
     # Nodes whose OpenNMS asset-record field matches (the searchable key/value).
     # NOTE: node meta-data (context:key=value) is NOT searchable by the node API,
     # so `asset` is the supported key/value selector.

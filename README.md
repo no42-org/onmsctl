@@ -904,6 +904,7 @@ spec:
     nodes:
       - { foreignSource: hq, foreignId: web01 }   # resolved to a nodeId at apply
     categories: [Routers, Core]                   # every node in ANY listed category
+    locations: [Berlin]                           # every node at ANY listed Minion location
     asset: { field: city, value: Berlin }         # searchable asset key/value
   suppress:
     polling:       { packages: [production] }      # explicit packages required
@@ -938,11 +939,16 @@ then **attaches** it to each declared daemon: `polling`→pollerd, `thresholds`�
   resolved at apply; an un-imported node fails that window with a clear message —
   which is why `Maintenance` applies after `Requisition` (the import is async, so
   a node reference may need a follow-up apply; prefer `interfaces`/`match-any`).
-- **Dynamic node selectors (`categories`, `asset`).** Target a *set* of nodes
-  without listing each: `categories` selects every node in **any** listed
-  category; `asset: { field, value }` selects nodes whose OpenNMS asset field
-  matches. Both resolve via the v2 nodes search at apply and union with explicit
-  `nodes` (deduped). They are a **snapshot** — `apply` re-resolves, so re-apply
+- **Dynamic node selectors (`categories`, `locations`, `asset`).** Target a *set*
+  of nodes without listing each: `categories` selects every node in **any** listed
+  category; `locations` selects every node at **any** listed Minion location;
+  `asset: { field, value }` selects nodes whose OpenNMS asset field matches. All
+  resolve via the v2 nodes search at apply and union with explicit `nodes`
+  (deduped). Selectors are a **union, not an intersection** — `categories: [Routers]`
+  with `locations: [Berlin]` covers *every Router anywhere* **plus** *every node in
+  Berlin*, not "Routers located in Berlin". They select **whole nodes by id** — the
+  outage model has no location field, so an interface IP cannot be scoped to a
+  location (use `interfaces` for IP-level, location-agnostic scoping). They are a **snapshot** — `apply` re-resolves, so re-apply
   refreshes the set as membership changes (unchanged ⇒ `Unchanged`, changed ⇒
   `Updated`); `--dry-run` shows what each selector expanded to. A selector
   matching nothing warns; a window covering nothing fails. Node **meta-data**
