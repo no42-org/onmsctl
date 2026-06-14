@@ -25,8 +25,8 @@ use onmsctl_core::{
 };
 use serde::Serialize;
 
-use crate::api::SnmpConfigApi;
-use crate::convert::from_wire;
+use crate::api::{SnmpConfigApi, TrapdConfigApi};
+use crate::convert::{from_wire, trapd_from_wire};
 use crate::model::SnmpConfigLocal;
 use crate::select;
 use crate::server::SnmpAgentConfig;
@@ -85,11 +85,24 @@ impl SnmpCmd {
     }
 }
 
+/// Build the exported `kind: SnmpConfig` document from the live server: the
+/// snmp-config (agent) tiers always, plus the trap-daemon block **when the
+/// server exposes it**. A `404` on the Trapd endpoint (an older Horizon without
+/// NMS-19128, or a supported server with no trap config yet) leaves `spec.trapd`
+/// absent so the export still succeeds and round-trips; other errors (auth, 5xx)
+/// propagate. Secrets are emitted as reference placeholders by the converters.
+async fn export_doc(client: &OnmsClient) -> Result<SnmpConfigLocal> {
+    let wire = SnmpConfigApi::new(client).get_config().await?;
+    let mut local = from_wire(&wire);
+    if let Some(trapd) = TrapdConfigApi::new(client).get_config().await? {
+        local.spec.trapd = Some(trapd_from_wire(&trapd));
+    }
+    Ok(local)
+}
+
 async fn run_export(output_file: Option<PathBuf>, ctx: &Context) -> Result<()> {
     let client = OnmsClient::from_context(ctx)?;
-    let api = SnmpConfigApi::new(&client);
-    let wire = api.get_config().await?;
-    let local = from_wire(&wire);
+    let local = export_doc(&client).await?;
     let rendered = render_doc(&local, ctx.output_format)?;
 
     match output_file {
@@ -333,6 +346,69 @@ mod tests {
             })))
             .mount(server)
             .await;
+    }
+
+    #[tokio::test]
+    async fn export_includes_trapd_block_with_placeholder_secrets() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v2/snmp-config"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "version": "v2c"
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/v2/trapd/config"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "snmpTrapPort": 162, "newSuspectOnTrap": false,
+                "snmpv3User": [{
+                    "securityName": "monitor", "securityLevel": 3,
+                    "authPassphrase": "auth-cleartext", "privacyPassphrase": "priv-cleartext"
+                }]
+            })))
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server);
+        let local = export_doc(&client).await.unwrap();
+        let trapd = local.spec.trapd.as_ref().expect("trapd block exported");
+        assert_eq!(trapd.snmp_trap_port, Some(162));
+        assert_eq!(trapd.snmpv3_users.len(), 1);
+
+        // The exported document is valid and carries no cleartext passphrase.
+        local.validate().expect("exported doc validates");
+        let yaml = render_doc(&local, OutputFormat::Yaml).unwrap();
+        assert!(yaml.contains("trapd:"));
+        assert!(!yaml.contains("auth-cleartext"));
+        assert!(!yaml.contains("priv-cleartext"));
+        assert!(yaml.contains("fromEnv"));
+    }
+
+    #[tokio::test]
+    async fn export_omits_trapd_when_endpoint_absent() {
+        // An older Horizon (no NMS-19128) 404s on the trapd endpoint; export
+        // must still succeed with spec.trapd absent.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v2/snmp-config"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "version": "v2c"
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/v2/trapd/config"))
+            .respond_with(ResponseTemplate::new(404).set_body_string("no route"))
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server);
+        let local = export_doc(&client).await.unwrap();
+        assert!(
+            local.spec.trapd.is_none(),
+            "404 ⇒ trapd omitted from export"
+        );
     }
 
     #[tokio::test]

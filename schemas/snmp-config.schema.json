@@ -689,9 +689,165 @@
           "items": {
             "$ref": "#/$defs/ProfileLocal"
           }
+        },
+        "trapd": {
+          "description": "SNMP **trap daemon** (Trapd) configuration. Optional and additive: when\nabsent, `apply`/`export` touch only `/api/v2/snmp-config` and never reach\nthe Trapd endpoint (so older Horizon is unaffected). When present, the\nsame document also reconciles `/api/v2/trapd/config`.\n\nREQUIRES a Horizon build with the Trapd REST service (NMS-19128, the\n`37.x`/`develop` line); against older servers a present `trapd` block\nfails the trap-daemon reconcile with a clear version message while the\nsnmp-config half is unaffected.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Trapd"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false
+    },
+    "Trapd": {
+      "description": "The SNMP trap daemon (Trapd) configuration — the local model for\n`/api/v2/trapd/config` (`TrapdConfigDto`). A flat singleton: there is one\ntrap-daemon config per Horizon.\n\n`snmpTrapPort` and `newSuspectOnTrap` are **required** (the server rejects an\nupdate missing either); the remaining tuning fields are optional and inherit\nthe server's defaults when omitted (the diff treats an omitted field as\n\"don't care\", matching the snmp-config tiers). Passphrases are\n[`SecretRef`]s, resolved write-only on apply.",
+      "type": "object",
+      "properties": {
+        "batchInterval": {
+          "description": "Max milliseconds to hold a partial batch.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "batchSize": {
+          "description": "Max traps coalesced per batch.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "includeRawMessage": {
+          "description": "Persist the raw trap PDU on the resulting event.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "newSuspectOnTrap": {
+          "description": "Create a new suspect node on a trap from an unknown source. Required.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "queueSize": {
+          "description": "Bounded processing queue size.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "snmpTrapAddress": {
+          "description": "Listen address; `*` (the default) binds all interfaces.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "snmpTrapPort": {
+          "description": "UDP listen port (1–65535). Required.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "snmpv3Users": {
+          "description": "SNMPv3 trap users (full-replace list: the desired set is sent verbatim,\nso omitting a previously-present user removes it).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TrapdV3User"
+          }
+        },
+        "threads": {
+          "description": "Trap-processing thread count.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "useAddressFromVarbind": {
+          "description": "Honor `snmpTrapAddress` from the trap varbinds when present.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "TrapdV3User": {
+      "description": "An SNMPv3 user the trap daemon accepts (`Snmpv3UserDto`). `securityName` is\nrequired; the auth/privacy fields follow the chosen `securityLevel`.\nPassphrases are write-only [`SecretRef`]s.",
+      "type": "object",
+      "properties": {
+        "authPassphrase": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SecretRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "authProtocol": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "engineId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "privacyPassphrase": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SecretRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "privacyProtocol": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "securityLevel": {
+          "description": "`noAuthNoPriv` / `authNoPriv` / `authPriv` (→ wire int 1/2/3), shared\nwith the snmp-config [`SecurityLevel`] mapping.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SecurityLevel"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "securityName": {
+          "description": "The v3 security (user) name. Required, unique within the list.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "securityName"
+      ]
     }
   }
 }

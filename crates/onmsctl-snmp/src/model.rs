@@ -68,6 +68,86 @@ pub struct Spec {
     /// Per-target overrides.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub definitions: Vec<DefinitionLocal>,
+    /// SNMP **trap daemon** (Trapd) configuration. Optional and additive: when
+    /// absent, `apply`/`export` touch only `/api/v2/snmp-config` and never reach
+    /// the Trapd endpoint (so older Horizon is unaffected). When present, the
+    /// same document also reconciles `/api/v2/trapd/config`.
+    ///
+    /// REQUIRES a Horizon build with the Trapd REST service (NMS-19128, the
+    /// `37.x`/`develop` line); against older servers a present `trapd` block
+    /// fails the trap-daemon reconcile with a clear version message while the
+    /// snmp-config half is unaffected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trapd: Option<Trapd>,
+}
+
+/// The SNMP trap daemon (Trapd) configuration — the local model for
+/// `/api/v2/trapd/config` (`TrapdConfigDto`). A flat singleton: there is one
+/// trap-daemon config per Horizon.
+///
+/// `snmpTrapPort` and `newSuspectOnTrap` are **required** (the server rejects an
+/// update missing either); the remaining tuning fields are optional and inherit
+/// the server's defaults when omitted (the diff treats an omitted field as
+/// "don't care", matching the snmp-config tiers). Passphrases are
+/// [`SecretRef`]s, resolved write-only on apply.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Trapd {
+    /// Listen address; `*` (the default) binds all interfaces.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snmp_trap_address: Option<String>,
+    /// UDP listen port (1–65535). Required.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snmp_trap_port: Option<i32>,
+    /// Create a new suspect node on a trap from an unknown source. Required.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_suspect_on_trap: Option<bool>,
+    /// Persist the raw trap PDU on the resulting event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_raw_message: Option<bool>,
+    /// Trap-processing thread count.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub threads: Option<i32>,
+    /// Bounded processing queue size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queue_size: Option<i32>,
+    /// Max traps coalesced per batch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch_size: Option<i32>,
+    /// Max milliseconds to hold a partial batch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch_interval: Option<i32>,
+    /// Honor `snmpTrapAddress` from the trap varbinds when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub use_address_from_varbind: Option<bool>,
+    /// SNMPv3 trap users (full-replace list: the desired set is sent verbatim,
+    /// so omitting a previously-present user removes it).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub snmpv3_users: Vec<TrapdV3User>,
+}
+
+/// An SNMPv3 user the trap daemon accepts (`Snmpv3UserDto`). `securityName` is
+/// required; the auth/privacy fields follow the chosen `securityLevel`.
+/// Passphrases are write-only [`SecretRef`]s.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TrapdV3User {
+    /// The v3 security (user) name. Required, unique within the list.
+    pub security_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine_id: Option<String>,
+    /// `noAuthNoPriv` / `authNoPriv` / `authPriv` (→ wire int 1/2/3), shared
+    /// with the snmp-config [`SecurityLevel`] mapping.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub security_level: Option<SecurityLevel>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_protocol: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_passphrase: Option<SecretRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub privacy_protocol: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub privacy_passphrase: Option<SecretRef>,
 }
 
 /// SNMPv3 security level (maps to the wire int 1/2/3).
@@ -251,6 +331,57 @@ impl SnmpConfigLocal {
                 )));
             }
         }
+
+        if let Some(trapd) = &self.spec.trapd {
+            trapd.validate()?;
+        }
+        Ok(())
+    }
+}
+
+impl Trapd {
+    /// Validate the trap-daemon block. The server **requires** `snmpTrapPort`
+    /// (1–65535) and `newSuspectOnTrap` on every update, so a present-but-empty
+    /// `trapd: {}` is rejected here (rather than silently uploading an
+    /// all-defaults config that could clobber a configured daemon). Each v3 user
+    /// needs a non-empty `securityName`, unique within the list.
+    pub fn validate(&self) -> Result<()> {
+        match self.snmp_trap_port {
+            None => {
+                return Err(Error::Config(
+                    "spec.trapd.snmpTrapPort is required (the server rejects a trap-daemon \
+                     update without it)"
+                        .into(),
+                ));
+            }
+            Some(p) if !(1..=65535).contains(&p) => {
+                return Err(Error::Config(format!(
+                    "spec.trapd.snmpTrapPort must be between 1 and 65535, got {p}"
+                )));
+            }
+            Some(_) => {}
+        }
+        if self.new_suspect_on_trap.is_none() {
+            return Err(Error::Config(
+                "spec.trapd.newSuspectOnTrap is required (the server rejects a trap-daemon \
+                 update without it)"
+                    .into(),
+            ));
+        }
+        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for (i, u) in self.snmpv3_users.iter().enumerate() {
+            if u.security_name.trim().is_empty() {
+                return Err(Error::Config(format!(
+                    "spec.trapd.snmpv3Users[{i}]: securityName must not be empty"
+                )));
+            }
+            if !seen.insert(u.security_name.as_str()) {
+                return Err(Error::Config(format!(
+                    "spec.trapd.snmpv3Users[{i}]: duplicate securityName {:?}",
+                    u.security_name
+                )));
+            }
+        }
         Ok(())
     }
 }
@@ -395,5 +526,99 @@ spec:
             "apiVersion: snmp.opennms.org/v1\nkind: SnmpConfig\nmetadata: { name: default }\nspec: {}\nbogus: 1\n",
         );
         assert!(err.is_err());
+    }
+
+    const WITH_TRAPD: &str = r#"
+apiVersion: snmp.opennms.org/v1
+kind: SnmpConfig
+metadata: { name: default }
+spec:
+  trapd:
+    snmpTrapAddress: "*"
+    snmpTrapPort: 162
+    newSuspectOnTrap: false
+    threads: 4
+    snmpv3Users:
+      - securityName: monitor
+        securityLevel: authPriv
+        authProtocol: SHA
+        authPassphrase: { fromEnv: ONMS_TRAPD_AUTH }
+        privacyProtocol: AES
+        privacyPassphrase: { fromKeyring: { service: onmsctl, account: trapd-priv } }
+"#;
+
+    #[test]
+    fn trapd_block_parses_and_validates() {
+        let doc = parse(WITH_TRAPD).expect("parses");
+        doc.validate().expect("valid");
+        let t = doc.spec.trapd.as_ref().expect("trapd present");
+        assert_eq!(t.snmp_trap_port, Some(162));
+        assert_eq!(t.new_suspect_on_trap, Some(false));
+        assert_eq!(t.threads, Some(4));
+        assert_eq!(t.snmpv3_users.len(), 1);
+        let u = &t.snmpv3_users[0];
+        assert_eq!(u.security_name, "monitor");
+        assert_eq!(u.security_level, Some(SecurityLevel::AuthPriv));
+        assert!(matches!(u.auth_passphrase, Some(SecretRef::FromEnv(_))));
+    }
+
+    #[test]
+    fn trapd_without_required_fields_is_rejected() {
+        // Present-but-empty `trapd: {}` must fail validation, not silently
+        // upload an all-defaults config.
+        let doc = parse(
+            "apiVersion: snmp.opennms.org/v1\nkind: SnmpConfig\nmetadata: { name: default }\nspec:\n  trapd: {}\n",
+        )
+        .unwrap();
+        let err = doc.validate().unwrap_err().to_string();
+        assert!(err.contains("snmpTrapPort is required"), "got: {err}");
+    }
+
+    #[test]
+    fn trapd_missing_new_suspect_is_rejected() {
+        let doc = parse(
+            "apiVersion: snmp.opennms.org/v1\nkind: SnmpConfig\nmetadata: { name: default }\nspec:\n  trapd:\n    snmpTrapPort: 162\n",
+        )
+        .unwrap();
+        assert!(
+            doc.validate()
+                .unwrap_err()
+                .to_string()
+                .contains("newSuspectOnTrap is required")
+        );
+    }
+
+    #[test]
+    fn trapd_port_out_of_range_is_rejected() {
+        let doc = parse(
+            "apiVersion: snmp.opennms.org/v1\nkind: SnmpConfig\nmetadata: { name: default }\nspec:\n  trapd:\n    snmpTrapPort: 70000\n    newSuspectOnTrap: false\n",
+        )
+        .unwrap();
+        assert!(
+            doc.validate()
+                .unwrap_err()
+                .to_string()
+                .contains("between 1 and 65535")
+        );
+    }
+
+    #[test]
+    fn trapd_duplicate_v3_user_is_rejected() {
+        let doc = parse(
+            "apiVersion: snmp.opennms.org/v1\nkind: SnmpConfig\nmetadata: { name: default }\nspec:\n  trapd:\n    snmpTrapPort: 162\n    newSuspectOnTrap: false\n    snmpv3Users:\n      - securityName: dup\n      - securityName: dup\n",
+        )
+        .unwrap();
+        assert!(
+            doc.validate()
+                .unwrap_err()
+                .to_string()
+                .contains("duplicate securityName")
+        );
+    }
+
+    #[test]
+    fn absent_trapd_is_none() {
+        let doc = parse(FULL).expect("parses");
+        assert!(doc.spec.trapd.is_none(), "no trapd block ⇒ None");
     }
 }

@@ -53,3 +53,31 @@ spec:
       ipMatches: ["10.12.*.*"]
       version: v2c
       readCommunity: { fromEnv: ONMS_SNMP_NYC_COMMUNITY }
+
+  # OPTIONAL: the SNMP trap daemon (Trapd) configuration, reconciled against
+  # /api/v2/trapd/config in the SAME apply. It is additive — omit this block and
+  # apply/export never touch the Trapd endpoint (so older Horizon is unaffected).
+  #
+  # REQUIRES a Horizon build with the Trapd REST API (NMS-19128; the 37.x /
+  # develop line). Against an older server a present `trapd` block fails the
+  # trap-daemon half with a clear version message while the snmp-config half
+  # still applies. `snmpTrapPort` and `newSuspectOnTrap` are required.
+  trapd:
+    snmpTrapAddress: "*"          # listen address; * = all interfaces
+    snmpTrapPort: 162
+    newSuspectOnTrap: false
+    includeRawMessage: false
+    useAddressFromVarbind: false
+    # Optional tuning — omit to keep the server defaults.
+    # threads: 0
+    # queueSize: 10000
+    # batchSize: 1000
+    # batchInterval: 500
+    # SNMPv3 trap users (full-replace list: omitting a user removes it).
+    snmpv3Users:
+      - securityName: trap-monitor
+        securityLevel: authPriv     # noAuthNoPriv | authNoPriv | authPriv
+        authProtocol: SHA
+        authPassphrase: { fromEnv: ONMS_TRAPD_AUTH_PASSPHRASE }
+        privacyProtocol: AES
+        privacyPassphrase: { fromKeyring: { service: onmsctl, account: trapd-priv } }

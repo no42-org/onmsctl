@@ -820,6 +820,45 @@ definition's `specifics`/`ranges`/`ipMatches` against the IP; a location
 reached only through a profile `filterExpression` (server-evaluated) is not
 auto-discovered — pass `--location` explicitly for those.
 
+### Trap daemon (Trapd) — optional `spec.trapd`
+
+The same `SnmpConfig` document can also manage the SNMP **trap daemon** via an
+optional `spec.trapd` block, reconciled against `/api/v2/trapd/config` in the
+same apply:
+
+```yaml
+spec:
+  defaults: { ... }      # the snmp-config (agent) tiers, as above
+  trapd:                 # OPTIONAL — omit to leave the trap daemon untouched
+    snmpTrapAddress: "*"
+    snmpTrapPort: 162    # required
+    newSuspectOnTrap: false   # required
+    snmpv3Users:         # full-replace list; omitting a user removes it
+      - securityName: trap-monitor
+        securityLevel: authPriv
+        authProtocol: SHA
+        authPassphrase: { fromEnv: ONMS_TRAPD_AUTH_PASSPHRASE }
+```
+
+It is **additive**: a document without `spec.trapd` issues no Trapd requests at
+all, so existing workflows and older servers are unaffected. When present, the
+two halves are reported separately (`default` and `default (trapd)`), and —
+because there is no cross-endpoint transaction — the snmp-config half is written
+first and each half gets its own outcome, so a partial apply is reported, never
+masked as success. Passphrases are write-only (secret refs), excluded from the
+idempotency diff exactly like the agent secrets; rotate them alongside an
+explicit change or re-apply deliberately.
+
+> **Requires** a Horizon build with the Trapd REST API (NMS-19128 — the `37.x` /
+> `develop` line). Against an older server a present `trapd` block fails the
+> trap-daemon half with a clear *"requires the NMS-19128 build"* message while
+> the snmp-config half still applies; `snmp export` simply omits `spec.trapd`
+> when the endpoint is absent.
+
+`snmp export` includes the `trapd` block automatically when the server exposes
+it (passphrases as `fromEnv` placeholders), so an exported document round-trips
+through `apply`.
+
 ### Workflow: configure SNMP *before* provisioning
 
 `SnmpConfig` applies **before** `Requisition` in a co-located
