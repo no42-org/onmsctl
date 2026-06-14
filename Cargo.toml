@@ -60,6 +60,7 @@ zeroize = "1.8"
 onmsctl-core = { path = "crates/onmsctl-core", version = "=0.1.0" }
 onmsctl-eventconf = { path = "crates/onmsctl-eventconf", version = "=0.1.0" }
 onmsctl-iam = { path = "crates/onmsctl-iam", version = "=0.1.0" }
+onmsctl-maintenance = { path = "crates/onmsctl-maintenance", version = "=0.1.0" }
 onmsctl-provisioning = { path = "crates/onmsctl-provisioning", version = "=0.1.0" }
 onmsctl-snmp = { path = "crates/onmsctl-snmp", version = "=0.1.0" }
 

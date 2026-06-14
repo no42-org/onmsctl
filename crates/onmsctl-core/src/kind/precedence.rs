@@ -16,6 +16,11 @@ pub const RANK_USER: u32 = 100;
 pub const RANK_EVENT_SOURCE: u32 = 200;
 pub const RANK_SNMP_CONFIG: u32 = 250;
 pub const RANK_REQUISITION: u32 = 300;
+/// Maintenance windows apply after `Requisition` so a co-located apply imports
+/// nodes before a window resolves its node foreign references (the import is
+/// async, so a reference may still need a follow-up apply — see the capability's
+/// design D10).
+pub const RANK_MAINTENANCE: u32 = 350;
 
 /// The authoritative precedence table. The binary uses these ranks when wiring
 /// handlers into the registry.
@@ -24,6 +29,7 @@ pub const KNOWN_RANKS: &[(&str, u32)] = &[
     ("EventSource", RANK_EVENT_SOURCE),
     ("SnmpConfig", RANK_SNMP_CONFIG),
     ("Requisition", RANK_REQUISITION),
+    ("Maintenance", RANK_MAINTENANCE),
 ];
 
 /// The precedence rank for a known `kind`, or `None` if unknown.

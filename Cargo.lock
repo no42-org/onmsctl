@@ -978,6 +978,7 @@ dependencies = [
  "onmsctl-core",
  "onmsctl-eventconf",
  "onmsctl-iam",
+ "onmsctl-maintenance",
  "onmsctl-provisioning",
  "onmsctl-snmp",
  "serde",
@@ -1060,6 +1061,22 @@ dependencies = [
  "serde_norway",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "onmsctl-maintenance"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "clap",
+ "onmsctl-core",
+ "percent-encoding",
+ "schemars",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "tokio",
+ "wiremock",
 ]
 
 [[package]]

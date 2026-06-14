@@ -1,0 +1,45 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/no42-org/onmsctl/main/schemas/maintenance.schema.json
+#
+# kind: Maintenance — a maintenance window (OpenNMS scheduled outage). For the
+# window, OpenNMS stops the chosen daemons (polling / thresholds / collection /
+# notifications) for the chosen devices. NAMED + multi-instance: one document per
+# window, metadata.name = the outage name. `onmsctl apply -f` reconciles it
+# against /rest/sched-outages:
+#
+#   onmsctl apply -f examples/maintenance.yaml --dry-run --diff
+#   onmsctl maintenance list
+#   onmsctl maintenance status 192.168.8.8
+#   onmsctl maintenance delete weekend-patching
+#
+# Notes:
+# - Times are interpreted in the OpenNMS SERVER's timezone.
+# - `suppress` requires EXPLICIT packages for polling/thresholds/collection
+#   (there is no default package); `notifications` is a global boolean.
+# - Attachments are ensure-present: apply never detaches. To reduce suppression,
+#   `onmsctl maintenance delete <name>` then re-apply.
+#
+apiVersion: maintenance.opennms.org/v1
+kind: Maintenance
+metadata:
+  name: weekend-patching
+spec:
+  schedule:
+    type: specific          # specific | daily | weekly | monthly
+    times:
+      # specific → full datetimes "dd-MMM-yyyy HH:mm:ss"
+      - begins: "20-Jun-2026 22:00:00"
+        ends:   "21-Jun-2026 04:00:00"
+      # daily   → { begins: "HH:mm:ss", ends: "HH:mm:ss" }
+      # weekly  → { day: monday,  begins: "HH:mm:ss", ends: "HH:mm:ss" }
+      # monthly → { day: "15",    begins: "HH:mm:ss", ends: "HH:mm:ss" }
+  devices:
+    # An IP, or the single literal `match-any` (= every interface).
+    interfaces: [192.168.8.8]
+    # Nodes by foreign reference (resolved to the server nodeId at apply).
+    nodes:
+      - { foreignSource: labmonkeys-hq, foreignId: web01 }
+  suppress:
+    polling:       { packages: [production] }   # → pollerd package(s)
+    thresholds:    { packages: [production] }    # → threshd package(s)
+    # collection:  { packages: [production] }    # → collectd package(s)
+    notifications: true                           # global (no package)

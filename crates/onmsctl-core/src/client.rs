@@ -221,6 +221,20 @@ impl OnmsClient {
         self.mutate_drain(Method::PUT, path, body).await
     }
 
+    /// `PUT` with **no request body**, discarding the response body. Used by
+    /// "toggle"-style endpoints that attach a resource by path alone and accept
+    /// no payload — e.g. the v1 scheduled-outages
+    /// `PUT /rest/sched-outages/{name}/pollerd/{package}` attach calls. Unlike
+    /// [`Self::put_drain`] it sends no `Content-Type`/body, so a server that
+    /// rejects an unexpected JSON body on a bodyless route is not tripped.
+    pub async fn put_empty(&self, path: &str) -> Result<()> {
+        let url = self.url_for(path)?;
+        let req = self.inner.request(Method::PUT, url);
+        let resp = self.send(req, Method::PUT, path).await?;
+        let _ = resp.bytes().await?;
+        Ok(())
+    }
+
     /// `POST` with a JSON body, discarding the response body. Same rationale
     /// as [`Self::patch_drain`]: Horizon's provisioning collection POSTs
     /// (`/rest/requisitions`, `/rest/foreignSources`) reply `202 Accepted`
@@ -931,6 +945,55 @@ mod tests {
             )
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn put_empty_sends_no_body_and_drains() {
+        let mock = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/rest/sched-outages/win/pollerd/example1"))
+            .and(header("authorization", "Basic YWRtaW46c2VjcmV0"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&mock)
+            .await;
+        let client = OnmsClient::from_context(&ctx_for(
+            &format!("{}/", mock.uri()),
+            AuthCreds::basic("admin", "secret"),
+        ))
+        .unwrap();
+        client
+            .put_empty("rest/sched-outages/win/pollerd/example1")
+            .await
+            .unwrap();
+        // The recorded request carried no Content-Type (no body was attached).
+        let reqs = mock.received_requests().await.unwrap();
+        assert!(
+            reqs[0].headers.get("content-type").is_none(),
+            "put_empty must not send a body/Content-Type"
+        );
+    }
+
+    #[tokio::test]
+    async fn put_empty_404_yields_http_status() {
+        let mock = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/rest/sched-outages/win/pollerd/ghost"))
+            .respond_with(ResponseTemplate::new(404).set_body_string("package not found"))
+            .mount(&mock)
+            .await;
+        let client = OnmsClient::from_context(&ctx_for(
+            &format!("{}/", mock.uri()),
+            AuthCreds::bearer("t"),
+        ))
+        .unwrap();
+        let err = client
+            .put_empty("rest/sched-outages/win/pollerd/ghost")
+            .await
+            .unwrap_err();
+        match err {
+            Error::HttpStatus { status, .. } => assert_eq!(status, 404),
+            other => panic!("unexpected {other:?}"),
+        }
     }
 
     #[tokio::test]

@@ -52,6 +52,12 @@ pub enum OutcomeStatus {
     Deleted,
     Failed,
     Skipped,
+    /// The desired state was applied idempotently against a target whose current
+    /// state cannot be read back, so the operation is "ensured present" rather
+    /// than provably Created/Updated/Unchanged. Used for scheduled-outage daemon
+    /// attachments (the `maintenance` capability), whose attachment set is not
+    /// exposed by the REST API. Not a failure.
+    Ensured,
 }
 
 impl OutcomeStatus {
@@ -71,6 +77,7 @@ impl fmt::Display for OutcomeStatus {
             OutcomeStatus::Deleted => "Deleted",
             OutcomeStatus::Failed => "Failed",
             OutcomeStatus::Skipped => "Skipped",
+            OutcomeStatus::Ensured => "Ensured",
         })
     }
 }
