@@ -192,7 +192,7 @@ async fn plan_window(local: MaintenanceLocal, api: &MaintenanceApi<'_>) -> Resul
     }
     let explicit_count = node_ids.len();
 
-    // Dynamic selectors (categories / asset): one v2 search, unioned + deduped.
+    // Dynamic selectors (categories / locations / asset): one v2 search, unioned + deduped.
     // A selector matching nothing is a (soft) warning, not a failure.
     let mut matched_count = 0;
     if let Some(fiql) = crate::api::build_node_fiql(devices) {

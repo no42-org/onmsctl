@@ -683,6 +683,21 @@ spec:
     }
 
     #[test]
+    fn fiql_metachar_in_location_is_rejected() {
+        let doc = valid_with(
+            "    type: daily\n    times:\n      - { begins: \"01:00:00\", ends: \"02:00:00\" }\n",
+            "    locations: [\"Berlin*\"]\n",
+            "    notifications: true\n",
+        );
+        assert!(
+            doc.validate()
+                .unwrap_err()
+                .to_string()
+                .contains("disallowed character")
+        );
+    }
+
+    #[test]
     fn match_any_with_locations_is_rejected() {
         let doc = valid_with(
             "    type: daily\n    times:\n      - { begins: \"01:00:00\", ends: \"02:00:00\" }\n",

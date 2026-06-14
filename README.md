@@ -944,9 +944,11 @@ then **attaches** it to each declared daemon: `polling`→pollerd, `thresholds`�
   category; `locations` selects every node at **any** listed Minion location;
   `asset: { field, value }` selects nodes whose OpenNMS asset field matches. All
   resolve via the v2 nodes search at apply and union with explicit `nodes`
-  (deduped). They select **whole nodes by id** — the outage model has no location
-  field, so an interface IP cannot be scoped to a location (use `interfaces` for
-  IP-level, location-agnostic scoping). They are a **snapshot** — `apply` re-resolves, so re-apply
+  (deduped). Selectors are a **union, not an intersection** — `categories: [Routers]`
+  with `locations: [Berlin]` covers *every Router anywhere* **plus** *every node in
+  Berlin*, not "Routers located in Berlin". They select **whole nodes by id** — the
+  outage model has no location field, so an interface IP cannot be scoped to a
+  location (use `interfaces` for IP-level, location-agnostic scoping). They are a **snapshot** — `apply` re-resolves, so re-apply
   refreshes the set as membership changes (unchanged ⇒ `Unchanged`, changed ⇒
   `Updated`); `--dry-run` shows what each selector expanded to. A selector
   matching nothing warns; a window covering nothing fails. Node **meta-data**

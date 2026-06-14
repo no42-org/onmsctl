@@ -120,7 +120,7 @@ impl<'a> MaintenanceApi<'a> {
         }
     }
 
-    /// Resolve a set of dynamic node selectors (categories / asset) to server
+    /// Resolve a set of dynamic node selectors (categories / locations / asset) to server
     /// nodeIds via one v2 search: `GET api/v2/nodes?_s=<fiql>&limit=0`. `limit=0`
     /// returns all matches; a truncated response (`count < totalCount`) is an
     /// error rather than a silent subset.
@@ -213,9 +213,9 @@ fn node_id_from_value(v: &serde_json::Value) -> Result<i64> {
 }
 
 /// Build the FIQL `_s` value for the dynamic node selectors, or `None` when no
-/// `categories`/`asset` are set. All clauses are OR-joined (`,`) so the search
-/// returns the **union** of every selector (`category.name==A,category.name==B,
-/// assetRecord.<field>==<value>`).
+/// `categories`/`locations`/`asset` are set. All clauses are OR-joined (`,`) so
+/// the search returns the **union** of every selector
+/// (`category.name==A,location.locationName==L,assetRecord.<field>==<value>`).
 pub fn build_node_fiql(devices: &Devices) -> Option<String> {
     let mut clauses: Vec<String> = devices
         .categories
