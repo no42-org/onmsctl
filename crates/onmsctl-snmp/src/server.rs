@@ -243,6 +243,69 @@ pub struct SnmpAgentConfig {
     pub profile_label: Option<String>,
 }
 
+// ---------------------------------------------------------------------------
+// Trap daemon (Trapd) — `/api/v2/trapd/config`
+// ---------------------------------------------------------------------------
+
+/// Wire DTO for the trap daemon config (`TrapdConfigDto`). Flat singleton; the
+/// v2 JSON is camelCase. Every field is optional on the wire (the server has no
+/// field-level validation annotations — it validates imperatively), so this is
+/// permissive on deserialize and omits `None` on serialize.
+///
+/// NOTE: derived from the `TrapdConfigDto` source (NMS-19128), not yet a
+/// captured live exchange — confirm field casing against a real Horizon.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct TrapdConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snmp_trap_address: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snmp_trap_port: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_suspect_on_trap: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_raw_message: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub threads: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub queue_size: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub batch_size: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub batch_interval: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub use_address_from_varbind: Option<bool>,
+    /// SNMPv3 trap users. The JSON key is the singular `snmpv3User` (the DTO's
+    /// field name); the list may arrive as `null` on an empty config.
+    #[serde(
+        rename = "snmpv3User",
+        deserialize_with = "null_to_default",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub snmpv3_user: Vec<Snmpv3User>,
+}
+
+/// Wire DTO for an SNMPv3 trap user (`Snmpv3UserDto`). camelCase, permissive.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Snmpv3User {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub engine_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub security_name: Option<String>,
+    /// `1` = noAuthNoPriv, `2` = authNoPriv, `3` = authPriv (an int on the wire).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub security_level: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_protocol: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_passphrase: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub privacy_protocol: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub privacy_passphrase: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -374,6 +437,48 @@ mod tests {
         assert_eq!(cfg.defaults.version.as_deref(), Some("v2c"));
         assert!(cfg.definition.is_empty());
         assert!(cfg.profiles.profile.is_empty());
+    }
+
+    #[test]
+    fn trapd_config_deserializes_and_round_trips_camelcase() {
+        let j = r#"{
+            "snmpTrapAddress": "*", "snmpTrapPort": 162, "newSuspectOnTrap": false,
+            "includeRawMessage": true, "threads": 4, "queueSize": 1000,
+            "useAddressFromVarbind": true,
+            "snmpv3User": [
+                { "securityName": "monitor", "securityLevel": 3,
+                  "authProtocol": "SHA", "authPassphrase": "scrubbed",
+                  "privacyProtocol": "AES", "privacyPassphrase": "scrubbed" }
+            ]
+        }"#;
+        let cfg: TrapdConfig = serde_json::from_str(j).expect("trapd config parses");
+        assert_eq!(cfg.snmp_trap_port, Some(162));
+        assert_eq!(cfg.new_suspect_on_trap, Some(false));
+        assert_eq!(cfg.snmpv3_user.len(), 1);
+        assert_eq!(cfg.snmpv3_user[0].security_level, Some(3));
+
+        let out = serde_json::to_string(&cfg).unwrap();
+        for key in [
+            "snmpTrapPort",
+            "newSuspectOnTrap",
+            "snmpv3User",
+            "securityLevel",
+        ] {
+            assert!(
+                out.contains(&format!("\"{key}\"")),
+                "expected {key} in {out}"
+            );
+        }
+        let reparsed: TrapdConfig = serde_json::from_str(&out).expect("re-parses");
+        assert_eq!(cfg, reparsed);
+    }
+
+    #[test]
+    fn trapd_null_user_list_is_tolerated() {
+        // A fresh server may send `"snmpv3User": null`.
+        let j = r#"{ "snmpTrapPort": 162, "newSuspectOnTrap": false, "snmpv3User": null }"#;
+        let cfg: TrapdConfig = serde_json::from_str(j).expect("null user list tolerated");
+        assert!(cfg.snmpv3_user.is_empty());
     }
 
     #[test]

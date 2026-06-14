@@ -20,7 +20,8 @@
 //! ⇆ `specific`/`range`/`ipMatch`; `filterExpression` ⇆ `filter`.
 
 use crate::model::{
-    DefinitionLocal, Params, ProfileLocal, RangeLocal, SecurityLevel, SnmpConfigLocal, Spec,
+    DefinitionLocal, Params, ProfileLocal, RangeLocal, SecurityLevel, SnmpConfigLocal, Spec, Trapd,
+    TrapdV3User,
 };
 use crate::secret::{FromEnvRef, SecretRef, resolve_secret_ref};
 use crate::server;
@@ -289,7 +290,105 @@ pub fn from_wire(wire: &server::SnmpConfig) -> SnmpConfigLocal {
                     }
                 })
                 .collect(),
+            // The trap-daemon block is populated separately by the export
+            // command (it reads a different endpoint); from a snmp-config
+            // response alone there is nothing to fill here.
+            trapd: None,
         },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Trap daemon (Trapd) conversions
+// ---------------------------------------------------------------------------
+
+/// Map a local v3 trap user → wire, leaving passphrase secrets `None`.
+fn v3_user_to_wire(u: &TrapdV3User) -> server::Snmpv3User {
+    server::Snmpv3User {
+        engine_id: u.engine_id.clone(),
+        security_name: Some(u.security_name.clone()),
+        security_level: u.security_level.map(level_to_wire),
+        auth_protocol: u.auth_protocol.clone(),
+        auth_passphrase: None,
+        privacy_protocol: u.privacy_protocol.clone(),
+        privacy_passphrase: None,
+    }
+}
+
+/// Project the local trap-daemon block onto the wire shape. Passphrase secrets
+/// are left `None` (see [`trapd_to_wire_resolved`]). Pure — no I/O.
+pub fn trapd_to_wire(t: &Trapd) -> server::TrapdConfig {
+    server::TrapdConfig {
+        snmp_trap_address: t.snmp_trap_address.clone(),
+        snmp_trap_port: t.snmp_trap_port,
+        new_suspect_on_trap: t.new_suspect_on_trap,
+        include_raw_message: t.include_raw_message,
+        threads: t.threads,
+        queue_size: t.queue_size,
+        batch_size: t.batch_size,
+        batch_interval: t.batch_interval,
+        use_address_from_varbind: t.use_address_from_varbind,
+        snmpv3_user: t.snmpv3_users.iter().map(v3_user_to_wire).collect(),
+    }
+}
+
+/// [`trapd_to_wire`] plus passphrase resolution+injection — the PUT payload.
+/// Index alignment with [`trapd_to_wire`] is guaranteed (same iteration order).
+pub fn trapd_to_wire_resolved(t: &Trapd) -> Result<server::TrapdConfig> {
+    let mut wire = trapd_to_wire(t);
+    for (u, wu) in t.snmpv3_users.iter().zip(wire.snmpv3_user.iter_mut()) {
+        if let Some(r) = &u.auth_passphrase {
+            wu.auth_passphrase = Some(resolve_secret_ref(r)?.to_string());
+        }
+        if let Some(r) = &u.privacy_passphrase {
+            wu.privacy_passphrase = Some(resolve_secret_ref(r)?.to_string());
+        }
+    }
+    Ok(wire)
+}
+
+/// Map a server trap-daemon response back to the local model for `export`.
+/// Passphrases become per-user `fromEnv` placeholders (never cleartext).
+pub fn trapd_from_wire(t: &server::TrapdConfig) -> Trapd {
+    Trapd {
+        snmp_trap_address: t.snmp_trap_address.clone(),
+        snmp_trap_port: t.snmp_trap_port,
+        new_suspect_on_trap: t.new_suspect_on_trap,
+        include_raw_message: t.include_raw_message,
+        threads: t.threads,
+        queue_size: t.queue_size,
+        batch_size: t.batch_size,
+        batch_interval: t.batch_interval,
+        use_address_from_varbind: t.use_address_from_varbind,
+        snmpv3_users: t
+            .snmpv3_user
+            .iter()
+            .enumerate()
+            .map(|(i, u)| {
+                // The security name is the unique reference key; fall back to the
+                // index for an (unexpected) unnamed user so placeholders stay
+                // distinct and the export round-trips.
+                let scope = match u.security_name.as_deref() {
+                    Some(n) if !n.is_empty() => format!("TRAPD_{}", sanitize(n)),
+                    _ => format!("TRAPD_USER_{i}"),
+                };
+                TrapdV3User {
+                    security_name: u.security_name.clone().unwrap_or_default(),
+                    engine_id: u.engine_id.clone(),
+                    security_level: u.security_level.and_then(level_from_wire),
+                    auth_protocol: u.auth_protocol.clone(),
+                    auth_passphrase: placeholder(
+                        &secret_env("AUTH_PASSPHRASE", &scope),
+                        &u.auth_passphrase,
+                    ),
+                    privacy_protocol: u.privacy_protocol.clone(),
+                    privacy_passphrase: placeholder(
+                        &secret_env("PRIVACY_PASSPHRASE", &scope),
+                        &u.privacy_passphrase,
+                    ),
+                }
+            })
+            .collect(),
     }
 }
 
@@ -407,5 +506,84 @@ spec:
             defaults_env, def_env,
             "distinct tiers must export distinct placeholders"
         );
+    }
+
+    fn trapd_local() -> Trapd {
+        serde_norway::from_str(
+            r#"
+snmpTrapPort: 162
+newSuspectOnTrap: false
+threads: 4
+snmpv3Users:
+  - securityName: monitor
+    securityLevel: authPriv
+    authProtocol: SHA
+    authPassphrase: { fromEnv: TRAPD_AUTH_TEST }
+    privacyProtocol: AES
+    privacyPassphrase: { fromEnv: TRAPD_PRIV_TEST }
+"#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn trapd_to_wire_maps_and_leaves_secrets_none() {
+        let w = trapd_to_wire(&trapd_local());
+        assert_eq!(w.snmp_trap_port, Some(162));
+        assert_eq!(w.new_suspect_on_trap, Some(false));
+        assert_eq!(w.threads, Some(4));
+        assert_eq!(w.snmpv3_user.len(), 1);
+        let u = &w.snmpv3_user[0];
+        assert_eq!(u.security_name.as_deref(), Some("monitor"));
+        assert_eq!(u.security_level, Some(3)); // authPriv → 3
+        assert!(
+            u.auth_passphrase.is_none(),
+            "secret not resolved by to_wire"
+        );
+        assert!(u.privacy_passphrase.is_none());
+    }
+
+    #[test]
+    fn trapd_to_wire_resolved_injects_passphrases() {
+        // SAFETY: test-only env mutation.
+        unsafe {
+            std::env::set_var("TRAPD_AUTH_TEST", "auth-secret");
+            std::env::set_var("TRAPD_PRIV_TEST", "priv-secret");
+        }
+        let w = trapd_to_wire_resolved(&trapd_local()).expect("resolves");
+        let u = &w.snmpv3_user[0];
+        assert_eq!(u.auth_passphrase.as_deref(), Some("auth-secret"));
+        assert_eq!(u.privacy_passphrase.as_deref(), Some("priv-secret"));
+        unsafe {
+            std::env::remove_var("TRAPD_AUTH_TEST");
+            std::env::remove_var("TRAPD_PRIV_TEST");
+        }
+    }
+
+    #[test]
+    fn trapd_from_wire_emits_per_user_placeholders_not_cleartext() {
+        let wire = server::TrapdConfig {
+            snmp_trap_port: Some(162),
+            new_suspect_on_trap: Some(true),
+            snmpv3_user: vec![server::Snmpv3User {
+                security_name: Some("monitor".into()),
+                security_level: Some(3),
+                auth_passphrase: Some("auth-cleartext".into()),
+                privacy_passphrase: Some("priv-cleartext".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let t = trapd_from_wire(&wire);
+        let yaml = serde_norway::to_string(&t).unwrap();
+        assert!(!yaml.contains("auth-cleartext"));
+        assert!(!yaml.contains("priv-cleartext"));
+        let u = &t.snmpv3_users[0];
+        assert_eq!(u.security_level, Some(SecurityLevel::AuthPriv));
+        let auth_env = match &u.auth_passphrase {
+            Some(SecretRef::FromEnv(e)) => e.from_env.clone(),
+            _ => panic!("expected a fromEnv placeholder"),
+        };
+        assert_eq!(auth_env, "SNMP_AUTH_PASSPHRASE_TRAPD_MONITOR");
     }
 }

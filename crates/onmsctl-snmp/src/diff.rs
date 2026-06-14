@@ -158,6 +158,68 @@ pub fn unchanged(desired: &server::SnmpConfig, deployed: &server::SnmpConfig) ->
     tiers_match(desired, deployed) == [true, true, true]
 }
 
+// ---------------------------------------------------------------------------
+// Trap daemon (Trapd) idempotency
+// ---------------------------------------------------------------------------
+
+/// `true` when the deployed trap-daemon config already satisfies the desired
+/// one. Same contract as the snmp-config tiers: params the `desired` config
+/// explicitly sets must match `deployed`; params it omits are "don't care"
+/// (the server fills its defaults). Passphrases are **excluded** (write-only),
+/// so a passphrase-only rotation does not register as a change — it rides an
+/// explicit non-secret edit, matching the snmp-config design (D3).
+///
+/// The SNMPv3 user list is a **full replace**: membership is compared by
+/// `securityName` (so adding/removing a user is a change), and each matched
+/// user's non-secret fields use the same subset semantics.
+pub fn trapd_unchanged(desired: &server::TrapdConfig, deployed: &server::TrapdConfig) -> bool {
+    macro_rules! field_ok {
+        ($($f:ident),+ $(,)?) => {
+            $( (desired.$f.is_none() || desired.$f == deployed.$f) )&&+
+        };
+    }
+    let scalars = field_ok!(
+        snmp_trap_address,
+        snmp_trap_port,
+        new_suspect_on_trap,
+        include_raw_message,
+        threads,
+        queue_size,
+        batch_size,
+        batch_interval,
+        use_address_from_varbind,
+    );
+    if !scalars {
+        return false;
+    }
+
+    let want = sorted_users(desired);
+    let have = sorted_users(deployed);
+    want.len() == have.len()
+        && want
+            .iter()
+            .zip(&have)
+            .all(|(a, b)| a.security_name == b.security_name && v3_user_subset_match(a, b))
+}
+
+/// Users sorted by `securityName` so the membership zip is aligned regardless of
+/// server/operator ordering.
+fn sorted_users(cfg: &server::TrapdConfig) -> Vec<server::Snmpv3User> {
+    let mut users = cfg.snmpv3_user.clone();
+    users.sort_by(|a, b| a.security_name.cmp(&b.security_name));
+    users
+}
+
+/// Non-secret subset match for one v3 user (passphrases excluded).
+fn v3_user_subset_match(desired: &server::Snmpv3User, deployed: &server::Snmpv3User) -> bool {
+    macro_rules! field_ok {
+        ($($f:ident),+ $(,)?) => {
+            $( (desired.$f.is_none() || desired.$f == deployed.$f) )&&+
+        };
+    }
+    field_ok!(engine_id, security_level, auth_protocol, privacy_protocol,)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -279,5 +341,121 @@ mod tests {
             ..Default::default()
         };
         assert!(!unchanged(&desired, &deployed));
+    }
+
+    fn trapd_user(name: &str, level: Option<i32>, auth: Option<&str>) -> server::Snmpv3User {
+        server::Snmpv3User {
+            security_name: Some(name.into()),
+            security_level: level,
+            auth_passphrase: auth.map(String::from),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn trapd_server_defaulted_fields_are_unchanged() {
+        // Desired sets only the two required fields; deployed carries extra
+        // server-filled tuning. Subset semantics treat the extras as don't-care.
+        let desired = server::TrapdConfig {
+            snmp_trap_port: Some(162),
+            new_suspect_on_trap: Some(false),
+            ..Default::default()
+        };
+        let deployed = server::TrapdConfig {
+            snmp_trap_port: Some(162),
+            new_suspect_on_trap: Some(false),
+            threads: Some(0),
+            queue_size: Some(10000),
+            batch_size: Some(1000),
+            ..Default::default()
+        };
+        assert!(trapd_unchanged(&desired, &deployed));
+    }
+
+    #[test]
+    fn trapd_changed_required_field_is_changed() {
+        let desired = server::TrapdConfig {
+            snmp_trap_port: Some(1162),
+            new_suspect_on_trap: Some(false),
+            ..Default::default()
+        };
+        let deployed = server::TrapdConfig {
+            snmp_trap_port: Some(162),
+            new_suspect_on_trap: Some(false),
+            ..Default::default()
+        };
+        assert!(!trapd_unchanged(&desired, &deployed));
+    }
+
+    #[test]
+    fn trapd_passphrase_only_difference_is_unchanged() {
+        // Secret-blind: a rotated passphrase with no other change must not diff.
+        let desired = server::TrapdConfig {
+            snmp_trap_port: Some(162),
+            new_suspect_on_trap: Some(true),
+            snmpv3_user: vec![trapd_user("monitor", Some(3), Some("OLD"))],
+            ..Default::default()
+        };
+        let deployed = server::TrapdConfig {
+            snmp_trap_port: Some(162),
+            new_suspect_on_trap: Some(true),
+            snmpv3_user: vec![trapd_user("monitor", Some(3), Some("ROTATED"))],
+            ..Default::default()
+        };
+        assert!(trapd_unchanged(&desired, &deployed));
+    }
+
+    #[test]
+    fn trapd_user_reorder_is_unchanged_but_add_is_changed() {
+        let desired = server::TrapdConfig {
+            snmp_trap_port: Some(162),
+            new_suspect_on_trap: Some(true),
+            snmpv3_user: vec![
+                trapd_user("a", Some(3), None),
+                trapd_user("b", Some(1), None),
+            ],
+            ..Default::default()
+        };
+        let reordered = server::TrapdConfig {
+            snmpv3_user: vec![
+                trapd_user("b", Some(1), None),
+                trapd_user("a", Some(3), None),
+            ],
+            ..desired.clone()
+        };
+        assert!(
+            trapd_unchanged(&desired, &reordered),
+            "reorder is not a change"
+        );
+
+        let with_extra = server::TrapdConfig {
+            snmpv3_user: vec![
+                trapd_user("a", Some(3), None),
+                trapd_user("b", Some(1), None),
+                trapd_user("c", Some(1), None),
+            ],
+            ..desired.clone()
+        };
+        assert!(
+            !trapd_unchanged(&desired, &with_extra),
+            "adding a user is a change"
+        );
+    }
+
+    #[test]
+    fn trapd_user_security_level_change_is_changed() {
+        let desired = server::TrapdConfig {
+            snmp_trap_port: Some(162),
+            new_suspect_on_trap: Some(true),
+            snmpv3_user: vec![trapd_user("monitor", Some(3), None)],
+            ..Default::default()
+        };
+        let deployed = server::TrapdConfig {
+            snmp_trap_port: Some(162),
+            new_suspect_on_trap: Some(true),
+            snmpv3_user: vec![trapd_user("monitor", Some(1), None)],
+            ..Default::default()
+        };
+        assert!(!trapd_unchanged(&desired, &deployed));
     }
 }
