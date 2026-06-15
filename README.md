@@ -37,7 +37,7 @@ Windows is not yet in the release matrix; Windows users build from
 source (below).
 
 ```sh
-VERSION=v0.2.0
+VERSION=v0.3.0
 TARGET=x86_64-apple-darwin  # or one of the rows above
 
 curl -fL -O https://github.com/no42-org/onmsctl/releases/download/${VERSION}/onmsctl-${VERSION}-${TARGET}
@@ -100,13 +100,14 @@ alongside each linked capability:
 
 ```
 $ onmsctl version
-onmsctl 0.2.0
+onmsctl 0.3.0
 capabilities:
-  - eventconf 0.2.0
-  - provisioning 0.2.0
-  - iam 0.2.0
-  - snmp 0.2.0
-  - maintenance 0.2.0
+  - eventconf 0.3.0
+  - provisioning 0.3.0
+  - iam 0.3.0
+  - snmp 0.3.0
+  - maintenance 0.3.0
+  - datacollection 0.3.0
 ```
 
 Each capability owns its own subcommand tree (`event-source` / `event`,
