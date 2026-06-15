@@ -1,0 +1,314 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DataCollectionSourceLocal",
+  "description": "A `kind: DataCollectionSource` document.",
+  "type": "object",
+  "properties": {
+    "apiVersion": {
+      "type": "string"
+    },
+    "kind": {
+      "type": "string"
+    },
+    "metadata": {
+      "$ref": "#/$defs/Metadata"
+    },
+    "spec": {
+      "$ref": "#/$defs/Spec"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "spec"
+  ],
+  "$defs": {
+    "ClassRef": {
+      "description": "A strategy reference: a fully-qualified Java `class` plus optional parameters.",
+      "type": "object",
+      "properties": {
+        "class": {
+          "type": "string"
+        },
+        "params": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Param"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "class"
+      ]
+    },
+    "Group": {
+      "description": "A MIB group: the OIDs collected together for interfaces matching `ifType`.",
+      "type": "object",
+      "properties": {
+        "ifType": {
+          "description": "The interface-type filter (`all`, `ignore`, or a numeric ifType).",
+          "type": "string"
+        },
+        "includeGroups": {
+          "description": "Other groups this group composes in (group-level `includeGroup`).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "mibObjects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MibObject"
+          }
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "ifType",
+        "mibObjects"
+      ]
+    },
+    "Metadata": {
+      "description": "Document metadata. `name` is the datacollection-group (source) name.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ]
+    },
+    "MibObject": {
+      "description": "One collected OID within a group.",
+      "type": "object",
+      "properties": {
+        "alias": {
+          "type": "string"
+        },
+        "instance": {
+          "type": "string"
+        },
+        "maxval": {
+          "description": "Optional collection bounds (rarely set; preserved for round-trip).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "minval": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "oid": {
+          "type": "string"
+        },
+        "type": {
+          "description": "SNMP type (see [`MIB_TYPES`]). Field is `type` in YAML.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "oid",
+        "instance",
+        "alias",
+        "type"
+      ]
+    },
+    "Param": {
+      "description": "A `key`/`value` strategy parameter (maps to `<parameter key=.. value=..>`).",
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "value"
+      ]
+    },
+    "ProfileSpec": {
+      "description": "An inline snmp-collection profile (the \"C+\" `profileSpec`).",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "rras": {
+          "description": "RRA (round-robin archive) definitions (at least one required).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "rrdStep": {
+          "description": "RRD step in seconds (must be positive).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "storageFlag": {
+          "description": "Storage flag (`all` / `select` / `primary`).",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "rrdStep",
+        "rras",
+        "storageFlag"
+      ]
+    },
+    "ResourceType": {
+      "description": "A custom resource type (indexed/tabular resource) defined by the group.",
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "persistenceSelector": {
+          "description": "The persistence-selector strategy (`class` + optional `params`).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClassRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resourceLabel": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "storageStrategy": {
+          "description": "The storage strategy (`class` + optional `params`).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClassRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ]
+    },
+    "Spec": {
+      "description": "The source body: the group tree plus profile wiring.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Whether the source is active. Defaults to `true`.",
+          "type": "boolean",
+          "default": true
+        },
+        "groups": {
+          "description": "MIB groups: a set of `mibObjects` collected together, scoped by `ifType`.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Group"
+          }
+        },
+        "profileSpec": {
+          "description": "Optional inline profile to author/tune from zero (the \"C+\" escape hatch).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProfileSpec"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "profiles": {
+          "description": "Names of snmp-collection profiles that SHALL include this source\n(ensure-present association). When `profile_spec` is absent, each name\nMUST already exist on the server (checked at apply, not parse).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "resourceTypes": {
+          "description": "Custom resource types defined by this group.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ResourceType"
+          }
+        },
+        "systemDefs": {
+          "description": "System definitions: which `groups` to collect for a matching `sysoid`.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SystemDef"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "SystemDef": {
+      "description": "A system definition: collect the named `includeGroups` for a matching sysoid.",
+      "type": "object",
+      "properties": {
+        "includeGroups": {
+          "description": "Names of `groups` to collect for matching devices.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "name": {
+          "type": "string"
+        },
+        "sysoid": {
+          "description": "Exact OID match (`sysoid`) — alternative to `sysoidMask`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sysoidMask": {
+          "description": "OID prefix match (`sysoidMask`) — every device under this OID subtree.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ]
+    }
+  }
+}

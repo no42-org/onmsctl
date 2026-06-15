@@ -125,6 +125,9 @@ enum TopCmd {
     /// Manage maintenance windows / scheduled outages (list, status, delete).
     #[command(subcommand, visible_alias = "maint")]
     Maintenance(onmsctl_maintenance::MaintenanceCmd),
+    /// Manage SNMP data-collection sources (list, export, delete).
+    #[command(subcommand, visible_alias = "dc")]
+    Datacollection(onmsctl_datacollection::DatacollectionCmd),
     /// Print the binary version and linked capability list.
     Version,
     /// Inspect or switch the active configuration.
@@ -325,6 +328,12 @@ async fn run(cli: Cli) -> Result<()> {
             cmd.run(&ctx).await?;
             Ok(())
         }
+        TopCmd::Datacollection(cmd) => {
+            let ctx = resolve_context(&merged)?;
+            refuse_if_read_only(&ctx, cmd.kind())?;
+            cmd.run(&ctx).await?;
+            Ok(())
+        }
     }
 }
 
@@ -351,7 +360,7 @@ fn config_path_from(merged: &Overrides) -> Result<PathBuf> {
 /// pin a specific binary build.
 fn print_version() -> Result<()> {
     let s = format!(
-        "onmsctl {}\ncapabilities:\n  - {} {}\n  - {} {}\n  - {} {}\n  - {} {}\n  - {} {}\n",
+        "onmsctl {}\ncapabilities:\n  - {} {}\n  - {} {}\n  - {} {}\n  - {} {}\n  - {} {}\n  - {} {}\n",
         env!("CARGO_PKG_VERSION"),
         onmsctl_eventconf::CAPABILITY_NAME,
         onmsctl_eventconf::VERSION,
@@ -363,6 +372,8 @@ fn print_version() -> Result<()> {
         onmsctl_snmp::VERSION,
         onmsctl_maintenance::CAPABILITY_NAME,
         onmsctl_maintenance::VERSION,
+        onmsctl_datacollection::CAPABILITY_NAME,
+        onmsctl_datacollection::VERSION,
     );
     write_stdout(s.as_bytes())
 }

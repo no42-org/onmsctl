@@ -1,0 +1,28 @@
+# Copyright 2026 Ronny Trommer <ronny@no42.org>
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "onmsctl-datacollection"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "SNMP data-collection capability for onmsctl: declarative kind: DataCollectionSource over the v2 datacollection-config REST API"
+publish = false
+
+[dependencies]
+onmsctl-core = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_norway = { workspace = true }
+schemars = { workspace = true }
+async-trait = { workspace = true }
+percent-encoding = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+wiremock = "0.6"
+tokio = { workspace = true }

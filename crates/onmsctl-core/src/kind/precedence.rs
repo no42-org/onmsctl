@@ -21,6 +21,10 @@ pub const RANK_REQUISITION: u32 = 300;
 /// async, so a reference may still need a follow-up apply — see the capability's
 /// design D10).
 pub const RANK_MAINTENANCE: u32 = 350;
+/// Data-collection sources are independent of the other kinds (their own REST
+/// base, no cross-kind references); the rank only fixes a deterministic apply
+/// order after `SnmpConfig`/`Maintenance`.
+pub const RANK_DATACOLLECTION: u32 = 375;
 
 /// The authoritative precedence table. The binary uses these ranks when wiring
 /// handlers into the registry.
@@ -30,6 +34,7 @@ pub const KNOWN_RANKS: &[(&str, u32)] = &[
     ("SnmpConfig", RANK_SNMP_CONFIG),
     ("Requisition", RANK_REQUISITION),
     ("Maintenance", RANK_MAINTENANCE),
+    ("DataCollectionSource", RANK_DATACOLLECTION),
 ];
 
 /// The precedence rank for a known `kind`, or `None` if unknown.
