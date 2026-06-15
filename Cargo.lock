@@ -970,7 +970,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "onmsctl"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -990,7 +990,7 @@ dependencies = [
 
 [[package]]
 name = "onmsctl-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1013,7 +1013,7 @@ dependencies = [
 
 [[package]]
 name = "onmsctl-datacollection"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "clap",
@@ -1029,7 +1029,7 @@ dependencies = [
 
 [[package]]
 name = "onmsctl-eventconf"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "clap",
@@ -1048,7 +1048,7 @@ dependencies = [
 
 [[package]]
 name = "onmsctl-iam"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "clap",
@@ -1068,7 +1068,7 @@ dependencies = [
 
 [[package]]
 name = "onmsctl-it"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "onmsctl-core",
@@ -1082,7 +1082,7 @@ dependencies = [
 
 [[package]]
 name = "onmsctl-maintenance"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "clap",
@@ -1098,7 +1098,7 @@ dependencies = [
 
 [[package]]
 name = "onmsctl-provisioning"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "clap",
@@ -1116,7 +1116,7 @@ dependencies = [
 
 [[package]]
 name = "onmsctl-snmp"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "clap",
