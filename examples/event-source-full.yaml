@@ -1,6 +1,6 @@
-# Comprehensive EventSource — exercises every nested type that v0.1
-# models. Use this as a reference when authoring your own EventSource
-# documents.
+# Comprehensive EventSource — exercises every nested type the EventSource
+# model supports. Use this as a reference when authoring your own
+# EventSource documents.
 #
 # Style note: optional fields are OMITTED rather than set to `null`. The
 # schema treats absence and `null` equivalently, but keeping the document

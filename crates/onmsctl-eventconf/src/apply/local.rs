@@ -1477,59 +1477,95 @@ spec:
             .join("examples");
 
         let cases: &[(&str, Asserter)] = &[
-            ("minimal.yaml", |l| {
-                assert_eq!(l.spec.events.len(), 1, "minimal.yaml: one event");
-                assert!(l.spec.enabled, "minimal.yaml: enabled defaults true");
+            ("event-source-minimal.yaml", |l| {
+                assert_eq!(
+                    l.spec.events.len(),
+                    1,
+                    "event-source-minimal.yaml: one event"
+                );
+                assert!(
+                    l.spec.enabled,
+                    "event-source-minimal.yaml: enabled defaults true"
+                );
             }),
-            ("full.yaml", |l| {
-                let e = l.spec.events.first().expect("full.yaml: ≥1 event");
+            ("event-source-full.yaml", |l| {
+                let e = l
+                    .spec
+                    .events
+                    .first()
+                    .expect("event-source-full.yaml: ≥1 event");
                 // Every modeled nested type must populate so the fixture
                 // continues to demonstrate the full schema surface.
-                assert!(e.mask.is_some(), "full.yaml: mask must populate");
-                assert!(e.alarm_data.is_some(), "full.yaml: alarmData must populate");
-                assert!(e.logmsg.is_some(), "full.yaml: logmsg must populate");
+                assert!(
+                    e.mask.is_some(),
+                    "event-source-full.yaml: mask must populate"
+                );
+                assert!(
+                    e.alarm_data.is_some(),
+                    "event-source-full.yaml: alarmData must populate"
+                );
+                assert!(
+                    e.logmsg.is_some(),
+                    "event-source-full.yaml: logmsg must populate"
+                );
                 assert!(
                     e.correlation.is_some(),
-                    "full.yaml: correlation must populate"
+                    "event-source-full.yaml: correlation must populate"
                 );
                 assert!(
                     e.autoacknowledge.is_some(),
-                    "full.yaml: autoacknowledge must populate"
+                    "event-source-full.yaml: autoacknowledge must populate"
                 );
-                assert!(e.tticket.is_some(), "full.yaml: tticket must populate");
+                assert!(
+                    e.tticket.is_some(),
+                    "event-source-full.yaml: tticket must populate"
+                );
                 assert!(
                     e.mouseovertext.is_some(),
-                    "full.yaml: mouseovertext must populate"
+                    "event-source-full.yaml: mouseovertext must populate"
                 );
                 assert!(
                     e.operinstruct.is_some(),
-                    "full.yaml: operinstruct must populate"
+                    "event-source-full.yaml: operinstruct must populate"
                 );
                 let m = e.mask.as_ref().unwrap();
-                assert!(!m.elements.is_empty(), "full.yaml: mask.elements non-empty");
-                assert!(!m.varbinds.is_empty(), "full.yaml: mask.varbinds non-empty");
+                assert!(
+                    !m.elements.is_empty(),
+                    "event-source-full.yaml: mask.elements non-empty"
+                );
+                assert!(
+                    !m.varbinds.is_empty(),
+                    "event-source-full.yaml: mask.varbinds non-empty"
+                );
                 // Both vbnumber-style and vboid-style varbinds must
                 // appear so the fixture exercises both mask discriminators.
                 assert!(
                     m.varbinds.iter().any(|v| v.vbnumber.is_some()),
-                    "full.yaml: at least one vbnumber-style varbind"
+                    "event-source-full.yaml: at least one vbnumber-style varbind"
                 );
                 assert!(
                     m.varbinds.iter().any(|v| v.vboid.is_some()),
-                    "full.yaml: at least one vboid-style varbind"
+                    "event-source-full.yaml: at least one vboid-style varbind"
                 );
-                assert!(e.snmp.is_some(), "full.yaml: snmp must populate");
+                assert!(
+                    e.snmp.is_some(),
+                    "event-source-full.yaml: snmp must populate"
+                );
                 assert!(
                     e.varbindsdecode.is_some(),
-                    "full.yaml: varbindsdecode must populate"
+                    "event-source-full.yaml: varbindsdecode must populate"
                 );
                 assert!(
                     !e.varbindsdecode.as_ref().unwrap().is_empty(),
-                    "full.yaml: varbindsdecode non-empty"
+                    "event-source-full.yaml: varbindsdecode non-empty"
                 );
             }),
-            ("severities.yaml", |l| {
-                assert_eq!(l.spec.events.len(), 7, "severities.yaml: 7 levels");
+            ("event-source-severities.yaml", |l| {
+                assert_eq!(
+                    l.spec.events.len(),
+                    7,
+                    "event-source-severities.yaml: 7 levels"
+                );
                 let levels: Vec<&str> = l.spec.events.iter().map(|e| e.severity.as_str()).collect();
                 for expected in [
                     "Indeterminate",
@@ -1542,12 +1578,15 @@ spec:
                 ] {
                     assert!(
                         levels.contains(&expected),
-                        "severities.yaml: missing {expected}",
+                        "event-source-severities.yaml: missing {expected}",
                     );
                 }
             }),
-            ("disabled.yaml", |l| {
-                assert!(!l.spec.enabled, "disabled.yaml: spec.enabled must be false");
+            ("event-source-disabled.yaml", |l| {
+                assert!(
+                    !l.spec.enabled,
+                    "event-source-disabled.yaml: spec.enabled must be false"
+                );
             }),
         ];
 

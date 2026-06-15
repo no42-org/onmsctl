@@ -286,9 +286,13 @@ non-zero exit if any document failed.
 Horizon derives `vendor` server-side as the prefix before the first `.`
 (so `metadata.name: cisco.foo` → source name `cisco.foo`, vendor `cisco`).
 
-The `examples/` directory ships fixtures: `minimal.yaml`, `full.yaml`
-(every nested type), `severities.yaml`, `disabled.yaml`. Full schema
-detail in the [EventSource YAML reference](#eventsource-yaml-schema).
+The `examples/` directory ships fixtures: `event-source-minimal.yaml`,
+`event-source-full.yaml` (every nested type), `event-source-severities.yaml`
+(the seven case-sensitive severity levels), and `event-source-disabled.yaml`
+(`enabled: false`, which applies via an upload-then-disable with a brief
+enabled-flap — run with `--verbose` to see the warning). Full schema detail
+in the [EventSource YAML reference](#eventsource-yaml-schema); the
+[`examples/` index](examples/README.md) maps every fixture to its kind.
 
 ### Step 3 — Iterate
 
