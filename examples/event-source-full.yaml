@@ -30,11 +30,20 @@ spec:
         alarmType: raise
         autoClean: false
       mask:
+        # The mask matches an INCOMING event (typically an SNMP trap) to this
+        # definition. Recognized element names: uei / source / nodeid / host /
+        # interface / snmphost / service / id (enterprise OID) / trapoid /
+        # generic / specific / community. A maskelement matches when the event
+        # value equals ANY listed value (OR within an element, AND across
+        # elements). `severity` is NOT a mask field — severity is assigned by
+        # this definition, not matched on.
         elements:
           - name: id
-            values: ["1.3.6.1.4.1.9.9.41.2.0.1"]
-          - name: severity
-            values: ["Warning", "Major"]
+            values: [".1.3.6.1.4.1.9.9.41.2"]          # enterprise OID
+          - name: generic
+            values: ["6"]                               # enterprise-specific trap
+          - name: specific
+            values: ["1", "2"]                          # multi-value: specific 1 OR 2
         varbinds:
           - vbnumber: 1                                # positional match
             values: ["3"]
