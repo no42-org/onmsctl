@@ -58,6 +58,7 @@ zeroize = "1.8"
 # `cargo-deny check bans` happy — without it the dep registers as a
 # wildcard. The version mirrors `workspace.package.version`.
 onmsctl-core = { path = "crates/onmsctl-core", version = "=0.2.0" }
+onmsctl-datacollection = { path = "crates/onmsctl-datacollection", version = "=0.2.0" }
 onmsctl-eventconf = { path = "crates/onmsctl-eventconf", version = "=0.2.0" }
 onmsctl-iam = { path = "crates/onmsctl-iam", version = "=0.2.0" }
 onmsctl-maintenance = { path = "crates/onmsctl-maintenance", version = "=0.2.0" }

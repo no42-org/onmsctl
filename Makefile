@@ -97,3 +97,6 @@ schema:  ## Regenerate every committed schemas/*.schema.json from the Rust types
 	cargo run --quiet --release --example gen_schema -p onmsctl-maintenance \
 		> schemas/maintenance.schema.json.tmp \
 		&& mv schemas/maintenance.schema.json.tmp schemas/maintenance.schema.json
+	cargo run --quiet --release --example gen_schema -p onmsctl-datacollection \
+		> schemas/datacollection.schema.json.tmp \
+		&& mv schemas/datacollection.schema.json.tmp schemas/datacollection.schema.json

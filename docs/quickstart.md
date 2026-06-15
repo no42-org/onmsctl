@@ -427,6 +427,32 @@ rescan — to push an SNMP change to already-imported nodes, re-import:
 See [`examples/snmp-config.yaml`](../examples/snmp-config.yaml) and the SNMP
 section of the [README](../README.md#snmp-configuration-kind-snmpconfig).
 
+## 9b. SNMP data collection
+
+Manage *what* OpenNMS collects (`kind: DataCollectionSource`) — one
+`datacollection-group` per document — and read it back with the `datacollection`
+verbs. You own only the sources you write; the stock vendor library is untouched.
+
+```sh
+onmsctl apply -f examples/datacollection-source.yaml   # create/replace a source
+onmsctl datacollection list                            # deployed sources
+onmsctl datacollection list --profiles                 # snmp-collection profiles
+onmsctl datacollection export acme-router              # the group as xml (or --format json)
+onmsctl datacollection delete acme-router              # remove the source + children
+```
+
+A re-apply that changes the group tree replaces the whole source (the server
+prunes children you removed); an unchanged source reports `Unchanged`. The
+`profiles` list is the full truth — a profile dropped from it is detached. A new
+source must name at least one profile; an optional inline `profileSpec` creates
+or tunes that profile from zero.
+
+**Requires a Horizon build with the DB-backed data-collection REST endpoint**
+(absent from released Horizon ≤ 37.0.0). `onmsctl` preflights and fails the apply
+early with a clear message on a server that lacks it. See
+[`examples/datacollection-source.yaml`](../examples/datacollection-source.yaml)
+and the [README](../README.md#snmp-data-collection-kind-datacollectionsource).
+
 ## 10. Global flags and environment variables
 
 These work on (almost) every command:

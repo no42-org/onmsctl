@@ -15,10 +15,11 @@
 
 use onmsctl_core::Registry;
 use onmsctl_core::kind::precedence::{
-    RANK_EVENT_SOURCE, RANK_MAINTENANCE, RANK_REQUISITION, RANK_SNMP_CONFIG, RANK_USER,
-    ranks_are_total_order,
+    RANK_DATACOLLECTION, RANK_EVENT_SOURCE, RANK_MAINTENANCE, RANK_REQUISITION, RANK_SNMP_CONFIG,
+    RANK_USER, ranks_are_total_order,
 };
 
+use onmsctl_datacollection::apply::DataCollectionSourceHandler;
 use onmsctl_eventconf::apply::EventSourceHandler;
 use onmsctl_iam::apply::UserHandler;
 use onmsctl_maintenance::apply::MaintenanceHandler;
@@ -41,6 +42,7 @@ pub fn build() -> Registry {
     reg.register(RANK_SNMP_CONFIG, Box::new(SnmpConfigHandler));
     reg.register(RANK_REQUISITION, Box::new(ProvisioningHandler));
     reg.register(RANK_MAINTENANCE, Box::new(MaintenanceHandler));
+    reg.register(RANK_DATACOLLECTION, Box::new(DataCollectionSourceHandler));
 
     let ranks: Vec<(&str, u32)> = reg
         .known_kinds()
@@ -63,7 +65,7 @@ mod tests {
     #[test]
     fn build_registers_all_kinds_at_their_canonical_ranks() {
         let reg = build();
-        assert_eq!(reg.len(), 5, "exactly the wired kinds are present");
+        assert_eq!(reg.len(), 6, "exactly the wired kinds are present");
         // Key off each handler's own `kind()` so the test can't drift from the
         // registration site if a KIND constant changes.
         assert_eq!(reg.rank(UserHandler.kind()), Some(RANK_USER));
@@ -71,5 +73,9 @@ mod tests {
         assert_eq!(reg.rank(SnmpConfigHandler.kind()), Some(RANK_SNMP_CONFIG));
         assert_eq!(reg.rank(ProvisioningHandler.kind()), Some(RANK_REQUISITION));
         assert_eq!(reg.rank(MaintenanceHandler.kind()), Some(RANK_MAINTENANCE));
+        assert_eq!(
+            reg.rank(DataCollectionSourceHandler.kind()),
+            Some(RANK_DATACOLLECTION)
+        );
     }
 }

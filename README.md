@@ -961,6 +961,61 @@ supported Horizon/Meridian.
 
 ---
 
+## SNMP data collection (`kind: DataCollectionSource`)
+
+Manage Horizon's **SNMP data-collection** config — which MIB objects, resource
+types, and system definitions are collected — declaratively via
+`onmsctl apply -f`, and read it back with the `datacollection` verbs. Targets the
+DB-backed `/api/v2/datacollectionconf` surface.
+
+The unit is a **source** (one vendor/concern's `datacollection-group`): one
+`kind: DataCollectionSource` document per source, `metadata.name` = the source
+name. `onmsctl` owns **only the sources you write documents for** — the stock
+vendor library (MIB2, Cisco, …) is left untouched. It is **not** a singleton: a
+source absent from your manifest is never deleted (additive prune).
+
+The `spec` models the group tree (`resourceTypes`, `groups` of `mibObjects`,
+`systemDefs`), the `profiles` that include the source, and an optional inline
+`profileSpec`:
+
+```sh
+onmsctl apply -f examples/datacollection-source.yaml
+onmsctl datacollection list                 # deployed sources
+onmsctl datacollection list --profiles      # snmp-collection profiles
+onmsctl datacollection export acme-router   # the datacollection-group (xml|json)
+onmsctl datacollection delete acme-router   # remove the source + its children
+```
+
+Reconcile semantics:
+
+- **Whole-source replace.** When the group tree differs, apply re-uploads the
+  whole source (multipart `datacollection-group` XML); the server upserts **and
+  prunes** children you removed — so removing a `mibObject` from the document
+  removes it from the server. Equivalence is normalized (reordering groups /
+  objects is a no-op), so a re-apply of an unchanged source reports `Unchanged`.
+- **`profiles` is the full truth (true reconcile).** The named profiles are
+  reconciled as a set: a name added is attached, a name removed is **detached**.
+  A **new** source must list at least one profile (the server rejects a source
+  with no profile). When `profileSpec` is absent, every name in `profiles` must
+  already exist.
+- **Inline `profileSpec` (optional, "C+").** Set `name`/`rrdStep`/`rras`/
+  `storageFlag` to create the profile if it is absent or tune it if it differs —
+  so a collection can be stood up from zero without managing profiles separately.
+- **No in-place rename.** `metadata.name` is the source name; changing it creates
+  a new source (delete the old one with `datacollection delete`).
+
+**Server requirement (version gate):** the DB-backed data-collection REST
+endpoint is **absent from released Horizon ≤ 37.0.0** (it ships in newer builds).
+Because an apply issues several writes, `onmsctl` **preflights** the endpoint and
+fails the whole apply early — before any write — with a clear "endpoint not
+available" message on a server that lacks it. `list`/`export`/`delete` surface the
+same message.
+
+`list`/`export` are Read; `apply`/`delete` are Write (refused in a read-only
+context before any HTTP request).
+
+---
+
 ## Aliases and read-only contexts
 
 ### Top-level verb aliases
