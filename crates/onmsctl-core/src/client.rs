@@ -298,6 +298,30 @@ impl OnmsClient {
         Ok(())
     }
 
+    /// `POST` with a raw (un-encoded) string body under a caller-chosen
+    /// `Content-Type`, discarding the response body. Used by endpoints whose
+    /// JAX-RS `String` parameter reads the request body verbatim even though it
+    /// is annotated `@Consumes(application/json)` — e.g. the v2
+    /// `datacollectionconf` profile↔source attach (`POST /profiles/{id}/sources`),
+    /// which expects the bare source name (a JSON-quoted `"name"` is rejected as
+    /// an unknown source).
+    pub async fn post_text(
+        &self,
+        path: &str,
+        body: String,
+        content_type: &'static str,
+    ) -> Result<()> {
+        let url = self.url_for(path)?;
+        let req = self
+            .inner
+            .request(Method::POST, url)
+            .header(CONTENT_TYPE, HeaderValue::from_static(content_type))
+            .body(body);
+        let resp = self.send(req, Method::POST, path).await?;
+        let _ = resp.bytes().await?;
+        Ok(())
+    }
+
     /// `DELETE` with optional JSON body. Returns unit on success since the
     /// EventConf delete endpoints return either 200 or 204 with no
     /// caller-actionable payload. The body is read and discarded so the

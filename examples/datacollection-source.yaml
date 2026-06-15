@@ -1,0 +1,75 @@
+# Copyright 2026 Ronny Trommer <ronny@no42.org>
+# SPDX-License-Identifier: Apache-2.0
+#
+# kind: DataCollectionSource — one SNMP data-collection group ("source"),
+# managed declaratively via `onmsctl apply -f`. Targets the v2
+# /api/v2/datacollectionconf surface (the DB-backed data-collection subsystem;
+# absent from released Horizon <= 37.0.0, so apply preflights the endpoint).
+#
+# onmsctl owns ONLY the sources you write documents for — the stock vendor
+# library is left untouched. A re-apply that changes the group tree replaces the
+# whole source (the server prunes children you removed); `profiles` is the full
+# source of truth for which collections include this source (attach AND detach).
+apiVersion: datacollection.opennms.org/v1
+kind: DataCollectionSource
+metadata:
+  # The datacollection-group (source) name. This is the stable key; renaming it
+  # creates a new source (delete the old one with `onmsctl datacollection delete`).
+  name: acme-router
+spec:
+  # Whether the source is active. Optional; defaults to true.
+  enabled: true
+
+  # The snmp-collection profiles that SHALL include this source (by name).
+  # Reconciled as a TRUE set: a name removed here is detached on the next apply.
+  # A NEW source must list at least one profile (the server requires it). When
+  # `profileSpec` is absent, every name here must already exist on the server.
+  profiles:
+    - acme-collection
+
+  # OPTIONAL ("C+"): author/tune the profile inline. If the named profile does
+  # not exist it is created; if it differs it is updated. Omit this block to
+  # require the profiles above to pre-exist.
+  profileSpec:
+    name: acme-collection
+    rrdStep: 300
+    rras:
+      - "RRA:AVERAGE:0.5:1:2016"
+      - "RRA:AVERAGE:0.5:12:1488"
+      - "RRA:AVERAGE:0.5:288:366"
+      - "RRA:MAX:0.5:288:366"
+      - "RRA:MIN:0.5:288:366"
+    storageFlag: select   # one of: all / select / primary
+
+  # Custom resource types (indexed/tabular resources) defined by this group.
+  resourceTypes:
+    - name: acmeSensorIndex
+      label: Acme Sensors
+      resourceLabel: "${acmeSensorName} (index ${index})"
+      persistenceSelector:
+        class: org.opennms.netmgt.collection.support.PersistAllSelectorStrategy
+      storageStrategy:
+        class: org.opennms.netmgt.dao.support.SiblingColumnStorageStrategy
+        params:
+          - { key: sibling-column-name, value: acmeSensorName }
+
+  # MIB groups: the OIDs collected together, scoped by `ifType`
+  # (`all` / `ignore` / a numeric ifType).
+  groups:
+    - name: acme-system
+      ifType: ignore
+      mibObjects:
+        - { oid: .1.3.6.1.4.1.99999.1.1.1, instance: "0", alias: acmeCpuLoad, type: gauge }
+        - { oid: .1.3.6.1.4.1.99999.1.1.2, instance: "0", alias: acmeUptime,  type: timeticks }
+    - name: acme-sensors
+      ifType: all
+      mibObjects:
+        - { oid: .1.3.6.1.4.1.99999.2.1.3, instance: acmeSensorIndex, alias: acmeSensorValue, type: gauge }
+
+  # System definitions: collect the named groups for devices matching a sysoid.
+  systemDefs:
+    - name: Acme Router
+      sysoidMask: .1.3.6.1.4.1.99999.
+      includeGroups:
+        - acme-system
+        - acme-sensors

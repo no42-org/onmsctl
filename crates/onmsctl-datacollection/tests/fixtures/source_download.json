@@ -1,0 +1,530 @@
+{
+  "name" : "ejn",
+  "groups" : [ {
+    "name" : "ejn-ggsn",
+    "properties" : [ ],
+    "includeGroups" : [ ],
+    "ifType" : "ignore",
+    "mibObjs" : [ {
+      "instance" : "0",
+      "type" : "counter",
+      "alias" : "ggsnPdpCreateAtmpt",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.1.3.3.1",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "0",
+      "type" : "counter",
+      "alias" : "ggsnPdpDeleteAtmpt",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.1.3.3.2",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "0",
+      "type" : "counter",
+      "alias" : "ggsnPdpSlfDltAtmpt",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.1.3.3.3",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "0",
+      "type" : "counter",
+      "alias" : "ggsnPdpActivates",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.1.3.4.1",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "0",
+      "type" : "counter",
+      "alias" : "ggsnPdpDeactivates",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.1.3.4.2",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "0",
+      "type" : "counter",
+      "alias" : "ggsnPdpsTotalActive",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.1.3.2",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "0",
+      "type" : "counter",
+      "alias" : "ggsnUplnkPkts",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.1.3.11.1",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "0",
+      "type" : "counter",
+      "alias" : "ggsnUplnkBytes",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.1.3.11.2",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "0",
+      "type" : "counter",
+      "alias" : "ggsnUplnkDrp",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.1.3.11.3",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "0",
+      "type" : "counter",
+      "alias" : "ggsnUplnkDrpByt",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.1.3.11.4",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "0",
+      "type" : "counter",
+      "alias" : "ggsnDnlnkPkts",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.1.3.12.1",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "0",
+      "type" : "counter",
+      "alias" : "ggsnDnlnkBytes",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.1.3.12.2",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "0",
+      "type" : "counter",
+      "alias" : "ggsnDnlnkDrp",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.1.3.12.3",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "0",
+      "type" : "counter",
+      "alias" : "ggsnDnlnkDrpByt",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.1.3.12.4",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "0",
+      "type" : "gauge",
+      "alias" : "ggsnSubscriberNo",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.1.3.20",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "0",
+      "type" : "gauge",
+      "alias" : "ggsnNbrOfTftFltrs",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.1.3.22",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "0",
+      "type" : "gauge",
+      "alias" : "ggsnControlLoad",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.1.3.25",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "0",
+      "type" : "gauge",
+      "alias" : "ggsnPayloadLoad",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.1.3.26",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "0",
+      "type" : "gauge",
+      "alias" : "ggsnL2tpActTnls",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.1.3.32",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "0",
+      "type" : "gauge",
+      "alias" : "ggsnL2tpActSess",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.1.3.33",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "0",
+      "type" : "counter",
+      "alias" : "ggsnChgCdrsSucc",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.1.3.36",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "0",
+      "type" : "counter",
+      "alias" : "ggsnChgCdrsFail",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.1.3.37",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "0",
+      "type" : "gauge",
+      "alias" : "ggsnPdpsTClassConv",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.1.3.43",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "0",
+      "type" : "gauge",
+      "alias" : "ggsnPdpsTClassStrm",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.1.3.44",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "0",
+      "type" : "gauge",
+      "alias" : "ggsnPdpsTClassIntr",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.1.3.45",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "0",
+      "type" : "gauge",
+      "alias" : "ggsnPdpsTClassBack",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.1.3.46",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "0",
+      "type" : "counter",
+      "alias" : "ggsnRadAuthFail",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.1.3.47",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "0",
+      "type" : "counter",
+      "alias" : "ggsnRadAcctFail",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.1.3.48",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "0",
+      "type" : "gauge",
+      "alias" : "ggsn3gdtActContxt",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.1.3.50",
+      "maxval" : null,
+      "minval" : null
+    } ]
+  }, {
+    "name" : "ejn-ggsn-apn",
+    "properties" : [ ],
+    "includeGroups" : [ ],
+    "ifType" : "all",
+    "mibObjs" : [ {
+      "instance" : "ejnGgsnApnIndex",
+      "type" : "string",
+      "alias" : "ApnName",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.1.5.1.2",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "ejnGgsnApnIndex",
+      "type" : "gauge",
+      "alias" : "ApnActivePdpContext",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.1.5.1.3",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "ejnGgsnApnIndex",
+      "type" : "counter",
+      "alias" : "ApnUplinkBytes",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.1.5.1.13",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "ejnGgsnApnIndex",
+      "type" : "counter",
+      "alias" : "ApnDownlinkBytes",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.1.5.1.16",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "ejnGgsnApnIndex",
+      "type" : "counter",
+      "alias" : "ApnRadAcctFail",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.1.5.1.58",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "ejnGgsnApnIndex",
+      "type" : "counter",
+      "alias" : "ApnRadAuthFail",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.1.5.1.59",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "ejnGgsnApnIndex",
+      "type" : "integer",
+      "alias" : "ApnFreePoolIps",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.1.5.1.63",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "ejnGgsnApnIndex",
+      "type" : "integer",
+      "alias" : "ApnQuarPoolIps",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.1.5.1.64",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "ejnGgsnApnIndex",
+      "type" : "counter",
+      "alias" : "ApnFbcCcasStrtReq",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.7.1.11.1.3",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "ejnGgsnApnIndex",
+      "type" : "counter",
+      "alias" : "ApnFbcCcasStrtFail",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.7.1.11.1.4",
+      "maxval" : null,
+      "minval" : null
+    } ]
+  }, {
+    "name" : "ejn-ggsn-gtpc",
+    "properties" : [ ],
+    "includeGroups" : [ ],
+    "ifType" : "all",
+    "mibObjs" : [ {
+      "instance" : "ejnGgsnGtpcIndex",
+      "type" : "integer",
+      "alias" : "ggsnGtpc",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.2.1.1.1",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "ejnGgsnGtpcIndex",
+      "type" : "string",
+      "alias" : "ggsnGtpcAddr",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.2.1.1.3",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "ejnGgsnGtpcIndex",
+      "type" : "integer",
+      "alias" : "ggsnGtpcPdpMax",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.2.1.1.4",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "ejnGgsnGtpcIndex",
+      "type" : "integer",
+      "alias" : "ggsnGtpcRole",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.2.1.1.5",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "ejnGgsnGtpcIndex",
+      "type" : "string",
+      "alias" : "ggsnGtpcStatus",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.2.1.1.6",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "ejnGgsnGtpcIndex",
+      "type" : "counter",
+      "alias" : "ggsnGtpcCtlPktDrop",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.2.1.1.7",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "ejnGgsnGtpcIndex",
+      "type" : "gauge",
+      "alias" : "ggsnGtpcPdp",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.2.1.1.8",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "ejnGgsnGtpcIndex",
+      "type" : "integer",
+      "alias" : "ggsnGtpcMem",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.2.1.1.9",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "ejnGgsnGtpcIndex",
+      "type" : "integer",
+      "alias" : "ggsnGtpcMemUsed",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.2.1.1.10",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "ejnGgsnGtpcIndex",
+      "type" : "gauge",
+      "alias" : "ggsnGtpcCpu",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.2.1.1.11",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "ejnGgsnGtpcIndex",
+      "type" : "gauge",
+      "alias" : "ggsnGtpcCtrlLoad",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.2.1.1.14",
+      "maxval" : null,
+      "minval" : null
+    } ]
+  }, {
+    "name" : "ejn-ggsn-gtpu",
+    "properties" : [ ],
+    "includeGroups" : [ ],
+    "ifType" : "all",
+    "mibObjs" : [ {
+      "instance" : "ejnGgsnGtpuIndex",
+      "type" : "integer",
+      "alias" : "ggsnGtpu",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.6.1.1.1",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "ejnGgsnGtpuIndex",
+      "type" : "string",
+      "alias" : "ggsnGtpuAddr",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.6.1.1.3",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "ejnGgsnGtpuIndex",
+      "type" : "integer",
+      "alias" : "ggsnGtpuPdpMax",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.6.1.1.4",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "ejnGgsnGtpuIndex",
+      "type" : "integer",
+      "alias" : "ggsnGtpuRole",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.6.1.1.5",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "ejnGgsnGtpuIndex",
+      "type" : "string",
+      "alias" : "ggsnGtpuStatus",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.6.1.1.6",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "ejnGgsnGtpuIndex",
+      "type" : "counter",
+      "alias" : "ggsnGtpuUplnkDrp",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.6.1.1.7",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "ejnGgsnGtpuIndex",
+      "type" : "counter",
+      "alias" : "ggsnGtpuDnlnkDrp",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.6.1.1.8",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "ejnGgsnGtpuIndex",
+      "type" : "gauge",
+      "alias" : "ggsnGtpuPdp",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.6.1.1.9",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "ejnGgsnGtpuIndex",
+      "type" : "integer",
+      "alias" : "ggsnGtpuMem",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.6.1.1.10",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "ejnGgsnGtpuIndex",
+      "type" : "integer",
+      "alias" : "ggsnGtpuMemUsed",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.6.1.1.11",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "ejnGgsnGtpuIndex",
+      "type" : "gauge",
+      "alias" : "ggsnGtpuCpu",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.6.1.1.12",
+      "maxval" : null,
+      "minval" : null
+    }, {
+      "instance" : "ejnGgsnGtpuIndex",
+      "type" : "gauge",
+      "alias" : "ggsnGtpuPloadLoad",
+      "oid" : ".1.3.6.1.4.1.10923.1.1.1.1.6.1.1.13",
+      "maxval" : null,
+      "minval" : null
+    } ]
+  } ],
+  "resourceTypes" : [ {
+    "name" : "ejnGgsnApnIndex",
+    "persistenceSelectorStrategy" : {
+      "parameters" : [ ],
+      "clazz" : "org.opennms.netmgt.collection.support.PersistAllSelectorStrategy"
+    },
+    "storageStrategy" : {
+      "parameters" : [ {
+        "value" : "ApnName",
+        "key" : "sibling-column-name"
+      }, {
+        "value" : "s/^-//",
+        "key" : "replace-all"
+      }, {
+        "value" : "s/\\s//",
+        "key" : "replace-all"
+      }, {
+        "value" : "s/:\\\\.*//",
+        "key" : "replace-all"
+      } ],
+      "clazz" : "org.opennms.netmgt.dao.support.SiblingColumnStorageStrategy"
+    },
+    "resourceLabel" : "GPRS APN: ${ApnName}",
+    "label" : "GPRS Access Point Name"
+  }, {
+    "name" : "ejnGgsnGtpcIndex",
+    "persistenceSelectorStrategy" : {
+      "parameters" : [ ],
+      "clazz" : "org.opennms.netmgt.collection.support.PersistAllSelectorStrategy"
+    },
+    "storageStrategy" : {
+      "parameters" : [ {
+        "value" : "ggsnGtpcAddr",
+        "key" : "sibling-column-name"
+      } ],
+      "clazz" : "org.opennms.netmgt.dao.support.SiblingColumnStorageStrategy"
+    },
+    "resourceLabel" : "CPIC: ${ggsnGtpcAddr} (${ggsnGtpcStatus})",
+    "label" : "GGSN Control PICs"
+  }, {
+    "name" : "ejnGgsnGtpuIndex",
+    "persistenceSelectorStrategy" : {
+      "parameters" : [ ],
+      "clazz" : "org.opennms.netmgt.collection.support.PersistAllSelectorStrategy"
+    },
+    "storageStrategy" : {
+      "parameters" : [ {
+        "value" : "ggsnGtpuAddr",
+        "key" : "sibling-column-name"
+      } ],
+      "clazz" : "org.opennms.netmgt.dao.support.SiblingColumnStorageStrategy"
+    },
+    "resourceLabel" : "UPIC: ${ggsnGtpuAddr} (${ggsnGtpuStatus})",
+    "label" : "GGSN User PICs"
+  } ],
+  "systemDefs" : [ {
+    "name" : "EJN Mobile IP GGSN",
+    "ipList" : null,
+    "collect" : {
+      "includeGroups" : [ "ejn-ggsn", "ejn-ggsn-apn", "ejn-ggsn-gtpc", "ejn-ggsn-gtpu" ]
+    },
+    "sysoid" : ".1.3.6.1.4.1.2636.1.1.1.2.18",
+    "sysoidMask" : null,
+    "systemDefChoice" : {
+      "sysoid" : ".1.3.6.1.4.1.2636.1.1.1.2.18",
+      "sysoidMask" : null
+    }
+  } ]
+}
