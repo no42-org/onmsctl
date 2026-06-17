@@ -25,6 +25,10 @@ pub const RANK_MAINTENANCE: u32 = 350;
 /// base, no cross-kind references); the rank only fixes a deterministic apply
 /// order after `SnmpConfig`/`Maintenance`.
 pub const RANK_DATACOLLECTION: u32 = 375;
+/// Business services are independent of the other kinds (their own REST base;
+/// intra-kind child references are ordered by the handler's two-pass execute,
+/// not by this table). The rank only fixes a deterministic apply order last.
+pub const RANK_BUSINESS_SERVICE: u32 = 400;
 
 /// The authoritative precedence table. The binary uses these ranks when wiring
 /// handlers into the registry.
@@ -35,6 +39,7 @@ pub const KNOWN_RANKS: &[(&str, u32)] = &[
     ("Requisition", RANK_REQUISITION),
     ("Maintenance", RANK_MAINTENANCE),
     ("DataCollectionSource", RANK_DATACOLLECTION),
+    ("BusinessService", RANK_BUSINESS_SERVICE),
 ];
 
 /// The precedence rank for a known `kind`, or `None` if unknown.

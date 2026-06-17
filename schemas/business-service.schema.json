@@ -1,0 +1,288 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BusinessServiceLocal",
+  "description": "A `kind: BusinessService` document.",
+  "type": "object",
+  "properties": {
+    "apiVersion": {
+      "type": "string"
+    },
+    "kind": {
+      "type": "string"
+    },
+    "metadata": {
+      "$ref": "#/$defs/Metadata"
+    },
+    "spec": {
+      "$ref": "#/$defs/Spec"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "spec"
+  ],
+  "$defs": {
+    "ApplicationEdge": {
+      "description": "Edge → an OpenNMS Application, referenced by name.",
+      "type": "object",
+      "properties": {
+        "mapFunction": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Function"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "weight": {
+          "type": "integer",
+          "format": "int64",
+          "default": 1
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ]
+    },
+    "ChildEdge": {
+      "description": "Edge → another Business Service, referenced by name.",
+      "type": "object",
+      "properties": {
+        "mapFunction": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Function"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "weight": {
+          "type": "integer",
+          "format": "int64",
+          "default": 1
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ]
+    },
+    "Function": {
+      "description": "A map/reduce function: a `type` discriminator plus a free-form string-valued\n`properties` map (the BSM wire shape).",
+      "type": "object",
+      "properties": {
+        "properties": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "type"
+      ]
+    },
+    "IpServiceEdge": {
+      "description": "Edge → a monitored IP service. The node is resolved by label/location (or\nforeignSource/foreignId), then `ip`+`service` resolve to the monitored\nservice's id (ifserviceid).",
+      "type": "object",
+      "properties": {
+        "friendlyName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ipAddress": {
+          "type": "string"
+        },
+        "mapFunction": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Function"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "node": {
+          "$ref": "#/$defs/NodeRef"
+        },
+        "service": {
+          "type": "string"
+        },
+        "weight": {
+          "type": "integer",
+          "format": "int64",
+          "default": 1
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "node",
+        "ipAddress",
+        "service"
+      ]
+    },
+    "Metadata": {
+      "description": "Document metadata. `name` is the Business Service name.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ]
+    },
+    "NodeRef": {
+      "description": "A structured node reference. Either `{label, location?}` (ergonomic;\n`location` defaults to [`DEFAULT_LOCATION`]) or `{foreignSource, foreignId}`\n(the only guaranteed-unique node key). The two forms are mutually exclusive.",
+      "type": "object",
+      "properties": {
+        "foreignId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "foreignSource": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "location": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ReductionKeyEdge": {
+      "description": "Edge → a raw alarm reduction key. The `reductionKey` string MAY contain\nnode-derived `{{token}}`s, expanded at apply time from the optional `node`.",
+      "type": "object",
+      "properties": {
+        "friendlyName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mapFunction": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Function"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "node": {
+          "description": "Required only when `reductionKey` contains a `{{token}}`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NodeRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reductionKey": {
+          "type": "string"
+        },
+        "weight": {
+          "type": "integer",
+          "format": "int64",
+          "default": 1
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "reductionKey"
+      ]
+    },
+    "Spec": {
+      "description": "The Business Service body.",
+      "type": "object",
+      "properties": {
+        "applications": {
+          "description": "Edges to OpenNMS Applications (by name).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ApplicationEdge"
+          }
+        },
+        "attributes": {
+          "description": "Arbitrary key/value attributes (flat in YAML; the wire array-of-pairs\nwrapper is handled in [`crate::server`]).",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "childServices": {
+          "description": "Edges to other Business Services (by name).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ChildEdge"
+          }
+        },
+        "ipServices": {
+          "description": "Edges to monitored IP services (by node reference + ip + service).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/IpServiceEdge"
+          }
+        },
+        "reduceFunction": {
+          "description": "The per-service reduce function. Optional in YAML; onmsctl defaults it to\n`HighestSeverity` when omitted (the server has no default and rejects an\nabsent reduce function). Per-edge `mapFunction` defaults to `Identity` the\nsame way.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Function"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reductionKeys": {
+          "description": "Edges to raw alarm reduction keys (literal string, optionally templated).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ReductionKeyEdge"
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

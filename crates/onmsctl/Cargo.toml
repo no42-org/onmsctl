@@ -15,6 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 onmsctl-core = { workspace = true }
+onmsctl-businessservice = { workspace = true }
 onmsctl-datacollection = { workspace = true }
 onmsctl-eventconf = { workspace = true }
 onmsctl-iam = { workspace = true }
