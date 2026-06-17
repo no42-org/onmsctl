@@ -26,7 +26,8 @@ stay imperative.
   [Users and roles](#users-and-roles-kind-user) ·
   [SNMP configuration](#snmp-configuration-kind-snmpconfig) ·
   [Maintenance windows](#maintenance-windows-kind-maintenance) ·
-  [SNMP data collection](#snmp-data-collection-kind-datacollectionsource)
+  [SNMP data collection](#snmp-data-collection-kind-datacollectionsource) ·
+  [Business services](#business-services-kind-businessservice)
 - [Conventions & tooling](#conventions--tooling) · [Server compatibility](#server-compatibility)
 - [Migration](docs/migration.md) · [EventSource reference](docs/eventsource-reference.md)
 
@@ -157,6 +158,7 @@ there is no per-capability apply verb. Recognized kinds:
 | `Requisition` | `provisioning.opennms.org/v1` | provisioning requisitions |
 | `Maintenance` | `maintenance.opennms.org/v1` | scheduled-outage maintenance windows |
 | `DataCollectionSource` | `datacollection.opennms.org/v1` | SNMP data-collection sources |
+| `BusinessService` | `bsm.opennms.org/v1` | Business Service Monitoring (BSM) services + edges |
 
 A single file may hold many `---`-separated documents, and a directory can mix
 all kinds.
@@ -167,7 +169,7 @@ plan — unknown `kind`, duplicate `metadata.name`, parse error — the whole ap
 static precedence order so dependencies settle first:
 
 ```
-User (100) → EventSource (200) → SnmpConfig (250) → Requisition (300) → Maintenance (350) → DataCollectionSource (375)
+User (100) → EventSource (200) → SnmpConfig (250) → Requisition (300) → Maintenance (350) → DataCollectionSource (375) → BusinessService (400)
 ```
 
 Each document yields one `ApplyOutcome` row, rendered through `-o table|yaml|json`:
@@ -418,6 +420,73 @@ onmsctl datacollection delete acme-router
   on a server that lacks it.
 
 `list`/`export` are Read; `apply`/`delete` are Write.
+
+---
+
+## Business services (`kind: BusinessService`)
+
+Describe a Business Service Monitoring (BSM) hierarchy declaratively — a service,
+its per-service **reduce function**, optional attributes, and four kinds of **edge**
+(to child services, monitored IP services, applications, and raw alarm reduction
+keys), each with a `weight` and optional per-edge **map function**. Maps to the v2
+`/api/v2/business-services` surface; named and multi-instance (one document per
+service). No version gate — the API is present in every supported Horizon/Meridian.
+
+```yaml
+apiVersion: bsm.opennms.org/v1
+kind: BusinessService
+metadata: { name: web-frontend }
+spec:
+  attributes: { owner: platform-team }
+  reduceFunction:
+    type: Threshold                 # HighestSeverity | Threshold | HighestSeverityAbove | ExponentialPropagation
+    properties: { threshold: "0.75" }
+  childServices:                    # → another BusinessService, by name
+    - { name: database-tier, weight: 2, mapFunction: { type: Increase } }
+  ipServices:                       # → a monitored service; node by label+location
+    - node: { label: webhost01, location: Default }
+      ipAddress: 10.0.0.10
+      service: HTTP
+  applications:                     # → an OpenNMS Application, by name
+    - { name: Webservers }
+  reductionKeys:                    # → a raw alarm reduction key (escape hatch)
+    - reductionKey: "uei.opennms.org/threshold/highThresholdExceeded::{{nodeId}}:10.0.0.10:ifHCInOctets:90.0:3:75.0:Gi1/0/1"
+      node: { label: webhost01 }    # resolves {{nodeId}} at apply
+      mapFunction: { type: SetTo, properties: { status: Major } }
+```
+
+```sh
+onmsctl apply -f examples/business-service.yaml --dry-run --diff
+onmsctl business-service list                   # or: onmsctl bs list
+onmsctl business-service get web-frontend
+onmsctl business-service delete web-frontend     # explicit removal
+```
+
+References are **by name** (BSM's REST API is ID-centric; onmsctl resolves names →
+ids at apply, so the same YAML is portable across instances). Things to know:
+
+- **Whole-object reconcile.** A service is created then fully PUT (a destructive
+  full-replace). Edges **omitted from a document are pruned**; an unchanged service
+  (order-insensitive) is a no-op. Child references are resolved by a **two-pass**
+  apply (create, then PUT with resolved ids), so two new services can reference each
+  other in one file regardless of order; a child **cycle** fails at plan time.
+- **Across-apply non-deletion.** A service present on the server but **absent** from
+  your apply is **not** deleted — use `business-service delete <name>`.
+- **Node references.** A `node` is `{label, location}` (the default location is
+  `Default`) or `{foreignSource, foreignId}`. Labels are **not unique** in OpenNMS;
+  an ambiguous label fails the apply and tells you to use the foreignSource/foreignId
+  form.
+- **Prefer `ipServices` over hand-written reduction keys.** An `ipServices` edge
+  auto-covers the service's standard alarms (`nodeLostService`/`interfaceDown`/
+  `nodeDown`), so you never type a node id. Reach for `reductionKeys` only for custom
+  alarms (thresholds, custom UEIs, situations); the literal key must match a
+  **resolved alarm** reduction key (copy it from a real alarm — not the event-def
+  formula), and `{{nodeId}}` (plus `{{foreignSource}}`/`{{foreignId}}`/`{{nodeLabel}}`)
+  is expanded from the edge's `node`.
+- **Daemon reload.** Changes are inert until `bsmd` reloads; a mutating apply (and
+  `delete`) issues exactly one `daemon/reload` automatically.
+
+`list`/`get` are Read; `apply`/`delete` are Write.
 
 ---
 

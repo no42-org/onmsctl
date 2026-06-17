@@ -975,6 +975,7 @@ dependencies = [
  "anyhow",
  "clap",
  "clap_complete",
+ "onmsctl-businessservice",
  "onmsctl-core",
  "onmsctl-datacollection",
  "onmsctl-eventconf",
@@ -986,6 +987,22 @@ dependencies = [
  "serde_norway",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "onmsctl-businessservice"
+version = "0.3.0"
+dependencies = [
+ "async-trait",
+ "clap",
+ "onmsctl-core",
+ "percent-encoding",
+ "schemars",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "tokio",
+ "wiremock",
 ]
 
 [[package]]
@@ -1071,6 +1088,7 @@ name = "onmsctl-it"
 version = "0.3.0"
 dependencies = [
  "anyhow",
+ "onmsctl-businessservice",
  "onmsctl-core",
  "onmsctl-eventconf",
  "onmsctl-iam",

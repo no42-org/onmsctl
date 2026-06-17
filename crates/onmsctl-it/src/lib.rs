@@ -28,6 +28,7 @@ use std::env;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context as _, Result, anyhow};
+use onmsctl_businessservice::api::BusinessServiceApi;
 use onmsctl_core::{AuthCreds, Context, OnmsClient, OutputFormat, Url};
 use onmsctl_eventconf::EventConfApi;
 use onmsctl_iam::api::IamApi;
@@ -179,6 +180,35 @@ impl Harness {
                 .await
                 .map_err(|e| anyhow!("delete_user({name}): {e}"))?;
         }
+        Ok(n)
+    }
+
+    /// Delete every Business Service whose name starts with [`RESOURCE_PREFIX`],
+    /// then reload bsmd. Mirrors the other cleanup sweeps; real services (no
+    /// prefix) are never touched.
+    pub async fn cleanup_business_services(&self) -> Result<usize> {
+        let api = BusinessServiceApi::new(&self.client);
+        let all = api
+            .fetch_all()
+            .await
+            .map_err(|e| anyhow!("business-service fetch_all: {e}"))?;
+        let ids: Vec<i64> = all
+            .into_iter()
+            .filter(|(_, r)| r.name.starts_with(RESOURCE_PREFIX))
+            .map(|(id, _)| id)
+            .collect();
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        let n = ids.len();
+        for id in ids {
+            api.delete(id)
+                .await
+                .map_err(|e| anyhow!("business-service delete({id}): {e}"))?;
+        }
+        api.reload()
+            .await
+            .map_err(|e| anyhow!("business-service reload: {e}"))?;
         Ok(n)
     }
 

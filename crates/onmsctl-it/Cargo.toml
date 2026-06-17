@@ -11,6 +11,7 @@ publish = false
 
 [dependencies]
 onmsctl-core = { workspace = true }
+onmsctl-businessservice = { workspace = true }
 onmsctl-eventconf = { workspace = true }
 onmsctl-iam = { workspace = true }
 onmsctl-provisioning = { workspace = true }

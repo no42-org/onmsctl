@@ -1,0 +1,59 @@
+# A Business Service exercising all four edge types. References are by name and
+# resolved to numeric ids at apply time (BSM's REST API is ID-centric). See
+# README "Business services (kind: BusinessService)".
+apiVersion: bsm.opennms.org/v1
+kind: BusinessService
+metadata:
+  name: web-frontend
+spec:
+  attributes:
+    owner: platform-team
+    tier: "1"
+
+  # Per-service reduce function: how edge severities aggregate into the
+  # service's operational status. Exactly one.
+  reduceFunction:
+    type: Threshold              # HighestSeverity | Threshold | HighestSeverityAbove | ExponentialPropagation
+    properties:
+      threshold: "0.75"          # fraction in (0,1]
+
+  # → another Business Service, by name.
+  childServices:
+    - name: database-tier
+      weight: 2
+      mapFunction:
+        type: Increase           # Identity | Increase | Decrease | Ignore | SetTo
+
+  # → a monitored IP service. The node is resolved by label + location; this
+  # auto-covers the service's standard alarms (nodeLostService/interfaceDown/
+  # nodeDown) — no hand-written reduction key needed.
+  ipServices:
+    - node:
+        label: webhost01
+        location: Default        # optional; defaults to "Default"
+      ipAddress: 10.0.0.10
+      service: HTTP
+      friendlyName: web-http
+      weight: 1
+      mapFunction:
+        type: Identity
+
+  # → an OpenNMS Application, by name.
+  applications:
+    - name: Webservers
+      weight: 1
+
+  # → a raw alarm reduction key (escape hatch for custom alarms). Only {{nodeId}}
+  # is templated from the node reference; the rest is the threshold's own
+  # reduction-key signature, typed verbatim.
+  reductionKeys:
+    - node:
+        foreignSource: networking
+        foreignId: dist-sw-01
+      reductionKey: "uei.opennms.org/threshold/highThresholdExceeded::{{nodeId}}:10.42.0.130:ifHCInOctets * 8 / 1000000 / ifHighSpeed * 100:90.0:3:75.0:Gi1/0/47"
+      friendlyName: uplink-saturation
+      weight: 1
+      mapFunction:
+        type: SetTo
+        properties:
+          status: Major

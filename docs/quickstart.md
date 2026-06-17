@@ -6,9 +6,10 @@ A practical, end-to-end guide to installing, configuring, and using
 `onmsctl` follows the kubectl pattern: one config file with named
 contexts, a single declarative `apply -f` mutation entrypoint, and
 read-only inspection verbs alongside it. It is a single statically
-linked binary that bundles three capabilities — **eventconf**
-(`event-source` / `event`), **provisioning** (`requisition`), and **IAM**
-(`iam`).
+linked binary that bundles seven capabilities — **eventconf**
+(`event-source` / `event`), **provisioning** (`requisition`), **IAM**
+(`iam`), **SNMP config** (`snmp`), **maintenance** (`maintenance`),
+**data collection** (`datacollection`), and **BSM** (`business-service`).
 
 > This is the fast path. For signature verification, the full
 > `provision.pl` migration map, the EventSource schema reference, and
@@ -25,6 +26,9 @@ linked binary that bundles three capabilities — **eventconf**
 - [7. GitOps for provisioning requisitions](#7-gitops-for-provisioning-requisitions)
 - [8. Managing IAM users](#8-managing-iam-users)
 - [9. SNMP configuration](#9-snmp-configuration)
+- [9b. SNMP data collection](#9b-snmp-data-collection)
+- [9c. Maintenance windows](#9c-maintenance-windows)
+- [9d. Business services](#9d-business-services)
 - [10. Global flags and environment variables](#10-global-flags-and-environment-variables)
 - [11. Output formats and exit codes](#11-output-formats-and-exit-codes)
 - [12. Shell completion](#12-shell-completion)
@@ -83,12 +87,15 @@ onmsctl version
 ```
 
 ```
-onmsctl 0.1.0
+onmsctl 0.3.0
 capabilities:
-  - eventconf 0.1.0
-  - provisioning 0.1.0
-  - iam 0.1.0
-  - snmp 0.1.0
+  - eventconf 0.3.0
+  - provisioning 0.3.0
+  - iam 0.3.0
+  - snmp 0.3.0
+  - maintenance 0.3.0
+  - datacollection 0.3.0
+  - business-service 0.3.0
 ```
 
 The capability list grows as the binary links new capability crates.
@@ -168,16 +175,20 @@ onmsctl iam whoami                   # confirms URL + credentials work
 
 **Declarative `apply -f` is the one mutation entrypoint.** It peeks
 each YAML document's `kind` and routes it to the right handler — there
-is no per-capability apply verb. Three kinds are recognized:
+is no per-capability apply verb. The recognized kinds:
 
 | `kind` | `apiVersion` | Reconciles |
 |---|---|---|
 | `EventSource` | `eventconf.opennms.org/v1` | event configuration sources |
 | `Requisition` | `provisioning.opennms.org/v1` | provisioning requisitions |
 | `User` | `onmsctl.no42.org/v1alpha1` | Horizon users + roles |
+| `SnmpConfig` | `snmp.opennms.org/v1` | SNMP agent + trap config (singleton) |
+| `Maintenance` | `maintenance.opennms.org/v1` | scheduled-outage maintenance windows |
+| `DataCollectionSource` | `datacollection.opennms.org/v1` | SNMP data-collection sources |
+| `BusinessService` | `bsm.opennms.org/v1` | Business Service Monitoring (BSM) |
 
 A single file may hold many `---`-separated documents, and a directory
-may mix all three kinds.
+may mix any of these kinds.
 
 **Plan → gate → execute.** Every document is planned first. If *any*
 document fails to plan (unknown `kind`, duplicate `metadata.name`, parse
@@ -453,6 +464,53 @@ early with a clear message on a server that lacks it. See
 [`examples/datacollection-source.yaml`](../examples/datacollection-source.yaml)
 and the [README](../README.md#snmp-data-collection-kind-datacollectionsource).
 
+## 9c. Maintenance windows
+
+Plan a maintenance window (`kind: Maintenance`) — for a period, suppress OpenNMS
+polling, notifications, thresholds, and/or collection on chosen devices. Maps to a
+scheduled outage; named and multi-instance (one document per window).
+
+```sh
+onmsctl apply -f examples/maintenance.yaml --dry-run --diff
+onmsctl maintenance list                       # or: onmsctl maint list
+onmsctl maintenance status 192.168.8.8 12      # IP or nodeId → in a window now?
+onmsctl maintenance delete weekend-patching    # full teardown
+```
+
+- Device selectors (`interfaces` / `nodes` / `categories` / `locations` / `asset`)
+  are a **union**; nodes are named by `{foreignSource, foreignId}` and resolved at
+  apply, so `Maintenance` applies after `Requisition`.
+- Daemon attachments are **ensure-present** — apply never detaches; to reduce
+  suppression, `maintenance delete <name>` and re-apply.
+
+See [`examples/maintenance.yaml`](../examples/maintenance.yaml) and the
+[README](../README.md#maintenance-windows-kind-maintenance).
+
+## 9d. Business services
+
+Describe a Business Service Monitoring hierarchy (`kind: BusinessService`) — a
+service, its reduce function, and edges to child services, monitored IP services,
+applications, and raw reduction keys. Maps to the v2 BSM API; named and
+multi-instance.
+
+```sh
+onmsctl apply -f examples/business-service.yaml --dry-run --diff
+onmsctl business-service list                  # or: onmsctl bs list
+onmsctl business-service get web-frontend
+onmsctl business-service delete web-frontend
+```
+
+- References are **by name** (resolved to ids at apply); nodes by `{label,
+  location}` or `{foreignSource, foreignId}`. Prefer `ipServices` edges over
+  hand-written reduction keys — they auto-cover the standard node/interface/service
+  alarms; for custom keys, `{{nodeId}}` is expanded from the edge's node.
+- Whole-object reconcile: edges omitted from a document are pruned, but a service
+  absent from the apply is **not** deleted (use `business-service delete`). One
+  `bsmd` reload runs per mutating apply.
+
+See [`examples/business-service.yaml`](../examples/business-service.yaml) and the
+[README](../README.md#business-services-kind-businessservice).
+
 ## 10. Global flags and environment variables
 
 These work on (almost) every command:
@@ -479,7 +537,8 @@ flags  >  environment  >  active context  >  built-in default
 ```
 
 Top-level verbs have short aliases: `event-source`→`evtsrc`, `event`→`evt`,
-`requisition`→`req`, `config`→`cfg`.
+`requisition`→`req`, `maintenance`→`maint`, `datacollection`→`dc`,
+`business-service`→`bs`, `config`→`cfg`.
 
 ## 11. Output formats and exit codes
 
