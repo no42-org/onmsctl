@@ -19,7 +19,7 @@ stay imperative.
 
 ## Contents
 
-- [Install](#install) · [Configure a context](#configure-a-context)
+- [Install](#install) · [Container image](#container-image) · [Configure a context](#configure-a-context)
 - [Declarative apply](#declarative-apply-onmsctl-apply--f) — the apply model
 - **Capabilities:** [Event configuration](#event-configuration-kind-eventsource) ·
   [Provisioning](#provisioning-kind-requisition) ·
@@ -100,6 +100,55 @@ capabilities:
   - datacollection 0.4.0
   - business-service 0.4.0
 ```
+
+---
+
+## Container image
+
+A multi-arch (`linux/amd64`, `linux/arm64`) **distroless** image is published to
+GHCR for every `v*.*.*` tag at `ghcr.io/no42-org/onmsctl`. It's a single static
+binary on `gcr.io/distroless/static` — no shell, no package manager, running as
+the non-root user `65532` — so it's small and has a minimal attack surface for
+CI/CD pipelines. Each release publishes the exact version (`v0.4.0`), the
+rolling `MAJOR.MINOR` tag (`0.4`), and `latest` (the newest non-prerelease):
+
+```sh
+docker run --rm ghcr.io/no42-org/onmsctl:v0.4.0 version
+```
+
+Mount your config and manifests to run a declarative apply as a pipeline step
+(the entrypoint is `onmsctl`, so pass subcommands directly). `apply` resolves a
+config file that defines the context (server URL + user); point `ONMSCTL_CONFIG`
+at the mounted file and supply the password at runtime via `ONMS_PASSWORD`:
+
+```sh
+docker run --rm \
+  -e ONMSCTL_CONFIG=/work/onmsctl.yaml \
+  -e ONMS_PASSWORD \
+  -v "$PWD:/work:ro" -w /work \
+  ghcr.io/no42-org/onmsctl:v0.4.0 apply -f requisition.yaml
+```
+
+`ONMS_URL`, `ONMS_USER`, and `ONMS_TOKEN` are also honored as overrides on top
+of the resolved context. See [Configure a context](#configure-a-context) for the
+config-file format.
+
+Because the image is distroless it has **no shell** — use it as a `docker run`
+step rather than as a GitLab `image:` / GitHub `container:` job that expects to
+run `before_script` shell commands.
+
+Images carry build provenance + an SBOM and are Sigstore-signed (keyless). Verify
+the signature ties the image to a build of this repo's `docker.yml` workflow:
+
+```sh
+cosign verify \
+  --certificate-identity-regexp "^https://github.com/no42-org/onmsctl/.github/workflows/docker.yml@" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  ghcr.io/no42-org/onmsctl:v0.4.0
+```
+
+Build it locally for your host architecture with `make docker` (produces
+`onmsctl:dev`).
 
 ---
 
