@@ -1,0 +1,33 @@
+# Build context hygiene: keep the image build fast and the layers reproducible.
+# Only the Cargo manifests, lockfile, rust-toolchain.toml, and crates/ source
+# are needed to compile the binary.
+
+# Rust build output (rebuilt inside the builder stage)
+target/
+**/*.rs.bk
+
+# Version control
+.git/
+.gitignore
+
+# CI / tooling config not needed for the build
+.github/
+.idea/
+.vscode/
+
+# AI tool working directories
+_bmad/
+_bmad-output/
+openspec/
+.agents/
+.claude/
+
+# Docs and non-source assets
+docs/
+README.md
+RELEASING.md
+CONTRIBUTING.md
+THIRD-PARTY-LICENSES.md
+
+# OS cruft
+.DS_Store

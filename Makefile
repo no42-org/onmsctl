@@ -1,4 +1,4 @@
-.PHONY: help build test verify fmt clippy deny licenses install-tools install-cargo-deny install-cargo-about install-cargo-cyclonedx release-build sbom integration schema clean
+.PHONY: help build test verify fmt clippy deny licenses install-tools install-cargo-deny install-cargo-about install-cargo-cyclonedx release-build sbom integration schema docker clean
 
 # Self-documenting: annotate each user-facing target with `## description`
 # and it shows up in `make help`. Sorted in declaration order.
@@ -29,6 +29,13 @@ licenses: install-cargo-about  ## Regenerate THIRD-PARTY-LICENSES.md from the de
 	# Atomic write: failure leaves the existing file untouched.
 	cargo about generate -c about.toml -o THIRD-PARTY-LICENSES.md.tmp about.hbs && \
 		mv THIRD-PARTY-LICENSES.md.tmp THIRD-PARTY-LICENSES.md
+
+# Build the distroless OCI image for the host architecture. CI builds the
+# multi-arch (amd64+arm64) image via .github/workflows/docker.yml; this target
+# is the local single-arch equivalent. Override IMAGE to retag.
+IMAGE ?= onmsctl:dev
+docker:  ## Build the distroless OCI image for the host arch (IMAGE=onmsctl:dev)
+	docker build -t $(IMAGE) .
 
 clean:  ## Remove the cargo target directory
 	cargo clean
