@@ -59,13 +59,21 @@ Before tagging, verify on `main`:
    matches the tag you're about to push (without the leading `v`).
    Cargo.lock updates from a `cargo check` after the bump are
    committed.
-3. **Conventional Commits** — all commits since the previous tag
+3. **README version references updated** — bump the version strings in
+   `README.md` so the docs match the release:
+   - the `VERSION=vX.Y.Z` value in the **Install** download example,
+   - the `onmsctl X.Y.Z` sample output (and each capability line) under
+     **Build from source**,
+   - the image tags in the **Container image** section. Note these carry
+     **no leading `v`** — the `vX.Y.Z` git tag publishes the image as
+     `X.Y.Z` (plus `X.Y` and `latest`), per `docker/metadata-action`.
+4. **Conventional Commits** — all commits since the previous tag
    follow `<type>(<scope>): <subject>` so `softprops/action-gh-release`
    generates clean notes. Breaking changes use `!` or a
    `BREAKING CHANGE:` footer.
-4. **THIRD-PARTY-LICENSES.md** — regenerate if dependencies changed:
+5. **THIRD-PARTY-LICENSES.md** — regenerate if dependencies changed:
    `make licenses`. Commit any diff.
-5. **OpenSpec is settled** — `openspec list` reports no active
+6. **OpenSpec is settled** — `openspec list` reports no active
    changes (or only changes intentionally deferred to a future
    release).
 
@@ -74,8 +82,9 @@ Before tagging, verify on `main`:
 ```sh
 # 1. Bump the version on main (in a normal commit, not the tag).
 $EDITOR Cargo.toml                              # update [workspace.package].version
+$EDITOR README.md                               # bump the version refs (see checklist item 3)
 cargo check --workspace                          # refresh Cargo.lock
-git add Cargo.toml Cargo.lock
+git add Cargo.toml Cargo.lock README.md
 git commit -m "chore(release): bump workspace version to vX.Y.Z"
 git push origin main
 

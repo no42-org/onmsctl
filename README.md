@@ -49,7 +49,7 @@ with per-binary SHA256 checksums, an aggregate `SHA256SUMS`, and Sigstore
 Windows is not yet in the release matrix; Windows users build from source.
 
 ```sh
-VERSION=v0.4.0
+VERSION=v0.4.1
 TARGET=x86_64-apple-darwin   # or one of the rows above
 
 curl -fL -O https://github.com/no42-org/onmsctl/releases/download/${VERSION}/onmsctl-${VERSION}-${TARGET}
@@ -90,15 +90,15 @@ cargo install --path crates/onmsctl     # → ~/.cargo/bin
 version` prints the binary version alongside each linked capability:
 
 ```
-onmsctl 0.4.0
+onmsctl 0.4.1
 capabilities:
-  - eventconf 0.4.0
-  - provisioning 0.4.0
-  - iam 0.4.0
-  - snmp 0.4.0
-  - maintenance 0.4.0
-  - datacollection 0.4.0
-  - business-service 0.4.0
+  - eventconf 0.4.1
+  - provisioning 0.4.1
+  - iam 0.4.1
+  - snmp 0.4.1
+  - maintenance 0.4.1
+  - datacollection 0.4.1
+  - business-service 0.4.1
 ```
 
 ---
