@@ -54,7 +54,7 @@ Binaries are published as GitHub Releases for Linux and macOS
 (x86_64 + aarch64). Windows builds from source.
 
 ```sh
-VERSION=v0.1.0
+VERSION=v0.4.0
 TARGET=x86_64-apple-darwin   # or *-unknown-linux-gnu, aarch64-apple-darwin, …
 
 curl -fL -O https://github.com/no42-org/onmsctl/releases/download/${VERSION}/onmsctl-${VERSION}-${TARGET}
@@ -87,15 +87,15 @@ onmsctl version
 ```
 
 ```
-onmsctl 0.3.0
+onmsctl 0.4.0
 capabilities:
-  - eventconf 0.3.0
-  - provisioning 0.3.0
-  - iam 0.3.0
-  - snmp 0.3.0
-  - maintenance 0.3.0
-  - datacollection 0.3.0
-  - business-service 0.3.0
+  - eventconf 0.4.0
+  - provisioning 0.4.0
+  - iam 0.4.0
+  - snmp 0.4.0
+  - maintenance 0.4.0
+  - datacollection 0.4.0
+  - business-service 0.4.0
 ```
 
 The capability list grows as the binary links new capability crates.
