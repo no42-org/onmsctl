@@ -20,7 +20,7 @@ concurrency:
 jobs:
   validate-tag:
     name: validate tag
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04 # was ubuntu-latest
     timeout-minutes: 2
     outputs:
       is-prerelease: ${{ steps.parse.outputs.is-prerelease }}
@@ -54,19 +54,19 @@ jobs:
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
-            runner: ubuntu-latest
+            runner: ubuntu-24.04 # was ubuntu-latest
             cross_apt: ''
             cross_linker: ''
           - target: aarch64-unknown-linux-gnu
-            runner: ubuntu-latest
+            runner: ubuntu-24.04 # was ubuntu-latest
             cross_apt: gcc-aarch64-linux-gnu
             cross_linker: aarch64-linux-gnu-gcc
           - target: x86_64-apple-darwin
-            runner: macos-latest
+            runner: macos-26 # was macos-latest
             cross_apt: ''
             cross_linker: ''
           - target: aarch64-apple-darwin
-            runner: macos-latest
+            runner: macos-26 # was macos-latest
             cross_apt: ''
             cross_linker: ''
     timeout-minutes: 30
@@ -115,7 +115,7 @@ jobs:
   sbom:
     name: sbom (cyclonedx)
     needs: [validate-tag]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04 # was ubuntu-latest
     permissions:
       contents: read
     timeout-minutes: 15
@@ -156,7 +156,7 @@ jobs:
   release:
     name: release
     needs: [validate-tag, build, sbom]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04 # was ubuntu-latest
     permissions:
       contents: write   # create the GitHub Release + upload assets
       id-token: write   # cosign keyless OIDC (scoped to this job only)
