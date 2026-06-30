@@ -49,6 +49,17 @@ and commit the updated `THIRD-PARTY-LICENSES.md`.
 
 Run `make verify` before opening a pull request. CI runs the same target.
 
+## CI runner images
+
+GitHub Actions jobs pin their runner to an explicit version label (e.g. `ubuntu-24.04`,
+`macos-26`), never a floating `-latest` alias, with a `# was <floating>` comment recording the
+prior label. This keeps the build and release environment deterministic — a runner-image
+migration cannot silently change a tag-triggered release.
+
+Unlike `uses:` action SHAs, Dependabot does not manage `runs-on` labels, so these pins are
+bumped **manually**. Revisit them when GitHub announces a pinned image's deprecation/removal
+(its brownout period), and when adopting a newer OS image deliberately.
+
 ## Source file headers
 
 Every new Rust source file starts with this SPDX-compliant header:

@@ -22,7 +22,7 @@ concurrency:
 jobs:
   integration:
     if: github.repository == 'no42-org/onmsctl'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04 # was ubuntu-latest
     timeout-minutes: 30
     env:
       ONMSCTL_TEST_URL: ${{ secrets.ONMSCTL_TEST_URL }}

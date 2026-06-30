@@ -21,7 +21,7 @@ env:
 jobs:
   image:
     name: build & push (ghcr)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04 # was ubuntu-latest
     permissions:
       contents: read
       packages: write   # push the image to GHCR
