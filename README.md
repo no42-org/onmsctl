@@ -49,7 +49,7 @@ with per-binary SHA256 checksums, an aggregate `SHA256SUMS`, and Sigstore
 Windows is not yet in the release matrix; Windows users build from source.
 
 ```sh
-VERSION=v0.4.2
+VERSION=v0.4.3
 TARGET=x86_64-apple-darwin   # or one of the rows above
 
 curl -fL -O https://github.com/no42-org/onmsctl/releases/download/${VERSION}/onmsctl-${VERSION}-${TARGET}
@@ -90,15 +90,15 @@ cargo install --path crates/onmsctl     # → ~/.cargo/bin
 version` prints the binary version alongside each linked capability:
 
 ```
-onmsctl 0.4.2
+onmsctl 0.4.3
 capabilities:
-  - eventconf 0.4.2
-  - provisioning 0.4.2
-  - iam 0.4.2
-  - snmp 0.4.2
-  - maintenance 0.4.2
-  - datacollection 0.4.2
-  - business-service 0.4.2
+  - eventconf 0.4.3
+  - provisioning 0.4.3
+  - iam 0.4.3
+  - snmp 0.4.3
+  - maintenance 0.4.3
+  - datacollection 0.4.3
+  - business-service 0.4.3
 ```
 
 ---
@@ -109,12 +109,12 @@ A multi-arch (`linux/amd64`, `linux/arm64`) **distroless** image is published to
 GHCR for every `v*.*.*` tag at `ghcr.io/no42-org/onmsctl`. It's a single static
 binary on `gcr.io/distroless/static` — no shell, no package manager, running as
 the non-root user `65532` — so it's small and has a minimal attack surface for
-CI/CD pipelines. Each release publishes the exact version (`0.4.2`), the
+CI/CD pipelines. Each release publishes the exact version (`0.4.3`), the
 rolling `MAJOR.MINOR` tag (`0.4`), and `latest` (the newest non-prerelease).
-Image tags carry no leading `v` (the `v0.4.2` git tag publishes as `0.4.2`):
+Image tags carry no leading `v` (the `v0.4.3` git tag publishes as `0.4.3`):
 
 ```sh
-docker run --rm ghcr.io/no42-org/onmsctl:0.4.2 version
+docker run --rm ghcr.io/no42-org/onmsctl:0.4.3 version
 ```
 
 Mount your config and manifests to run a declarative apply as a pipeline step
@@ -127,7 +127,7 @@ docker run --rm \
   -e ONMSCTL_CONFIG=/work/onmsctl.yaml \
   -e ONMS_PASSWORD \
   -v "$PWD:/work:ro" -w /work \
-  ghcr.io/no42-org/onmsctl:0.4.2 apply -f requisition.yaml
+  ghcr.io/no42-org/onmsctl:0.4.3 apply -f requisition.yaml
 ```
 
 `ONMS_URL`, `ONMS_USER`, and `ONMS_TOKEN` are also honored as overrides on top
@@ -145,7 +145,7 @@ the signature ties the image to a build of this repo's `docker.yml` workflow:
 cosign verify \
   --certificate-identity-regexp "^https://github.com/no42-org/onmsctl/.github/workflows/docker.yml@" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/no42-org/onmsctl:0.4.2
+  ghcr.io/no42-org/onmsctl:0.4.3
 ```
 
 Build it locally for your host architecture with `make docker` (produces
