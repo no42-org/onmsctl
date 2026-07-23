@@ -169,6 +169,12 @@ The image also carries a GitHub-issued SLSA attestation, verifiable by digest:
 gh attestation verify oci://ghcr.io/no42-org/onmsctl:0.4.3 --repo no42-org/onmsctl
 ```
 
+> **Bleeding edge.** `ghcr.io/no42-org/onmsctl:rc` tracks the tip of `main`,
+> rebuilt and overwritten on every merge — signed like a release, but
+> explicitly unstable. A matching rolling `preview` prerelease carries the
+> binaries. Use a `vX.Y.Z` tag for anything real. See
+> [RELEASING.md](RELEASING.md#preview-builds-automatic-every-merge-to-main).
+
 Build it locally for your host architecture with `make docker` (produces
 `onmsctl:dev`).
 
