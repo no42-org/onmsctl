@@ -11,16 +11,23 @@ permissions:
 
 concurrency:
   group: docker-${{ github.ref }}
-  # Re-pushing a tag cancels the in-flight run rather than racing two pushes
-  # to the same image reference.
-  cancel-in-progress: true
+  # Never cancel an in-flight image publish. A re-pushed tag queues behind
+  # the running job instead of racing two pushes to the same reference.
+  cancel-in-progress: false
 
 env:
   IMAGE: ghcr.io/${{ github.repository }}
 
 jobs:
+  gate:
+    name: gate
+    # The same fmt/clippy/build/test/deny gate pull requests must pass.
+    # The image is not pushed or signed without it — see gates.yml.
+    uses: ./.github/workflows/gates.yml
+
   image:
     name: build & push (ghcr)
+    needs: [gate]
     runs-on: ubuntu-24.04 # was ubuntu-latest
     permissions:
       contents: read

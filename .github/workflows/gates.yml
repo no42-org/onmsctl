@@ -1,0 +1,38 @@
+# The single definition of "is this tree shippable".
+#
+# Called by verify.yml (PRs, pushes to main, weekly cron), release.yml and
+# docker.yml (tag pushes). Defining it once means a release cannot publish
+# through a gate that pull requests enforce — the drift that copy-pasting
+# these steps per workflow invites.
+name: gates
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-26] # was ubuntu-latest, macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # No step here pushes with the token; leaving it on disk only
+          # widens the blast radius of a compromised build step.
+          persist-credentials: false
+
+      - name: Install pinned Rust toolchain (honors rust-toolchain.toml)
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
+
+      - name: Run verify
+        run: make verify

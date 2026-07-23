@@ -17,42 +17,31 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
-  verify:
+  gate:
     # Skip scheduled runs on forks — only the upstream repo's cron should fire.
     if: github.event_name != 'schedule' || github.repository == 'no42-org/onmsctl'
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-24.04, macos-26] # was ubuntu-latest, macos-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Install pinned Rust toolchain (honors rust-toolchain.toml)
-        run: rustup show
-
-      - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
-
-      - name: Run verify
-        run: make verify
+    # Shared with release.yml and docker.yml — see gates.yml.
+    uses: ./.github/workflows/gates.yml
 
   notify-on-cron-failure:
     # Open a tracking issue when the scheduled run fails, so a freshly-disclosed
     # RUSTSEC advisory does not silently rot. Only fires for the cron event.
-    needs: verify
+    needs: gate
     if: failure() && github.event_name == 'schedule' && github.repository == 'no42-org/onmsctl'
     runs-on: ubuntu-24.04 # was ubuntu-latest
     permissions:
       issues: write
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Open tracking issue
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          set -euo pipefail
           gh issue create \
+            --repo "${GITHUB_REPOSITORY}" \
             --title "Scheduled verify failed: $(date -u +%Y-%m-%d)" \
-            --body "Weekly cron run failed. Likely a freshly-disclosed advisory or a transient infrastructure issue.\n\nRun: $run_url" \
-            --label "ci,scheduled-failure"
+            --body "$(printf 'Weekly cron run failed. Likely a freshly-disclosed advisory or a transient infrastructure issue.\n\nRun: %s\n' "${RUN_URL}")" \
+            --label ci \
+            --label scheduled-failure

@@ -12,10 +12,12 @@ permissions:
 
 concurrency:
   group: release-${{ github.ref }}
-  # Re-pushing a tag (recovery pattern) cancels the in-flight run rather
-  # than queuing a duplicate. Avoids two concurrent jobs racing on the
-  # same release and minting redundant Sigstore certs.
-  cancel-in-progress: true
+  # Never cancel a release mid-flight: a cancelled run can leave a partially
+  # populated release behind. Re-pushing a tag (the recovery pattern) queues
+  # the new run behind the in-flight one instead of racing it, and the
+  # "Create GitHub Release" step below is idempotent so the queued run
+  # re-uploads onto the existing draft rather than failing.
+  cancel-in-progress: false
 
 jobs:
   validate-tag:
@@ -43,9 +45,16 @@ jobs:
             echo "is-prerelease=false" >> "$GITHUB_OUTPUT"
           fi
 
+  gate:
+    name: gate
+    needs: [validate-tag]
+    # The same fmt/clippy/build/test/deny gate pull requests must pass.
+    # Nothing below publishes without it — see gates.yml.
+    uses: ./.github/workflows/gates.yml
+
   build:
     name: build (${{ matrix.target }})
-    needs: [validate-tag]
+    needs: [validate-tag, gate]
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -114,7 +123,7 @@ jobs:
 
   sbom:
     name: sbom (cyclonedx)
-    needs: [validate-tag]
+    needs: [validate-tag, gate]
     runs-on: ubuntu-24.04 # was ubuntu-latest
     permissions:
       contents: read
@@ -155,7 +164,7 @@ jobs:
 
   release:
     name: release
-    needs: [validate-tag, build, sbom]
+    needs: [validate-tag, gate, build, sbom]
     runs-on: ubuntu-24.04 # was ubuntu-latest
     permissions:
       contents: write   # create the GitHub Release + upload assets
@@ -229,28 +238,44 @@ jobs:
               "$f"
           done
 
-      - name: Create GitHub Release
+      - name: Create GitHub Release (draft)
         # Use the native gh CLI rather than softprops/action-gh-release —
         # the action uploads assets in parallel and hits a GitHub
         # asset-metadata-update race condition that drops random
         # individual files. `gh release create` uploads sequentially
         # and waits for each before continuing.
+        #
+        # The release is created as a DRAFT. Publishing is a deliberate
+        # human step (see RELEASING.md) so that (a) there is never a
+        # public, asset-less release during the upload window, and
+        # (b) the auto-generated notes can be replaced with curated ones
+        # before anyone sees them.
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+          IS_PRERELEASE: ${{ needs.validate-tag.outputs.is-prerelease }}
         run: |
           set -euo pipefail
           PRERELEASE_FLAG=""
-          if [ "${{ needs.validate-tag.outputs.is-prerelease }}" = "true" ]; then
+          if [ "${IS_PRERELEASE}" = "true" ]; then
             PRERELEASE_FLAG="--prerelease"
           fi
-          # Create the release (no assets yet) with auto-generated notes.
-          gh release create "${{ github.ref_name }}" \
-            --repo "${{ github.repository }}" \
-            --title "${{ github.ref_name }}" \
-            --generate-notes \
-            $PRERELEASE_FLAG
+          # Idempotent: a re-pushed tag (the documented recovery flow)
+          # queues a second run behind this one, which must re-upload onto
+          # the existing draft instead of failing on "already exists".
+          if gh release view "${TAG}" --repo "${REPO}" >/dev/null 2>&1; then
+            echo "Release ${TAG} already exists — reusing it."
+          else
+            gh release create "${TAG}" \
+              --repo "${REPO}" \
+              --title "${TAG}" \
+              --generate-notes \
+              --draft \
+              $PRERELEASE_FLAG
+          fi
           # Upload all artifacts sequentially.
-          gh release upload "${{ github.ref_name }}" \
-            --repo "${{ github.repository }}" \
+          gh release upload "${TAG}" \
+            --repo "${REPO}" \
             --clobber \
             release/*
