@@ -55,7 +55,10 @@ with per-binary SHA256 checksums, an aggregate `SHA256SUMS`, and Sigstore
 Windows is not yet in the release matrix; Windows users build from source.
 
 ```sh
-VERSION=v0.4.3
+# Resolve the newest release tag (follows the /releases/latest redirect;
+# needs only curl). Set VERSION=vX.Y.Z by hand instead if you prefer to pin.
+VERSION=$(basename "$(curl -fsSLo /dev/null -w '%{url_effective}' \
+  https://github.com/no42-org/onmsctl/releases/latest)")
 TARGET=x86_64-apple-darwin   # or one of the rows above
 
 curl -fL -O https://github.com/no42-org/onmsctl/releases/download/${VERSION}/onmsctl-${VERSION}-${TARGET}
@@ -129,7 +132,7 @@ rolling `MAJOR.MINOR` tag (`0.4`), and `latest` (the newest non-prerelease).
 Image tags carry no leading `v` (the `v0.4.3` git tag publishes as `0.4.3`):
 
 ```sh
-docker run --rm ghcr.io/no42-org/onmsctl:0.4.3 version
+docker run --rm ghcr.io/no42-org/onmsctl:latest version
 ```
 
 Mount your config and manifests to run a declarative apply as a pipeline step
@@ -142,7 +145,7 @@ docker run --rm \
   -e ONMSCTL_CONFIG=/work/onmsctl.yaml \
   -e ONMS_PASSWORD \
   -v "$PWD:/work:ro" -w /work \
-  ghcr.io/no42-org/onmsctl:0.4.3 apply -f requisition.yaml
+  ghcr.io/no42-org/onmsctl:latest apply -f requisition.yaml
 ```
 
 `ONMS_URL`, `ONMS_USER`, and `ONMS_TOKEN` are also honored as overrides on top
@@ -160,13 +163,13 @@ the signature ties the image to a build of this repo's `docker.yml` workflow:
 cosign verify \
   --certificate-identity-regexp "^https://github.com/no42-org/onmsctl/.github/workflows/docker.yml@" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/no42-org/onmsctl:0.4.3
+  ghcr.io/no42-org/onmsctl:latest
 ```
 
 The image also carries a GitHub-issued SLSA attestation, verifiable by digest:
 
 ```sh
-gh attestation verify oci://ghcr.io/no42-org/onmsctl:0.4.3 --repo no42-org/onmsctl
+gh attestation verify oci://ghcr.io/no42-org/onmsctl:latest --repo no42-org/onmsctl
 ```
 
 > **Bleeding edge.** `ghcr.io/no42-org/onmsctl:rc` tracks the tip of `main`,
