@@ -21,7 +21,9 @@ Each `v*.*.*` tag produces, via CI:
   transitive tree.
 - **Sigstore (cosign) keyless signatures** for every artifact:
   one `.sig` and one `.pem` per file.
-- **GitHub Release** with auto-generated release notes.
+- **GitHub Release**, created as a **draft** with auto-generated notes.
+  Publishing is a deliberate human step — see *Publishing the draft*
+  below.
 
 Windows is not in the matrix yet; Windows operators build from source
 per the README.
@@ -68,9 +70,9 @@ Before tagging, verify on `main`:
      **no leading `v`** — the `vX.Y.Z` git tag publishes the image as
      `X.Y.Z` (plus `X.Y` and `latest`), per `docker/metadata-action`.
 4. **Conventional Commits** — all commits since the previous tag
-   follow `<type>(<scope>): <subject>` so `softprops/action-gh-release`
-   generates clean notes. Breaking changes use `!` or a
-   `BREAKING CHANGE:` footer.
+   follow `<type>(<scope>): <subject>` so `--generate-notes` seeds the
+   draft cleanly. Breaking changes use `!` or a `BREAKING CHANGE:`
+   footer.
 5. **THIRD-PARTY-LICENSES.md** — regenerate if dependencies changed:
    `make licenses`. Commit any diff.
 6. **OpenSpec is settled** — `openspec list` reports no active
@@ -79,16 +81,25 @@ Before tagging, verify on `main`:
 
 ## Cutting the release
 
+`main` is protected: it takes pull requests only, so the version bump
+lands via a PR rather than a direct push.
+
 ```sh
-# 1. Bump the version on main (in a normal commit, not the tag).
+# 1. Bump the version on a branch.
+git checkout -b release/vX.Y.Z
 $EDITOR Cargo.toml                              # update [workspace.package].version
 $EDITOR README.md                               # bump the version refs (see checklist item 3)
 cargo check --workspace                          # refresh Cargo.lock
 git add Cargo.toml Cargo.lock README.md
-git commit -m "chore(release): bump workspace version to vX.Y.Z"
-git push origin main
+git commit -s -m "chore(release): bump workspace version to vX.Y.Z"
+git push -u origin release/vX.Y.Z
+gh pr create --fill
 
-# 2. Tag the same commit and push the tag.
+# 2. Merge once the gate is green, then sync main.
+gh pr merge --squash
+git checkout main && git pull
+
+# 3. Tag the merged bump commit and push the tag.
 git tag -a vX.Y.Z -m "Release vX.Y.Z"
 git push origin vX.Y.Z
 ```
@@ -100,27 +111,57 @@ the published binary's `onmsctl version` will lie.
 
 ## What CI does after the tag push
 
-The `.github/workflows/release.yml` workflow runs five jobs in order:
+The `.github/workflows/release.yml` workflow runs these jobs in order:
 
 1. **`validate-tag`** — checks the tag matches strict semver and
    determines whether it's a prerelease.
-2. **`build`** (matrix × 4 targets) — `make release-build
+2. **`gate`** — calls the shared `.github/workflows/gates.yml`, the
+   same `make verify` (fmt + clippy + build + test + deny) matrix that
+   pull requests must pass. Nothing below it publishes if this is red.
+3. **`build`** (matrix × 4 targets) — `make release-build
    TARGET=<triple>` for each target, stages the binary + SHA256
    under `dist/`.
-3. **`sbom`** — `make sbom` runs `cargo about` and emits CycloneDX
+4. **`sbom`** — `make sbom` runs `cargo about` and emits CycloneDX
    JSON files per workspace crate.
-4. **`release`** — downloads every staged artifact, builds the
+5. **`release`** — downloads every staged artifact, builds the
    aggregate `SHA256SUMS`, signs every file via `cosign sign-blob`
    (Sigstore keyless OIDC; no long-lived keys), and creates the
-   GitHub Release with `generate_release_notes: true`.
+   GitHub Release **as a draft** with auto-generated notes.
+
+`.github/workflows/docker.yml` runs in parallel off the same tag and is
+gated on the same `gates.yml` before it pushes or signs the image.
 
 The `release` job requests `id-token: write` only for itself — the
 OIDC token surface stays narrow.
 
 If the workflow fails partway, fix the underlying issue and re-push
-the tag. The workflow's `concurrency` setting cancels any in-flight
-run for the same tag rather than queuing duplicates. Mint of new
-Sigstore certs on each retry is expected.
+the tag. The workflow's `concurrency` setting never cancels an
+in-flight release: a re-pushed tag queues behind the running job
+instead of racing it, and the release step reuses the existing draft
+rather than failing on "already exists". Mint of new Sigstore certs on
+each retry is expected.
+
+## Publishing the draft
+
+The workflow leaves the release in **draft**, so nothing is public
+until you say so. Review, then publish:
+
+```sh
+VERSION=vX.Y.Z
+
+# Confirm every expected asset is attached (4 binaries + 4 .sha256,
+# SHA256SUMS, the SBOM, and a .sig/.pem for each signed file).
+gh release view "${VERSION}" --json assets --jq '.assets[].name' | sort
+
+# Replace the auto-generated notes with curated ones, and publish.
+$EDITOR notes.md
+gh release edit "${VERSION}" --notes-file notes.md --draft=false
+```
+
+Publish promptly: `docker.yml` pushes the container tags (including
+`latest` for a stable tag) as soon as it finishes, so a long-lived
+draft leaves GHCR ahead of the GitHub Release. Prereleases keep their
+`--prerelease` flag and never move `latest`.
 
 ## Verifying a published release
 

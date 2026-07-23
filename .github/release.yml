@@ -1,6 +1,7 @@
-# Configures auto-generated release notes consumed by
-# softprops/action-gh-release (generate_release_notes: true) in
-# .github/workflows/release.yml.
+# Configures the auto-generated release notes that
+# .github/workflows/release.yml requests via `gh release create
+# --generate-notes`. Those notes seed the draft release; a maintainer
+# replaces them with curated ones before publishing (see RELEASING.md).
 #
 # PRs labeled `internal`, `chore`, or `ignore-for-release` are hidden
 # from the public changelog so internal work-in-progress titles do not
