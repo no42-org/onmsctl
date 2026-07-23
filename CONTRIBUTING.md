@@ -82,12 +82,52 @@ Rules:
 
 ## Commit messages
 
-Use [Conventional Commits](https://www.conventionalcommits.org/). Every
-commit assisted by an AI tool **MUST** include an `Assisted-by:` trailer
-per the project's `CLAUDE.md`.
+Use [Conventional Commits](https://www.conventionalcommits.org/):
+`<type>[scope]: <description>`, where type is one of `feat`, `fix`,
+`docs`, `style`, `refactor`, `perf`, `test`, `chore`, `ci`, `build`, or
+`revert`. Breaking changes append `!` or add a `BREAKING CHANGE:` footer.
 
-## Sign-off
+## Sign-off (DCO)
 
-Only the human submitter may add a `Signed-off-by:` trailer. AI agents
-**MUST NOT** add one — only humans can certify the Developer Certificate
-of Origin.
+Every commit **MUST** be signed off under the
+[Developer Certificate of Origin](https://developercertificate.org/) 1.1:
+
+```
+git commit -s -m "fix(iam): ..."
+```
+
+That appends a trailer from your git identity:
+
+```
+Signed-off-by: Jane Developer <jane@example.org>
+```
+
+Signing off certifies that you wrote the contribution, or otherwise have
+the right to submit it under Apache-2.0. It must carry a real name and a
+reachable email — a pseudonym or a `noreply` address does not certify
+anything.
+
+Unsigned commits are not merged. If you forgot, `git commit --amend -s`
+fixes the last one and `git rebase --signoff <base>` fixes a branch.
+
+## AI-assisted contributions
+
+AI assistance is welcome, under two rules.
+
+**Disclose it.** Any commit produced with AI assistance **MUST** carry an
+`Assisted-by:` trailer naming the agent and model:
+
+```
+Assisted-by: ClaudeCode:claude-opus-4-8
+Signed-off-by: Jane Developer <jane@example.org>
+```
+
+**A human stays responsible.** Only the human submitter may add
+`Signed-off-by:` — AI agents **MUST NOT** add one, because only a human
+can certify the DCO. Signing off on AI-assisted work means you have
+reviewed it, you understand it, and you are asserting it is
+license-clean. In particular, the clean-room rule above binds AI-assisted
+code exactly as it binds hand-written code: an agent must not be pointed
+at OpenNMS server source.
+
+Repository-wide guidance for coding agents lives in [`AGENTS.md`](AGENTS.md).
