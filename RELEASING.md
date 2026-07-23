@@ -221,6 +221,47 @@ git push origin v0.2.0-rc.1
 Prereleases ship the same artifacts as stable releases but won't
 appear as "Latest release" on the GitHub Releases page.
 
+A manual `vX.Y.Z-rc.N` prerelease is distinct from the automatic
+**preview** channel below: the former is a deliberate, immutable tag you
+push; the latter is a rolling build refreshed on every merge to main.
+
+## Preview builds (automatic, every merge to main)
+
+`.github/workflows/preview.yml` runs on every push to `main`, gated on
+the same `gates.yml` as everything else, and publishes two moving
+targets — never `latest`, never a `vX.Y.Z` tag:
+
+- **`ghcr.io/no42-org/onmsctl:rc`** — a single mutable multi-arch image
+  tag, overwritten each build. Signed and provenance-attested like a
+  release image.
+- **the `preview` GitHub prerelease** — the four signed target binaries
+  under constant filenames (`onmsctl-preview-<target>`), rolled to the
+  latest commit each build. Marked prerelease, so it never shows as
+  "Latest release".
+
+Both are explicitly unstable — rebuilt every merge, no stability
+guarantee. They exist to test a fix ahead of a real release. Pull and
+verify them exactly like a release, substituting the `preview` /
+`rc` reference:
+
+```sh
+# Binary (note: identity is preview.yml, not release.yml)
+gh release download preview --repo no42-org/onmsctl -p 'onmsctl-preview-*'
+gh attestation verify onmsctl-preview-x86_64-unknown-linux-gnu --repo no42-org/onmsctl
+cosign verify-blob \
+  --certificate-identity-regexp "^https://github.com/no42-org/onmsctl/.github/workflows/preview.yml@" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate onmsctl-preview-x86_64-unknown-linux-gnu.pem \
+  --signature  onmsctl-preview-x86_64-unknown-linux-gnu.sig \
+  onmsctl-preview-x86_64-unknown-linux-gnu
+
+# Image
+cosign verify \
+  --certificate-identity-regexp "^https://github.com/no42-org/onmsctl/.github/workflows/preview.yml@" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  ghcr.io/no42-org/onmsctl:rc
+```
+
 ## Hotfix flow
 
 For a critical fix on an already-released version (e.g. `v0.1.0` is
