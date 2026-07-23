@@ -31,8 +31,9 @@ jobs:
     runs-on: ubuntu-24.04 # was ubuntu-latest
     permissions:
       contents: read
-      packages: write   # push the image to GHCR
-      id-token: write   # cosign keyless OIDC (scoped to this job only)
+      packages: write      # push the image to GHCR
+      id-token: write      # cosign keyless OIDC + provenance OIDC
+      attestations: write  # record SLSA build provenance for the image digest
     # arm64 compiles under QEMU emulation, so the build is slow; give it room.
     timeout-minutes: 90
     steps:
@@ -92,3 +93,16 @@ jobs:
         # Sign the multi-arch manifest digest once; the signature covers every
         # tag that points at it. Verify with the recipe in the README.
         run: cosign sign --yes "${IMAGE}@${DIGEST}"
+
+      - name: Attest build provenance (image digest)
+        # GitHub-issued SLSA provenance for the manifest digest, pushed to
+        # GHCR alongside the image and verifiable with
+        # `gh attestation verify oci://<image>@<digest> --repo no42-org/onmsctl`.
+        # Separate from the buildx `provenance: mode=max` above: that is
+        # BuildKit's own attestation baked into the image; this is a
+        # GitHub attestation the `gh` CLI understands.
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
