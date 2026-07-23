@@ -176,8 +176,9 @@ jobs:
     needs: [validate-tag, gate, build, sbom]
     runs-on: ubuntu-24.04 # was ubuntu-latest
     permissions:
-      contents: write   # create the GitHub Release + upload assets
-      id-token: write   # cosign keyless OIDC (scoped to this job only)
+      contents: write      # create the GitHub Release + upload assets
+      id-token: write      # cosign keyless OIDC + provenance OIDC
+      attestations: write  # record SLSA build provenance for the artifacts
     timeout-minutes: 15
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -247,6 +248,23 @@ jobs:
               --output-certificate "${f}.pem" \
               "$f"
           done
+
+      - name: Attest build provenance (binaries + SBOM + checksums)
+        # GitHub-issued SLSA provenance, verifiable with `gh attestation
+        # verify <file> --repo no42-org/onmsctl`. Distinct from the cosign
+        # signatures above: cosign proves "signed by this workflow's OIDC
+        # identity", provenance proves "built by this workflow from this
+        # commit". The subject glob covers the binaries; the SBOM and
+        # SHA256SUMS are named explicitly. `.sig`/`.pem`/`.sha256` are
+        # excluded — they are signatures over the subjects, not subjects.
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: |
+            release/onmsctl-*-*
+            !release/*.sha256
+            !release/*.sig
+            !release/*.pem
+            release/SHA256SUMS
 
       - name: Create GitHub Release (draft)
         # Use the native gh CLI rather than softprops/action-gh-release —

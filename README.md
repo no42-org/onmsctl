@@ -1,5 +1,11 @@
 # onmsctl
 
+[![verify](https://github.com/no42-org/onmsctl/actions/workflows/verify.yml/badge.svg?branch=main)](https://github.com/no42-org/onmsctl/actions/workflows/verify.yml)
+[![CodeQL](https://github.com/no42-org/onmsctl/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/no42-org/onmsctl/actions/workflows/codeql.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/no42-org/onmsctl/badge)](https://scorecard.dev/viewer/?uri=github.com/no42-org/onmsctl)
+[![latest release](https://img.shields.io/github/v/release/no42-org/onmsctl?sort=semver)](https://github.com/no42-org/onmsctl/releases/latest)
+[![license](https://img.shields.io/github/license/no42-org/onmsctl)](LICENSE)
+
 A `kubectl`-style command-line interface for [OpenNMS Horizon][horizon]. One
 declarative entrypoint — `onmsctl apply -f` — peeks each YAML document's `kind`
 and routes it to the right handler, so users, event sources, SNMP config,
@@ -70,6 +76,15 @@ cosign verify-blob \
   --certificate onmsctl-${VERSION}-${TARGET}.pem \
   --signature  onmsctl-${VERSION}-${TARGET}.sig \
   onmsctl-${VERSION}-${TARGET}
+```
+
+**Verify build provenance (optional)** — every binary also carries a
+GitHub-issued SLSA attestation proving it was built by this repo's release
+workflow from a specific commit. Where the cosign check above proves *who
+signed it*, this proves *how it was built*:
+
+```sh
+gh attestation verify onmsctl-${VERSION}-${TARGET} --repo no42-org/onmsctl
 ```
 
 Binaries are Sigstore-signed but not Apple-notarized; on macOS, clear the
@@ -146,6 +161,12 @@ cosign verify \
   --certificate-identity-regexp "^https://github.com/no42-org/onmsctl/.github/workflows/docker.yml@" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   ghcr.io/no42-org/onmsctl:0.4.3
+```
+
+The image also carries a GitHub-issued SLSA attestation, verifiable by digest:
+
+```sh
+gh attestation verify oci://ghcr.io/no42-org/onmsctl:0.4.3 --repo no42-org/onmsctl
 ```
 
 Build it locally for your host architecture with `make docker` (produces

@@ -21,6 +21,10 @@ Each `v*.*.*` tag produces, via CI:
   transitive tree.
 - **Sigstore (cosign) keyless signatures** for every artifact:
   one `.sig` and one `.pem` per file.
+- **SLSA build provenance** — a GitHub-issued attestation over the
+  binaries, SBOM and `SHA256SUMS`, verifiable with `gh attestation
+  verify <file> --repo no42-org/onmsctl`. The container image gets the
+  same, by digest, pushed to GHCR alongside it.
 - **GitHub Release**, created as a **draft** with auto-generated notes.
   Publishing is a deliberate human step — see *Publishing the draft*
   below.
@@ -189,6 +193,10 @@ cosign verify-blob \
   --certificate onmsctl-${VERSION}-${TARGET}.pem \
   --signature  onmsctl-${VERSION}-${TARGET}.sig \
   onmsctl-${VERSION}-${TARGET}
+
+# SLSA provenance — proves this repo's workflow built it from a commit.
+# No .sig/.pem download needed; the attestation lives with the release.
+gh attestation verify onmsctl-${VERSION}-${TARGET} --repo no42-org/onmsctl
 
 # Smoke test
 chmod +x onmsctl-${VERSION}-${TARGET}
