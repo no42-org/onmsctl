@@ -1,0 +1,56 @@
+# CodeQL analysis. Two languages are in scope for this repo:
+#   rust    — the workspace itself
+#   actions — the workflow files, which handle a GHCR push token and
+#             sign releases, so they are worth analysing as code
+#
+# Neither needs a build: CodeQL's Rust and Actions extractors run in
+# `build-mode: none`, reading the source directly.
+name: codeql
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Tuesdays 04:00 UTC. Offset from the Monday cargo-deny cron in
+    # verify.yml so a bad week doesn't land as one indistinguishable pile
+    # of failures.
+    - cron: '0 4 * * 2'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  analyze:
+    name: analyze (${{ matrix.language }})
+    # Skip scheduled runs on forks — only the upstream repo's cron should fire.
+    if: github.event_name != 'schedule' || github.repository == 'no42-org/onmsctl'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      security-events: write   # upload SARIF to the Security tab
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [rust, actions]
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          queries: security-and-quality
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
+        with:
+          category: /language:${{ matrix.language }}

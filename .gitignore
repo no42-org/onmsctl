@@ -25,3 +25,6 @@ openspec/
 
 # OS
 .DS_Store
+
+# Locally fetched lint binaries (actionlint, zizmor)
+.bin/

@@ -49,6 +49,14 @@ and commit the updated `THIRD-PARTY-LICENSES.md`.
 
 Run `make verify` before opening a pull request. CI runs the same target.
 
+If you touched anything under `.github/workflows/`, also run
+`make lint-actions` — actionlint plus zizmor, the same gate CI applies.
+It fetches both tools as pinned release binaries into `.bin/`, so it
+needs no toolchain beyond `curl` and `tar`. It covers workflow syntax,
+embedded shell, SHA pinning, least-privilege permissions, template
+injection, and credential persistence. The runner-pin and SPDX-header
+rules below are *not* machine-checked — they are on you.
+
 ## CI runner images
 
 GitHub Actions jobs pin their runner to an explicit version label (e.g. `ubuntu-24.04`,

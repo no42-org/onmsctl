@@ -81,6 +81,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install pinned Rust toolchain (honors rust-toolchain.toml)
         run: rustup show
@@ -94,10 +96,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ${{ matrix.cross_apt }}
 
-      - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
-        with:
-          key: ${{ matrix.target }}
-
+      # Deliberately NOT cached. This job's output is signed, attested and
+      # published; building it from a restored cache would put artifacts
+      # produced by earlier runs into the trusted path. Release builds are
+      # rare, so a cold build is the right trade. (zizmor: cache-poisoning)
       - name: Build release binary
         env:
           # Empty for native builds; set only when cross_linker is non-empty.
@@ -106,11 +108,16 @@ jobs:
 
       - name: Stage artifact and checksum
         shell: bash
+        # Both values reach the script through env rather than by template
+        # expansion into the shell source, so neither can be parsed as code.
+        env:
+          TAG: ${{ github.ref_name }}
+          TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
           mkdir -p dist
-          name="onmsctl-${{ github.ref_name }}-${{ matrix.target }}"
-          cp "target/${{ matrix.target }}/release/onmsctl" "dist/${name}"
+          name="onmsctl-${TAG}-${TARGET}"
+          cp "target/${TARGET}/release/onmsctl" "dist/${name}"
           chmod 0755 "dist/${name}"
           ( cd dist && shasum -a 256 "${name}" > "${name}.sha256" )
 
@@ -130,20 +137,22 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install pinned Rust toolchain
         run: rustup show
 
-      # Default rust-cache key (Cargo.lock hash) so this job's cache
-      # actually refreshes between runs. The previous static `key: sbom`
-      # made the cache restore-only after the first save.
-      - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
-
+      # Deliberately NOT cached, for the same reason as the build job: the
+      # SBOM is a published, signed artifact describing the dependency tree,
+      # so it is generated from a clean checkout. (zizmor: cache-poisoning)
       - name: Generate CycloneDX SBOM
         run: make sbom
 
       - name: Stage SBOM with release-versioned filename
         shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           mkdir -p dist
@@ -152,7 +161,7 @@ jobs:
           # its transitive dep tree already covers the linked library
           # crates (`onmsctl-core`, `onmsctl-eventconf`), and `onmsctl-it`
           # is a test-only crate whose dev-deps aren't in the binary.
-          cp sbom/onmsctl.cdx.json "dist/onmsctl-${{ github.ref_name }}-onmsctl.cdx.json"
+          cp sbom/onmsctl.cdx.json "dist/onmsctl-${TAG}-onmsctl.cdx.json"
           ls -la dist/
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -194,7 +203,8 @@ jobs:
           for f in release/*.sha256; do
             cat "$f" >> release/SHA256SUMS
           done
-          ( cd release && shasum -a 256 *.cdx.json >> SHA256SUMS )
+          # `--` so an asset name starting with a dash cannot be read as a flag.
+          ( cd release && shasum -a 256 -- *.cdx.json >> SHA256SUMS )
           cat release/SHA256SUMS
 
       - name: Install cosign

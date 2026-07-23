@@ -1,4 +1,4 @@
-.PHONY: help build test verify fmt clippy deny licenses install-tools install-cargo-deny install-cargo-about install-cargo-cyclonedx release-build sbom integration schema docker clean
+.PHONY: help build test verify fmt clippy deny lint-actions licenses install-tools install-cargo-deny install-cargo-about install-cargo-cyclonedx install-actionlint install-zizmor release-build sbom integration schema docker clean
 
 # Self-documenting: annotate each user-facing target with `## description`
 # and it shows up in `make help`. Sorted in declaration order.
@@ -25,6 +25,17 @@ deny: install-cargo-deny  ## Check advisories, bans, licenses, sources (cargo-de
 
 verify: fmt clippy build test deny  ## Full quality gate: fmt + clippy + build + test + deny
 
+# Lint the workflows themselves. actionlint covers syntax, expressions and
+# embedded shell (via shellcheck); zizmor covers the security rules this
+# project otherwise enforces by hand — SHA pinning, least-privilege
+# permissions, template injection, and credential persistence.
+#
+# Run as its own CI job rather than folded into `verify`, so a workflow nit
+# is not reported as a Rust failure.
+lint-actions: install-actionlint install-zizmor  ## Lint .github/workflows (actionlint + zizmor)
+	$(ACTIONLINT)
+	$(ZIZMOR) .github/workflows/
+
 licenses: install-cargo-about  ## Regenerate THIRD-PARTY-LICENSES.md from the dep tree
 	# Atomic write: failure leaves the existing file untouched.
 	cargo about generate -c about.toml -o THIRD-PARTY-LICENSES.md.tmp about.hbs && \
@@ -50,6 +61,55 @@ install-cargo-about:
 
 install-cargo-cyclonedx:
 	@command -v cargo-cyclonedx > /dev/null 2>&1 || cargo install --locked cargo-cyclonedx
+
+# actionlint and zizmor are fetched as pinned upstream release binaries
+# into .bin/ rather than built from source. actionlint has no crate (it is
+# Go), and building zizmor from source is not possible here at all: it
+# needs a newer rustc than the toolchain this workspace pins, so
+# `cargo install` fails against rust-toolchain.toml. Prebuilt binaries
+# avoid both problems and keep CI fast.
+BIN_DIR := $(CURDIR)/.bin
+
+UNAME_S := $(shell uname -s)
+UNAME_M := $(shell uname -m)
+
+ACTIONLINT_VERSION ?= 1.7.12
+ZIZMOR_VERSION ?= 1.28.0
+
+# actionlint uses Go-style os/arch; zizmor uses Rust target triples.
+ifeq ($(UNAME_S),Darwin)
+  ACTIONLINT_OS := darwin
+  ZIZMOR_TARGET_OS := apple-darwin
+else
+  ACTIONLINT_OS := linux
+  ZIZMOR_TARGET_OS := unknown-linux-gnu
+endif
+ifeq ($(UNAME_M),x86_64)
+  ACTIONLINT_ARCH := amd64
+  ZIZMOR_ARCH := x86_64
+else
+  ACTIONLINT_ARCH := arm64
+  ZIZMOR_ARCH := aarch64
+endif
+
+ACTIONLINT := $(shell command -v actionlint 2> /dev/null || echo $(BIN_DIR)/actionlint)
+ZIZMOR := $(shell command -v zizmor 2> /dev/null || echo $(BIN_DIR)/zizmor)
+
+install-actionlint:
+	@test -x "$(ACTIONLINT)" || { \
+	  mkdir -p $(BIN_DIR); \
+	  echo "fetching actionlint $(ACTIONLINT_VERSION) ($(ACTIONLINT_OS)/$(ACTIONLINT_ARCH))"; \
+	  curl -fsSL "https://github.com/rhysd/actionlint/releases/download/v$(ACTIONLINT_VERSION)/actionlint_$(ACTIONLINT_VERSION)_$(ACTIONLINT_OS)_$(ACTIONLINT_ARCH).tar.gz" \
+	    | tar -xz -C $(BIN_DIR) actionlint; \
+	}
+
+install-zizmor:
+	@test -x "$(ZIZMOR)" || { \
+	  mkdir -p $(BIN_DIR); \
+	  echo "fetching zizmor $(ZIZMOR_VERSION) ($(ZIZMOR_ARCH)-$(ZIZMOR_TARGET_OS))"; \
+	  curl -fsSL "https://github.com/zizmorcore/zizmor/releases/download/v$(ZIZMOR_VERSION)/zizmor-$(ZIZMOR_ARCH)-$(ZIZMOR_TARGET_OS).tar.gz" \
+	    | tar -xz -C $(BIN_DIR) zizmor; \
+	}
 
 # Release-only targets. CI invokes these from .github/workflows/release.yml
 # so the local developer command and the CI command stay in sync.

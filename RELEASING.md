@@ -165,7 +165,10 @@ draft leaves GHCR ahead of the GitHub Release. Prereleases keep their
 
 ## Verifying a published release
 
-After CI completes (≈8 minutes), verify against the GitHub Release page:
+After CI completes, verify against the GitHub Release page. Expect the
+tag workflow to take a while: the `build` and `sbom` jobs deliberately
+run without a Rust cache, so what gets signed is built from a clean
+checkout rather than from artifacts a previous run left behind.
 
 ```sh
 VERSION=vX.Y.Z

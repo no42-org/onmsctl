@@ -36,3 +36,26 @@ jobs:
 
       - name: Run verify
         run: make verify
+
+  actions-lint:
+    # Enforces the workflow hygiene rules — SHA pinning, least-privilege
+    # permissions, timeouts, template injection, credential persistence —
+    # mechanically, instead of by review. Separate from `verify` so a
+    # workflow nit does not surface as a Rust failure.
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # actionlint is a Go binary; zizmor installs via cargo. rust-cache
+      # restores ~/.cargo/bin, so neither is rebuilt on every run.
+      - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
+        with:
+          key: lint-actions
+
+      - name: Lint workflows
+        run: make lint-actions
