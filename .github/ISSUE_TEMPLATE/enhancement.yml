@@ -1,0 +1,66 @@
+name: Enhancement
+description: Propose a new capability or a change to an existing one
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Enhancements are tracked as issues before any pull request — see
+        [CONTRIBUTING.md](https://github.com/no42-org/onmsctl/blob/main/CONTRIBUTING.md).
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight
+      options:
+        - label: I searched the existing issues and this is not a duplicate.
+          required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: >
+        Describe the situation you're in, not the solution you have in mind.
+        What are you trying to do today, and where does it fall down?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behaviour
+      description: >
+        What should onmsctl do? If it's a new `kind:`, sketch the YAML. If it's
+        a new or changed command, show the invocation.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Including any workaround you're using now.
+    validations:
+      required: false
+
+  - type: input
+    id: api-surface
+    attributes:
+      label: OpenNMS API surface
+      description: >
+        If known, the REST endpoint(s) involved and the earliest Horizon or
+        Meridian version that exposes them. Capabilities gated on an
+        unreleased endpoint need a version gate, so this matters.
+      placeholder: "/rest/business-services — present in all supported versions"
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: breaking
+    attributes:
+      label: Compatibility
+      options:
+        - label: This would change existing CLI flags, config schema, or manifest schema.
+          required: false

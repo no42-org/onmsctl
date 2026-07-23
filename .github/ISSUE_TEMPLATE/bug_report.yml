@@ -1,0 +1,98 @@
+name: Bug report
+description: Something in onmsctl behaves incorrectly
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Please redact credentials, tokens and hostnames
+        from anything you paste.
+
+        **Security vulnerabilities do not go here** — see
+        [SECURITY.md](https://github.com/no42-org/onmsctl/blob/main/SECURITY.md).
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight
+      options:
+        - label: I searched the existing issues and this is not a duplicate.
+          required: true
+        - label: I reproduced this on the latest release.
+          required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect instead?
+      placeholder: |
+        Running `onmsctl apply -f requisition.yaml` reported success, but the
+        requisition was never imported. I expected ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: >
+        The exact commands, in order. If a manifest is involved, include it —
+        a minimal one that still reproduces the problem is ideal.
+      placeholder: |
+        1. onmsctl config use-context lab
+        2. onmsctl apply -f requisition.yaml
+        3. onmsctl requisition status example
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: output
+    attributes:
+      label: Actual output
+      description: >
+        Paste the command output. Re-running with `-v` adds full error chains
+        and capability-specific diagnostics, which usually makes this
+        diagnosable.
+      render: shell
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: onmsctl version
+      description: Output of `onmsctl version`.
+      placeholder: "0.4.3"
+    validations:
+      required: true
+
+  - type: input
+    id: server-version
+    attributes:
+      label: OpenNMS version
+      description: Horizon or Meridian version this was run against.
+      placeholder: "Horizon 35.0.5"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install-method
+    attributes:
+      label: How did you install it?
+      options:
+        - Release binary
+        - Container image (ghcr.io)
+        - Built from source
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: platform
+    attributes:
+      label: OS and architecture
+      placeholder: "macOS 26 arm64 / Ubuntu 24.04 x86_64"
+    validations:
+      required: true

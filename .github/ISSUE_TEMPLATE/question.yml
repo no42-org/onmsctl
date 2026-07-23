@@ -1,0 +1,43 @@
+name: Question
+description: Ask how to do something with onmsctl
+labels: ["question", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        GitHub Discussions is not enabled on this repository, so questions
+        belong here. Please check [SUPPORT.md](https://github.com/no42-org/onmsctl/blob/main/SUPPORT.md)
+        and the [Quick Start](https://github.com/no42-org/onmsctl/blob/main/docs/quickstart.md)
+        first.
+
+        Questions about **OpenNMS Horizon or Meridian itself** are better
+        asked in the [OpenNMS community](https://opennms.discourse.group/) —
+        onmsctl is an independent client and is not affiliated with
+        The OpenNMS Group.
+
+  - type: textarea
+    id: question
+    attributes:
+      label: What are you trying to do?
+      description: >
+        Include the command you ran and what happened, if you've tried
+        something. Redact credentials and hostnames.
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: onmsctl version
+      description: Output of `onmsctl version`.
+      placeholder: "0.4.3"
+    validations:
+      required: false
+
+  - type: input
+    id: server-version
+    attributes:
+      label: OpenNMS version
+      placeholder: "Horizon 35.0.5"
+    validations:
+      required: false

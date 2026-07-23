@@ -1,0 +1,12 @@
+# Every issue should arrive through one of the forms above, so that it
+# lands pre-labelled and with the version/repro detail already filled in.
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/no42-org/onmsctl/security/advisories/new
+    about: Privately disclose a vulnerability. Never open a public issue for one.
+  - name: OpenNMS Horizon / Meridian questions
+    url: https://opennms.discourse.group/
+    about: >-
+      For the OpenNMS server itself. onmsctl is an independent client and is
+      not affiliated with The OpenNMS Group.
