@@ -13,7 +13,10 @@
 # buildx/QEMU, so no cross-linker is required.
 
 # ---- builder ---------------------------------------------------------------
-FROM rust:1-bookworm AS builder
+# Pinned by digest (not just the tag) so a rebuilt image is byte-reproducible
+# and cannot silently pull a re-pushed `1-bookworm`. Dependabot's docker
+# ecosystem keeps the digest + tag comment current.
+FROM rust:1-bookworm@sha256:77fac8b98f9f46062bb680b6d25d5bcaabfc400143952ebc572e924bcbedc3fa AS builder
 
 # musl-tools provides `musl-gcc`, used both as the C compiler for `ring`'s
 # build script and as the linker for the *-musl target.
@@ -47,8 +50,9 @@ RUN --mount=type=cache,id=cargo-registry-${TARGETARCH},target=/usr/local/cargo/r
 # ---- runtime ---------------------------------------------------------------
 # distroless/static: no libc, no shell, runs as the bundled `nonroot` user
 # (uid 65532). TLS roots are compiled into the binary (reqwest + webpki-roots),
-# so no ca-certificates layer is needed.
-FROM gcr.io/distroless/static:nonroot
+# so no ca-certificates layer is needed. Pinned by digest for the same reason
+# as the builder base; Dependabot keeps it current.
+FROM gcr.io/distroless/static:nonroot@sha256:f7f8f729987ad0fdf6b05eeeae94b26e6a0f613bdf46feea7fc40f7bd72953e6
 
 COPY --from=builder /out/onmsctl /usr/local/bin/onmsctl
 
