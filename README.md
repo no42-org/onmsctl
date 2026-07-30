@@ -108,15 +108,15 @@ cargo install --path crates/onmsctl     # → ~/.cargo/bin
 version` prints the binary version alongside each linked capability:
 
 ```
-onmsctl 0.4.3
+onmsctl 0.4.4
 capabilities:
-  - eventconf 0.4.3
-  - provisioning 0.4.3
-  - iam 0.4.3
-  - snmp 0.4.3
-  - maintenance 0.4.3
-  - datacollection 0.4.3
-  - business-service 0.4.3
+  - eventconf 0.4.4
+  - provisioning 0.4.4
+  - iam 0.4.4
+  - snmp 0.4.4
+  - maintenance 0.4.4
+  - datacollection 0.4.4
+  - business-service 0.4.4
 ```
 
 ---
@@ -127,9 +127,9 @@ A multi-arch (`linux/amd64`, `linux/arm64`) **distroless** image is published to
 GHCR for every `v*.*.*` tag at `ghcr.io/no42-org/onmsctl`. It's a single static
 binary on `gcr.io/distroless/static` — no shell, no package manager, running as
 the non-root user `65532` — so it's small and has a minimal attack surface for
-CI/CD pipelines. Each release publishes the exact version (`0.4.3`), the
+CI/CD pipelines. Each release publishes the exact version (`0.4.4`), the
 rolling `MAJOR.MINOR` tag (`0.4`), and `latest` (the newest non-prerelease).
-Image tags carry no leading `v` (the `v0.4.3` git tag publishes as `0.4.3`):
+Image tags carry no leading `v` (the `v0.4.4` git tag publishes as `0.4.4`):
 
 ```sh
 docker run --rm ghcr.io/no42-org/onmsctl:latest version
