@@ -38,10 +38,10 @@ per the README.
 
 ## Versioning
 
-The workspace version lives in **one** place:
-`[workspace.package].version` in `Cargo.toml`. All workspace crates
-inherit it via `version.workspace = true`. There is no
-per-crate version drift.
+The workspace version lives in `Cargo.toml`, in two spots that move together:
+`[workspace.package].version`, which every crate inherits via `version.workspace = true`,
+and the `=X.Y.Z` pins on the workspace-internal dependencies under `[workspace.dependencies]`, which mirror it (they exist so `cargo deny check bans` doesn't see wildcard deps).
+Bump both — `cargo check` fails loudly if they disagree, so a missed pin cannot ship.
 
 Semantic versioning:
 
@@ -65,10 +65,8 @@ Before tagging, verify on `main`:
 
 1. **CI is green** — `make verify` passes locally; the latest push to
    `main` has successful `verify` and `integration` workflow runs.
-2. **Version bumped** — `Cargo.toml`'s `[workspace.package].version`
-   matches the tag you're about to push (without the leading `v`).
-   Cargo.lock updates from a `cargo check` after the bump are
-   committed.
+2. **Version bumped** — `Cargo.toml`'s `[workspace.package].version` **and** the `=X.Y.Z` internal dep pins under `[workspace.dependencies]` match the tag you're about to push (without the leading `v`).
+   Cargo.lock updates from a `cargo check` after the bump are committed.
 3. **README version references updated** — bump the version strings in
    `README.md` so the docs match the release:
    - the `VERSION=vX.Y.Z` value in the **Install** download example,
@@ -81,8 +79,8 @@ Before tagging, verify on `main`:
    follow `<type>(<scope>): <subject>` so `--generate-notes` seeds the
    draft cleanly. Breaking changes use `!` or a `BREAKING CHANGE:`
    footer.
-5. **THIRD-PARTY-LICENSES.md** — regenerate if dependencies changed:
-   `make licenses`. Commit any diff.
+5. **THIRD-PARTY-LICENSES.md** — regenerate if dependencies changed: `make licenses`. Commit any diff.
+   The `licenses-drift` gate in CI fails PRs on a stale report, so this is normally already clean by the time you're here.
 6. **OpenSpec is settled** — `openspec list` reports no active
    changes (or only changes intentionally deferred to a future
    release).
@@ -95,7 +93,7 @@ lands via a PR rather than a direct push.
 ```sh
 # 1. Bump the version on a branch.
 git checkout -b release/vX.Y.Z
-$EDITOR Cargo.toml                              # update [workspace.package].version
+$EDITOR Cargo.toml                              # bump [workspace.package].version + the =X.Y.Z internal dep pins
 $EDITOR README.md                               # bump the version refs (see checklist item 3)
 cargo check --workspace                          # refresh Cargo.lock
 git add Cargo.toml Cargo.lock README.md

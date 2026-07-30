@@ -13,7 +13,7 @@ Rust workspace, Apache-2.0, pre-1.0.
 | `make test` | Workspace unit + doc tests. |
 | `make lint-actions` | Lint `.github/workflows` (actionlint + zizmor). Also a CI gate. |
 | `make schema` | Regenerate the committed `schemas/*.schema.json`. |
-| `make licenses` | Regenerate `THIRD-PARTY-LICENSES.md` after a dependency change. |
+| `make licenses` | Regenerate `THIRD-PARTY-LICENSES.md` after a dependency change. CI (`licenses-drift`) fails on a stale report. |
 | `make integration` | Live-Horizon tests. Needs `ONMSCTL_TEST_URL` / `_USER` / `_PASSWORD`. |
 
 Single test: `cargo test -p onmsctl-core peek_kind` (add `-- --nocapture` for output).
