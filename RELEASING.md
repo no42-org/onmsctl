@@ -14,15 +14,19 @@ Each `v*.*.*` tag produces, via CI:
   - `onmsctl-vX.Y.Z-x86_64-apple-darwin`
   - `onmsctl-vX.Y.Z-aarch64-apple-darwin`
 - **SHA256 checksums** per binary (`*.sha256`) plus an aggregate
-  `SHA256SUMS` covering binaries and SBOMs.
+  `SHA256SUMS` covering binaries, SBOM and SBOM report.
 - **CycloneDX SBOM** (`onmsctl-vX.Y.Z-onmsctl.cdx.json`) for the
   shipped binary, spec version 1.5. Library and test crates are not
   shipped separately — their runtime deps are already in the binary's
   transitive tree.
+- **SBOM HTML report** (`onmsctl-vX.Y.Z-sbom-report.html`) — the same
+  SBOM rendered by [blitsbom](https://github.com/no42-org/blitsbom)
+  into one self-contained HTML file that works offline, for reviewers
+  who want to browse components and licenses without SBOM tooling.
 - **Sigstore (cosign) keyless signatures** for every artifact:
   one `.sig` and one `.pem` per file.
 - **SLSA build provenance** — a GitHub-issued attestation over the
-  binaries, SBOM and `SHA256SUMS`, verifiable with `gh attestation
+  binaries, SBOM, SBOM report and `SHA256SUMS`, verifiable with `gh attestation
   verify <file> --repo no42-org/onmsctl`. The container image gets the
   same, by digest, pushed to GHCR alongside it.
 - **GitHub Release**, created as a **draft** with auto-generated notes.
@@ -125,8 +129,10 @@ The `.github/workflows/release.yml` workflow runs these jobs in order:
 3. **`build`** (matrix × 4 targets) — `make release-build
    TARGET=<triple>` for each target, stages the binary + SHA256
    under `dist/`.
-4. **`sbom`** — `make sbom` runs `cargo about` and emits CycloneDX
-   JSON files per workspace crate.
+4. **`sbom`** — `make sbom` runs `cargo cyclonedx` and emits CycloneDX
+   JSON files per workspace crate, then the
+   [blitsbom action](https://github.com/no42-org/blitsbom) renders the
+   binary crate's SBOM into the self-contained HTML report.
 5. **`release`** — downloads every staged artifact, builds the
    aggregate `SHA256SUMS`, signs every file via `cosign sign-blob`
    (Sigstore keyless OIDC; no long-lived keys), and creates the
@@ -154,7 +160,8 @@ until you say so. Review, then publish:
 VERSION=vX.Y.Z
 
 # Confirm every expected asset is attached (4 binaries + 4 .sha256,
-# SHA256SUMS, the SBOM, and a .sig/.pem for each signed file).
+# SHA256SUMS, the SBOM, the SBOM HTML report, and a .sig/.pem for
+# each signed file).
 gh release view "${VERSION}" --json assets --jq '.assets[].name' | sort
 
 # Replace the auto-generated notes with curated ones, and publish.
