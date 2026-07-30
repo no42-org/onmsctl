@@ -149,6 +149,17 @@ jobs:
       - name: Generate CycloneDX SBOM
         run: make sbom
 
+      - name: Render SBOM HTML report (blitsbom)
+        # The SBOM above, rendered as one self-contained offline HTML file a
+        # reviewer can open without tooling. The action runs its generator
+        # container at the version matching this SHA pin (report-0.6.1, read
+        # from package.json at the pinned commit) — the release path never
+        # picks up a floating image.
+        uses: no42-org/blitsbom@3f2e7abc338c05d40a15058eafc318fee310e05f # v0.6.1
+        with:
+          sbom: sbom/onmsctl.cdx.json
+          output: sbom/onmsctl-sbom-report.html
+
       - name: Stage SBOM with release-versioned filename
         shell: bash
         env:
@@ -162,6 +173,7 @@ jobs:
           # crates (`onmsctl-core`, `onmsctl-eventconf`), and `onmsctl-it`
           # is a test-only crate whose dev-deps aren't in the binary.
           cp sbom/onmsctl.cdx.json "dist/onmsctl-${TAG}-onmsctl.cdx.json"
+          cp sbom/onmsctl-sbom-report.html "dist/onmsctl-${TAG}-sbom-report.html"
           ls -la dist/
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -197,15 +209,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Concatenate per-binary `.sha256` entries; then append SBOM
-          # checksums so a downstream `sha256sum -c SHA256SUMS` covers
-          # every release asset except the signatures themselves.
+          # Concatenate per-binary `.sha256` entries; then append SBOM and
+          # SBOM-report checksums so a downstream `sha256sum -c SHA256SUMS`
+          # covers every release asset except the signatures themselves.
           : > release/SHA256SUMS
           for f in release/*.sha256; do
             cat "$f" >> release/SHA256SUMS
           done
           # `--` so an asset name starting with a dash cannot be read as a flag.
-          ( cd release && shasum -a 256 -- *.cdx.json >> SHA256SUMS )
+          ( cd release && shasum -a 256 -- *.cdx.json *-sbom-report.html >> SHA256SUMS )
           cat release/SHA256SUMS
 
       - name: Install cosign
