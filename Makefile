@@ -72,8 +72,16 @@ install-tools: install-cargo-deny install-cargo-about
 install-cargo-deny:
 	@command -v cargo-deny > /dev/null 2>&1 || cargo install --locked cargo-deny
 
+# Pinned: the licenses-drift gate diffs a fresh regeneration against the
+# committed THIRD-PARTY-LICENSES.md, so every regeneration — local or CI —
+# must come from the same cargo-about version, or formatting/content
+# differences between releases of the tool read as license drift.
+CARGO_ABOUT_VERSION ?= 0.9.1
+
 install-cargo-about:
-	@command -v cargo-about > /dev/null 2>&1 || cargo install --locked --features=cli cargo-about
+	@installed="$$(cargo about --version 2> /dev/null | awk '{print $$2}')"; \
+	test "$$installed" = "$(CARGO_ABOUT_VERSION)" || \
+	  cargo install --locked --features=cli cargo-about --version $(CARGO_ABOUT_VERSION)
 
 install-cargo-cyclonedx:
 	@command -v cargo-cyclonedx > /dev/null 2>&1 || cargo install --locked cargo-cyclonedx

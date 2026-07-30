@@ -80,7 +80,8 @@ Before tagging, verify on `main`:
    draft cleanly. Breaking changes use `!` or a `BREAKING CHANGE:`
    footer.
 5. **THIRD-PARTY-LICENSES.md** — regenerate if dependencies changed: `make licenses`. Commit any diff.
-   The `licenses-drift` gate in CI fails PRs on a stale report, so this is normally already clean by the time you're here.
+   Run it **after** the version bump: the workspace crates' own versions appear in the report, so a pre-bump regeneration is already stale (this is exactly what the v0.4.4 prep got wrong).
+   The `licenses-drift` gate in CI fails PRs on a stale report, so a bump PR with a pre-bump report cannot merge.
 6. **OpenSpec is settled** — `openspec list` reports no active
    changes (or only changes intentionally deferred to a future
    release).
