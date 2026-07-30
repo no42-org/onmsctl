@@ -1,4 +1,4 @@
-.PHONY: help build test verify fmt clippy deny lint-actions licenses install-tools install-cargo-deny install-cargo-about install-cargo-cyclonedx install-actionlint install-zizmor release-build sbom integration schema docker clean
+.PHONY: help build test verify fmt clippy deny lint-actions licenses licenses-check install-tools install-cargo-deny install-cargo-about install-cargo-cyclonedx install-actionlint install-zizmor release-build sbom integration schema docker clean
 
 # Self-documenting: annotate each user-facing target with `## description`
 # and it shows up in `make help`. Sorted in declaration order.
@@ -41,6 +41,22 @@ licenses: install-cargo-about  ## Regenerate THIRD-PARTY-LICENSES.md from the de
 	cargo about generate -c about.toml -o THIRD-PARTY-LICENSES.md.tmp about.hbs && \
 		mv THIRD-PARTY-LICENSES.md.tmp THIRD-PARTY-LICENSES.md
 
+# Dependabot bumps Cargo.lock but never runs `make licenses`, so the
+# committed report drifts silently. This regenerates to a scratch file and
+# diffs — the committed file is never touched — and runs as the
+# `licenses-drift` job in gates.yml so the drift fails the PR that
+# introduces it, not the next release's checklist.
+licenses-check: install-cargo-about  ## Fail if THIRD-PARTY-LICENSES.md is stale vs the dep tree
+	@cargo about generate -c about.toml -o THIRD-PARTY-LICENSES.md.check about.hbs
+	@if diff -q THIRD-PARTY-LICENSES.md THIRD-PARTY-LICENSES.md.check > /dev/null; then \
+	  rm -f THIRD-PARTY-LICENSES.md.check; \
+	  echo "THIRD-PARTY-LICENSES.md is current"; \
+	else \
+	  rm -f THIRD-PARTY-LICENSES.md.check; \
+	  echo "THIRD-PARTY-LICENSES.md is stale — run 'make licenses' and commit the diff." >&2; \
+	  exit 1; \
+	fi
+
 # Build the distroless OCI image for the host architecture. CI builds the
 # multi-arch (amd64+arm64) image via .github/workflows/docker.yml; this target
 # is the local single-arch equivalent. Override IMAGE to retag.
@@ -56,8 +72,16 @@ install-tools: install-cargo-deny install-cargo-about
 install-cargo-deny:
 	@command -v cargo-deny > /dev/null 2>&1 || cargo install --locked cargo-deny
 
+# Pinned: the licenses-drift gate diffs a fresh regeneration against the
+# committed THIRD-PARTY-LICENSES.md, so every regeneration — local or CI —
+# must come from the same cargo-about version, or formatting/content
+# differences between releases of the tool read as license drift.
+CARGO_ABOUT_VERSION ?= 0.9.1
+
 install-cargo-about:
-	@command -v cargo-about > /dev/null 2>&1 || cargo install --locked --features=cli cargo-about
+	@installed="$$(cargo about --version 2> /dev/null | awk '{print $$2}')"; \
+	test "$$installed" = "$(CARGO_ABOUT_VERSION)" || \
+	  cargo install --locked --features=cli cargo-about --version $(CARGO_ABOUT_VERSION)
 
 install-cargo-cyclonedx:
 	@command -v cargo-cyclonedx > /dev/null 2>&1 || cargo install --locked cargo-cyclonedx

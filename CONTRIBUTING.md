@@ -44,6 +44,7 @@ make licenses
 ```
 
 and commit the updated `THIRD-PARTY-LICENSES.md`.
+CI runs `make licenses-check` on every pull request and fails if the committed report doesn't match the dependency tree.
 
 ## Local checks
 

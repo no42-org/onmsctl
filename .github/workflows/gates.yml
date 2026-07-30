@@ -37,6 +37,33 @@ jobs:
       - name: Run verify
         run: make verify
 
+  licenses-drift:
+    # Dependabot bumps Cargo.lock but never regenerates
+    # THIRD-PARTY-LICENSES.md, so the committed report drifts silently —
+    # v0.4.4's was stale until the release checklist caught it by hand.
+    # Separate from `verify` so a stale license report is not reported as
+    # a Rust failure, and Linux-only: the report is target-independent.
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Rust toolchain (honors rust-toolchain.toml)
+        run: rustup show
+
+      # rust-cache restores ~/.cargo/bin, so cargo-about is only built
+      # from source on a cold cache.
+      - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
+        with:
+          key: licenses-check
+
+      - name: Check THIRD-PARTY-LICENSES.md against the dep tree
+        run: make licenses-check
+
   actions-lint:
     # Enforces the workflow hygiene rules — SHA pinning, least-privilege
     # permissions, timeouts, template injection, credential persistence —
