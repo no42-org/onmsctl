@@ -155,7 +155,7 @@ jobs:
         # container at the version matching this SHA pin (report-0.6.1, read
         # from package.json at the pinned commit) — the release path never
         # picks up a floating image.
-        uses: no42-org/blitsbom@fe66bcc08b9cdf2ac3fbb5b00b9d761a3eec1e84 # v0.7.0
+        uses: no42-org/blitsbom@b3cb2b1bdd5664193478acf04812251fdc8eb124 # v0.7.1
         with:
           sbom: sbom/onmsctl.cdx.json
           output: sbom/onmsctl-sbom-report.html
@@ -269,7 +269,7 @@ jobs:
         # commit". The subject glob covers the binaries; the SBOM and
         # SHA256SUMS are named explicitly. `.sig`/`.pem`/`.sha256` are
         # excluded — they are signatures over the subjects, not subjects.
-        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
             release/onmsctl-*-*
