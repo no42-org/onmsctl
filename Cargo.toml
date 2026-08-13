@@ -28,7 +28,7 @@ quick-xml = { version = "0.41", features = ["serialize"] }
 schemars = "1"
 
 # Output rendering
-comfy-table = "7"
+comfy-table = "8"
 similar = "3"
 
 # Config & secrets
