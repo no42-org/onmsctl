@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.4.5"
+version = "0.4.6"
 edition = "2024"
 license = "Apache-2.0"
 authors = ["Ronny Trommer <ronny@no42.org>"]
@@ -57,14 +57,14 @@ zeroize = "1.8"
 # Workspace-internal crates. Explicit version (alongside `path`) keeps
 # `cargo-deny check bans` happy — without it the dep registers as a
 # wildcard. The version mirrors `workspace.package.version`.
-onmsctl-core = { path = "crates/onmsctl-core", version = "=0.4.5" }
-onmsctl-businessservice = { path = "crates/onmsctl-businessservice", version = "=0.4.5" }
-onmsctl-datacollection = { path = "crates/onmsctl-datacollection", version = "=0.4.5" }
-onmsctl-eventconf = { path = "crates/onmsctl-eventconf", version = "=0.4.5" }
-onmsctl-iam = { path = "crates/onmsctl-iam", version = "=0.4.5" }
-onmsctl-maintenance = { path = "crates/onmsctl-maintenance", version = "=0.4.5" }
-onmsctl-provisioning = { path = "crates/onmsctl-provisioning", version = "=0.4.5" }
-onmsctl-snmp = { path = "crates/onmsctl-snmp", version = "=0.4.5" }
+onmsctl-core = { path = "crates/onmsctl-core", version = "=0.4.6" }
+onmsctl-businessservice = { path = "crates/onmsctl-businessservice", version = "=0.4.6" }
+onmsctl-datacollection = { path = "crates/onmsctl-datacollection", version = "=0.4.6" }
+onmsctl-eventconf = { path = "crates/onmsctl-eventconf", version = "=0.4.6" }
+onmsctl-iam = { path = "crates/onmsctl-iam", version = "=0.4.6" }
+onmsctl-maintenance = { path = "crates/onmsctl-maintenance", version = "=0.4.6" }
+onmsctl-provisioning = { path = "crates/onmsctl-provisioning", version = "=0.4.6" }
+onmsctl-snmp = { path = "crates/onmsctl-snmp", version = "=0.4.6" }
 
 [profile.release]
 strip = "symbols"
