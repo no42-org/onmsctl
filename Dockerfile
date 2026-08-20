@@ -16,7 +16,7 @@
 # Pinned by digest (not just the tag) so a rebuilt image is byte-reproducible
 # and cannot silently pull a re-pushed `1-bookworm`. Dependabot's docker
 # ecosystem keeps the digest + tag comment current.
-FROM rust:1-bookworm@sha256:77fac8b98f9f46062bb680b6d25d5bcaabfc400143952ebc572e924bcbedc3fa AS builder
+FROM rust:1-bookworm@sha256:e70e2eec3d495fd5c8e0be74adda86507dfac7f51a724fbf9813ff59b2b247c7 AS builder
 
 # musl-tools provides `musl-gcc`, used both as the C compiler for `ring`'s
 # build script and as the linker for the *-musl target.
