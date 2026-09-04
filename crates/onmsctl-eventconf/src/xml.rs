@@ -269,9 +269,7 @@ fn walk_event_direct_children(xml: &[u8]) -> Result<Vec<Vec<String>>> {
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(XmlEvt::Start(e)) => {
-                let name = std::str::from_utf8(e.name().as_ref())
-                    .map_err(|err| Error::Config(format!("non-UTF-8 element name: {err}")))?
-                    .to_string();
+                let name = e.name().as_ref().to_string();
                 // If <event> was already open and we're seeing its direct
                 // child, record the name before pushing to the stack.
                 if stack.last().map(String::as_str) == Some("event")
@@ -286,9 +284,7 @@ fn walk_event_direct_children(xml: &[u8]) -> Result<Vec<Vec<String>>> {
                 stack.push(name);
             }
             Ok(XmlEvt::Empty(e)) => {
-                let name = std::str::from_utf8(e.name().as_ref())
-                    .map_err(|err| Error::Config(format!("non-UTF-8 element name: {err}")))?
-                    .to_string();
+                let name = e.name().as_ref().to_string();
                 // Empty (self-closing) elements have no End event. If the
                 // current stack top is <event>, this is a direct child.
                 if stack.last().map(String::as_str) == Some("event")
