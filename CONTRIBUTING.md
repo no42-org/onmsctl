@@ -60,7 +60,9 @@ The runner-pin and SPDX-header rules below are *not* machine-checked. They are o
 ### Tool pins
 
 The third-party tools behind the gates run at versions committed in the Makefile, never at whatever a cache or package index resolves to today.
-Dependabot does not see these pins. Bumping them is a manual step; a Renovate manager for the version lines is tracked in #119.
+Dependabot does not see these pins.
+Renovate does, through the `# renovate:` annotation above each `*_VERSION` line and the regex manager in `renovate.json`; every other Renovate manager is disabled so it never overlaps Dependabot.
+Renovate can only bump the version line, so its PR fails the gate on the first fetch until the hashes are refreshed: check out its branch and follow steps 2 to 4 below, then push to the same branch.
 
 | Variable | Tool | Exercised by | How it is installed |
 |---|---|---|---|
