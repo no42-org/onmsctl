@@ -133,6 +133,7 @@ install-tools: install-cargo-deny install-cargo-about install-cargo-cyclonedx in
 # differences between releases of the tool read as license drift. This is
 # why cargo-about, unlike the prebuilt tools below, reinstalls on a version
 # mismatch instead of warning.
+# renovate: datasource=crate depName=cargo-about
 CARGO_ABOUT_VERSION ?= 0.9.1
 
 install-cargo-about:
@@ -167,7 +168,10 @@ install-cargo-fuzz:
 # tool-pin-hashes TOOL=<name>`, compare the printed hashes with upstream's
 # checksum file or `gh attestation verify` where the project offers one,
 # paste the block over the old one, and run the gate that uses the tool.
-# Dependabot does not see these pins; CONTRIBUTING.md "Tool pins" has the
+# Dependabot does not see these pins; Renovate does, through the
+# `# renovate:` annotation above each *_VERSION line and the regex manager
+# in renovate.json, but it can only bump the version, so its PRs fail the
+# fetch until the hashes are refreshed. CONTRIBUTING.md "Tool pins" has the
 # procedure.
 #
 # A tool already on PATH wins and is never replaced. If its version differs
@@ -226,24 +230,28 @@ version_cargo-cyclonedx = $(1) cyclonedx --version 2> /dev/null | awk '{print $$
 version_zizmor = $(1) --version 2> /dev/null | awk '{print $$2}'
 version_actionlint = $(1) --version 2> /dev/null | head -n 1 | sed 's/^v//'
 
+# renovate: datasource=github-releases depName=EmbarkStudios/cargo-deny
 CARGO_DENY_VERSION ?= 0.20.2
 sha256_cargo-deny_aarch64-apple-darwin := fe67d82a10d8597a3549364cb733a3f9cc1bfff9031b7ae46384a9f2a72090c3
 sha256_cargo-deny_x86_64-apple-darwin := 248da7f581724e470071990c088ffc55c811981715f4cbdb258621fb79f8b7a6
 sha256_cargo-deny_aarch64-unknown-linux-gnu := 995c82be0defc7a025cae49a2aa2644ce8245c9a3318fc4103907c6a285e8c7d
 sha256_cargo-deny_x86_64-unknown-linux-gnu := 9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f
 
+# renovate: datasource=github-releases depName=CycloneDX/cyclonedx-rust-cargo extractVersion=^cargo-cyclonedx-(?<version>.*)$
 CARGO_CYCLONEDX_VERSION ?= 0.5.9
 sha256_cargo-cyclonedx_aarch64-apple-darwin := 4c53dfa21e70b65bf7f8d2592aadde3bcb02c1a40b6ec63b877e5ca65a29e180
 sha256_cargo-cyclonedx_x86_64-apple-darwin := 59d2a583fa632f8759456c1b531340331255b277386d23c598a3dbbc916fde63
 sha256_cargo-cyclonedx_aarch64-unknown-linux-gnu := 7bf131ca5389b07a4f10c182bcf8a5ad339d64408b6f0d8f6834a0bd6120a06a
 sha256_cargo-cyclonedx_x86_64-unknown-linux-gnu := fb8dbee9f182173e062a64a387b21a0badc6fab8b2abf9294973f012972bf6d8
 
+# renovate: datasource=github-releases depName=rhysd/actionlint extractVersion=^v(?<version>.*)$
 ACTIONLINT_VERSION ?= 1.7.12
 sha256_actionlint_aarch64-apple-darwin := aba9ced2dee8d27fecca3dc7feb1a7f9a52caefa1eb46f3271ea66b6e0e6953f
 sha256_actionlint_x86_64-apple-darwin := 5b44c3bc2255115c9b69e30efc0fecdf498fdb63c5d58e17084fd5f16324c644
 sha256_actionlint_aarch64-unknown-linux-gnu := 325e971b6ba9bfa504672e29be93c24981eeb1c07576d730e9f7c8805afff0c6
 sha256_actionlint_x86_64-unknown-linux-gnu := 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
 
+# renovate: datasource=github-releases depName=zizmorcore/zizmor extractVersion=^v(?<version>.*)$
 ZIZMOR_VERSION ?= 1.28.0
 sha256_zizmor_aarch64-apple-darwin := 54949bbd6b4c8527046bb8990bac9e0dab3eec787640f4e6199ae121dd1040be
 sha256_zizmor_x86_64-apple-darwin := 40a58d8560d65c71357b3977d0da425773bf8f10bf1ffd38099d963d3afdf3aa
