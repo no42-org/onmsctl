@@ -856,6 +856,7 @@ dependencies = [
  "libfuzzer-sys",
  "onmsctl-core",
  "onmsctl-eventconf",
+ "serde_norway",
 ]
 
 [[package]]

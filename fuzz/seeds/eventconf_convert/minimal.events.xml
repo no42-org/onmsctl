@@ -1,0 +1,7 @@
+<events>
+  <event>
+    <uei>uei.test/foo</uei>
+    <event-label>Test Foo</event-label>
+    <severity>Warning</severity>
+  </event>
+</events>

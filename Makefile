@@ -30,12 +30,13 @@ verify: fmt clippy build test deny  ## Full quality gate: fmt + clippy + build +
 # check runs as the `fuzz-check` job in gates.yml so a parser API change
 # cannot silently break the harnesses.
 #
-# fuzz/deny.toml is a symlink to the root deny.toml (the placement of
-# cargo-deny's --config flag differs between releases, a symlink does not),
-# which is what makes the root NCSA exception live. `bans` is skipped:
-# the fuzz lockfile resolves independently of the root one, so its
-# duplicate-version set never matches the root skip list, and duplicate
-# versions in a dev-only fuzz build are not a shipping concern.
+# No --config and no fuzz/deny.toml: cargo-deny walks up from the manifest
+# directory and loads the root deny.toml on its own (verified on 0.19.4
+# and 0.20.2, which disagree on where --config goes), and that is what
+# makes the root NCSA exception live. `bans` is skipped: the fuzz lockfile
+# resolves independently of the root one, so its duplicate-version set
+# never matches the root skip list, and duplicate versions in a dev-only
+# fuzz build are not a shipping concern.
 fuzz-check: install-cargo-deny  ## fmt + clippy + deny the fuzz harnesses on the pinned stable toolchain
 	cargo fmt --manifest-path fuzz/Cargo.toml -- --check
 	cargo clippy --manifest-path fuzz/Cargo.toml --all-targets -- -D warnings
@@ -51,9 +52,17 @@ fuzz-check: install-cargo-deny  ## fmt + clippy + deny the fuzz harnesses on the
 # -timeout caps one input at FUZZ_INPUT_TIMEOUT seconds. libFuzzer's default
 # is 1200 s, which would let a hang like the one this harness found run
 # past a whole FUZZ_SECS budget unreported.
+#
+# The run starts from fuzz/seeds/<target>/ (committed, hand-written inputs
+# that reach the interesting branches) and, for the two YAML targets, the
+# real documents under examples/. libFuzzer reads seed directories and
+# writes new inputs only to the first directory, fuzz/corpus/<target>/,
+# which is gitignored.
 FUZZ_TARGET ?= parse_documents
 FUZZ_SECS ?= 60
 FUZZ_INPUT_TIMEOUT ?= 30
+FUZZ_CORPUS := fuzz/corpus/$(FUZZ_TARGET)
+FUZZ_SEEDS := fuzz/seeds/$(FUZZ_TARGET) $(if $(filter parse_documents event_source_from_yaml,$(FUZZ_TARGET)),examples)
 fuzz:  ## Run a fuzz target on nightly (FUZZ_TARGET=parse_documents FUZZ_SECS=60)
 	@rustup run nightly rustc --version > /dev/null 2>&1 || { \
 	  echo "fuzz: no nightly toolchain. Run: rustup toolchain install nightly" >&2; \
@@ -61,7 +70,8 @@ fuzz:  ## Run a fuzz target on nightly (FUZZ_TARGET=parse_documents FUZZ_SECS=60
 	  exit 1; \
 	}
 	@$(MAKE) --no-print-directory install-cargo-fuzz
-	cargo +nightly fuzz run '$(FUZZ_TARGET)' -- '-max_total_time=$(FUZZ_SECS)' '-timeout=$(FUZZ_INPUT_TIMEOUT)'
+	@mkdir -p '$(FUZZ_CORPUS)'
+	cargo +nightly fuzz run '$(FUZZ_TARGET)' '$(FUZZ_CORPUS)' $(FUZZ_SEEDS) -- '-max_total_time=$(FUZZ_SECS)' '-timeout=$(FUZZ_INPUT_TIMEOUT)'
 
 # Lint the workflows themselves. actionlint covers syntax, expressions and
 # embedded shell (via shellcheck); zizmor covers the security rules this

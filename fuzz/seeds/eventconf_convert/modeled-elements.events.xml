@@ -1,0 +1,52 @@
+<events>
+  <event-file>events/other.events.xml</event-file>
+  <event>
+    <mask>
+      <maskelement>
+        <mename>id</mename>
+        <mevalue>.1.3.6.1.4.1.9.1.13</mevalue>
+      </maskelement>
+      <maskelement>
+        <mename>generic</mename>
+        <mevalue>6</mevalue>
+      </maskelement>
+      <varbind>
+        <vbnumber>1</vbnumber>
+        <vbvalue>up</vbvalue>
+        <vbvalue>down</vbvalue>
+      </varbind>
+    </mask>
+    <uei>uei.test/cold-start</uei>
+    <event-label>Cold start</event-label>
+    <descr>&lt;p&gt;Agent restarted on %nodelabel%.&lt;/p&gt;</descr>
+    <logmsg dest="logndisplay" notify="true">Cold start from %interface%</logmsg>
+    <severity>Warning</severity>
+    <correlation state="on" path="pathOutage" cmin="1" cmax="2" ctime="60">
+      <cuei>uei.test/related</cuei>
+    </correlation>
+    <operinstruct>Check the device.</operinstruct>
+    <autoacknowledge state="on">uei.test/clear</autoacknowledge>
+    <tticket state="off">ticket</tticket>
+    <varbindsdecode>
+      <parmid>parm[#2]</parmid>
+      <decode varbindvalue="1" varbinddecodedstring="up"/>
+      <decode varbindvalue="2" varbinddecodedstring="down"/>
+    </varbindsdecode>
+    <mouseovertext>hover</mouseovertext>
+    <alarm-data reduction-key="%uei%:%dpname%:%nodeid%" alarm-type="1" clear-key="%uei%:clear" auto-clean="false"/>
+    <snmp>
+      <id>.1.3.6.1.4.1.9.1.13</id>
+      <idtext>Cisco</idtext>
+      <version>v2c</version>
+      <generic>6</generic>
+      <specific>1</specific>
+      <community>public</community>
+    </snmp>
+    <parameter name="node" value="%nodelabel%" expand="true"/>
+    <forward state="on" mechanism="snmpudp">10.0.0.1</forward>
+    <script language="beanshell">print("hi")</script>
+    <filters>
+      <filter eventparm="descr" pattern="a" replacement="b"/>
+    </filters>
+  </event>
+</events>

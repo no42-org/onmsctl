@@ -1,0 +1,12 @@
+<events>
+  <event>
+    <uei>uei.test/dup</uei>
+    <event-label>A</event-label>
+    <severity>Warning</severity>
+  </event>
+  <event>
+    <uei>uei.test/dup</uei>
+    <event-label>B</event-label>
+    <severity>Major</severity>
+  </event>
+</events>
