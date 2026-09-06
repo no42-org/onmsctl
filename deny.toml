@@ -40,6 +40,16 @@ allow = [
 ]
 confidence-threshold = 0.95
 
+# libfuzzer-sys is `(MIT OR Apache-2.0) AND NCSA`: the bundled LLVM libFuzzer
+# sources carry the University of Illinois/NCSA license (BSD-style
+# permissive). It lives only in the dev-only fuzz/ workspace, which runs
+# cargo-deny against this file through the fuzz/deny.toml symlink. Scoped to
+# that one crate so NCSA stays out of the general allowlist for the shipped
+# binary.
+exceptions = [
+    { allow = ["NCSA"], crate = "libfuzzer-sys" },
+]
+
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"

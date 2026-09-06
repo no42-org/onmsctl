@@ -67,6 +67,7 @@ Before tagging, verify on `main`:
    `main` has successful `verify` and `integration` workflow runs.
 2. **Version bumped** — `Cargo.toml`'s `[workspace.package].version` **and** the `=X.Y.Z` internal dep pins under `[workspace.dependencies]` match the tag you're about to push (without the leading `v`).
    Cargo.lock updates from a `cargo check` after the bump are committed.
+   The same goes for `fuzz/Cargo.lock` after `make fuzz-check`: the harnesses depend on the workspace crates by path, so the bump changes their lockfile too.
 3. **README version references updated** — bump the version strings in
    `README.md` so the docs match the release:
    - the `VERSION=vX.Y.Z` value in the **Install** download example,

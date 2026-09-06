@@ -1,0 +1,52 @@
+# Fuzz harnesses for the parsers that consume operator-supplied files.
+#
+# A separate workspace, not a member of the root one: `cargo fuzz` needs a
+# nightly toolchain and sanitizer flags, so keeping it out of `make verify`
+# lets the stable pinned toolchain stay the only requirement for the gate.
+# `make fuzz-check` lints the harnesses on stable so they cannot rot.
+[package]
+name = "onmsctl-fuzz"
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+onmsctl-core = { path = "../crates/onmsctl-core" }
+onmsctl-eventconf = { path = "../crates/onmsctl-eventconf" }
+
+[[bin]]
+name = "parse_documents"
+path = "fuzz_targets/parse_documents.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "eventconf_convert"
+path = "fuzz_targets/eventconf_convert.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "event_source_from_yaml"
+path = "fuzz_targets/event_source_from_yaml.rs"
+test = false
+doc = false
+bench = false
+
+# cargo-fuzz builds --release; keep line tables so a crash under
+# fuzz/artifacts/ comes with a symbolized stack trace, not bare addresses.
+# `cargo fuzz init` generates this too.
+[profile.release]
+debug = 1
+
+# Marks this directory as its own workspace root, so cargo never walks up
+# to the root manifest (which lists fuzz/ under `exclude`). cargo-fuzz
+# generates this empty table by default; keep it.
+[workspace]

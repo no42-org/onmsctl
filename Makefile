@@ -1,4 +1,4 @@
-.PHONY: help build test verify fmt clippy deny lint-actions licenses licenses-check install-tools install-cargo-deny install-cargo-about install-cargo-cyclonedx install-actionlint install-zizmor release-build sbom integration schema docker clean
+.PHONY: help build test verify fmt clippy deny fuzz-check fuzz lint-actions licenses licenses-check install-tools install-cargo-deny install-cargo-about install-cargo-cyclonedx install-cargo-fuzz install-actionlint install-zizmor release-build sbom integration schema docker clean
 
 # Self-documenting: annotate each user-facing target with `## description`
 # and it shows up in `make help`. Sorted in declaration order.
@@ -24,6 +24,44 @@ deny: install-cargo-deny  ## Check advisories, bans, licenses, sources (cargo-de
 	cargo deny check
 
 verify: fmt clippy build test deny  ## Full quality gate: fmt + clippy + build + test + deny
+
+# Fuzz harnesses live in their own workspace under fuzz/ (see fuzz/Cargo.toml).
+# Running them needs nightly + cargo-fuzz; linting them does not. The
+# check runs as the `fuzz-check` job in gates.yml so a parser API change
+# cannot silently break the harnesses.
+#
+# fuzz/deny.toml is a symlink to the root deny.toml (the placement of
+# cargo-deny's --config flag differs between releases, a symlink does not),
+# which is what makes the root NCSA exception live. `bans` is skipped:
+# the fuzz lockfile resolves independently of the root one, so its
+# duplicate-version set never matches the root skip list, and duplicate
+# versions in a dev-only fuzz build are not a shipping concern.
+fuzz-check: install-cargo-deny  ## fmt + clippy + deny the fuzz harnesses on the pinned stable toolchain
+	cargo fmt --manifest-path fuzz/Cargo.toml -- --check
+	cargo clippy --manifest-path fuzz/Cargo.toml --all-targets -- -D warnings
+	cargo deny --manifest-path fuzz/Cargo.toml check advisories licenses sources
+
+# Run one fuzz target for FUZZ_SECS seconds (default 60). Targets are the
+# [[bin]] names in fuzz/Cargo.toml. The nightly check comes first so a
+# machine without nightly fails in a second instead of after compiling
+# cargo-fuzz; cargo-fuzz itself is installed on demand like the other
+# tools. The nightly toolchain is not, because that is a rustup decision
+# the developer should make, so we only check and explain.
+#
+# -timeout caps one input at FUZZ_INPUT_TIMEOUT seconds. libFuzzer's default
+# is 1200 s, which would let a hang like the one this harness found run
+# past a whole FUZZ_SECS budget unreported.
+FUZZ_TARGET ?= parse_documents
+FUZZ_SECS ?= 60
+FUZZ_INPUT_TIMEOUT ?= 30
+fuzz:  ## Run a fuzz target on nightly (FUZZ_TARGET=parse_documents FUZZ_SECS=60)
+	@rustup run nightly rustc --version > /dev/null 2>&1 || { \
+	  echo "fuzz: no nightly toolchain. Run: rustup toolchain install nightly" >&2; \
+	  echo "fuzz: a nightly older than the workspace rust-version fails later with a clear cargo error; fix with: rustup update nightly" >&2; \
+	  exit 1; \
+	}
+	@$(MAKE) --no-print-directory install-cargo-fuzz
+	cargo +nightly fuzz run '$(FUZZ_TARGET)' -- '-max_total_time=$(FUZZ_SECS)' '-timeout=$(FUZZ_INPUT_TIMEOUT)'
 
 # Lint the workflows themselves. actionlint covers syntax, expressions and
 # embedded shell (via shellcheck); zizmor covers the security rules this
@@ -64,10 +102,11 @@ IMAGE ?= onmsctl:dev
 docker:  ## Build the distroless OCI image for the host arch (IMAGE=onmsctl:dev)
 	docker build -t $(IMAGE) .
 
-clean:  ## Remove the cargo target directory
+clean:  ## Remove the cargo target directories (root and fuzz/)
 	cargo clean
+	cargo clean --manifest-path fuzz/Cargo.toml
 
-install-tools: install-cargo-deny install-cargo-about
+install-tools: install-cargo-deny install-cargo-about install-cargo-fuzz
 
 install-cargo-deny:
 	@command -v cargo-deny > /dev/null 2>&1 || cargo install --locked cargo-deny
@@ -85,6 +124,9 @@ install-cargo-about:
 
 install-cargo-cyclonedx:
 	@command -v cargo-cyclonedx > /dev/null 2>&1 || cargo install --locked cargo-cyclonedx
+
+install-cargo-fuzz:
+	@command -v cargo-fuzz > /dev/null 2>&1 || cargo install --locked cargo-fuzz
 
 # actionlint and zizmor are fetched as pinned upstream release binaries
 # into .bin/ rather than built from source. actionlint has no crate (it is

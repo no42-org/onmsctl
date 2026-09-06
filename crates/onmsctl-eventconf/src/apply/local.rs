@@ -24,6 +24,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use onmsctl_core::kind::envelope::parse_documents;
 use onmsctl_core::{Error, Result};
 
 // -- Top-level shape --------------------------------------------------------
@@ -554,19 +555,43 @@ impl EventSourceLocal {
     /// (`spec.fileOrder`, `spec.vendor`, `spec.description`) instead of
     /// the bare serde "unknown field" diagnostic.
     pub fn from_yaml(bytes: &[u8]) -> Result<Self> {
-        // Reject multi-document YAML up front. `serde_norway::from_slice`
-        // silently parses only the first document; a user concatenating
-        // two EventSource docs into one file would otherwise lose all
-        // but the first.
-        if has_multiple_documents(bytes) {
-            return Err(Error::Config(
-                "multi-document YAML is not supported (one EventSource per file). \
-                 Split documents into separate files."
-                    .into(),
-            ));
-        }
+        let text = std::str::from_utf8(bytes)
+            .map_err(|e| Error::Config(format!("invalid EventSource YAML: not UTF-8: {e}")))?;
 
-        match serde_norway::from_slice::<Self>(bytes) {
+        // One parse, through the same splitter `apply -f` uses. It skips
+        // null documents (a leading or trailing `---`, a comment-only
+        // document) and stops at the first malformed one, so a broken
+        // file cannot hang here (the `event_source_from_yaml` fuzz target
+        // found a `.count()` over the document iterator that never
+        // returned). `serde_norway::from_slice` rejects a second document
+        // outright; splitting first lets us say something more useful.
+        let mut docs = parse_documents("EventSource", text)?;
+        let doc = match docs.len() {
+            0 => {
+                return Err(Error::Config(
+                    "invalid EventSource YAML: the input holds no document".into(),
+                ));
+            }
+            1 => docs.remove(0),
+            _ => {
+                return Err(Error::Config(
+                    "multi-document YAML is not supported (one EventSource per file). \
+                     Split documents into separate files."
+                        .into(),
+                ));
+            }
+        };
+
+        // Re-serialize the one document and parse the text, not the
+        // `Value`: `from_value` types plain scalars first, so `name: 12345`
+        // would fail with "expected a string" where the text parser reads
+        // it as the string it was in the file.
+        let single = serde_norway::to_string(&doc.value).map_err(|e| {
+            Error::Config(format!(
+                "invalid EventSource YAML: could not re-serialize document: {e}"
+            ))
+        })?;
+        match serde_norway::from_str::<Self>(&single) {
             Ok(local) => {
                 local.validate()?;
                 Ok(local)
@@ -574,7 +599,7 @@ impl EventSourceLocal {
             Err(strict_err) => {
                 // Strict parse failed. Try a recovery pass to produce a
                 // guided message for the well-known reserved spec.* keys.
-                if let Some(guided) = guided_rejection_for_known_spec_keys(bytes) {
+                if let Some(guided) = guided_rejection_for_known_spec_keys(&doc.value) {
                     return Err(guided);
                 }
                 Err(Error::Config(format!(
@@ -585,22 +610,10 @@ impl EventSourceLocal {
     }
 }
 
-/// Detect whether `bytes` contains more than one YAML document
-/// (separated by `---` lines). Counts only top-level document
-/// separators; CDATA-style or string-literal `---` inside a document
-/// don't count. Conservative: if the parser sees more than one document
-/// stream entry, report `true`.
-fn has_multiple_documents(bytes: &[u8]) -> bool {
-    use serde_norway::Deserializer;
-    let count = Deserializer::from_slice(bytes).count();
-    count > 1
-}
-
-/// Inspect a parsed-as-Value YAML document for keys under `spec` that
-/// are explicitly forbidden by the schema. Emits guided error messages
-/// per the `event-conf` spec scenarios.
-fn guided_rejection_for_known_spec_keys(bytes: &[u8]) -> Option<Error> {
-    let raw: serde_norway::Value = serde_norway::from_slice(bytes).ok()?;
+/// Inspect a parsed YAML document for keys under `spec` that are
+/// explicitly forbidden by the schema. Emits guided error messages per the
+/// `event-conf` spec scenarios.
+fn guided_rejection_for_known_spec_keys(raw: &serde_norway::Value) -> Option<Error> {
     let spec = raw.get("spec")?.as_mapping()?;
     for (key, _) in spec {
         if let Some(k) = key.as_str() {
@@ -1115,6 +1128,92 @@ spec:
         match err {
             Error::Config(m) => assert!(m.contains("kind")),
             other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn from_yaml_accepts_a_trailing_document_separator() {
+        let yaml = format!("{}\n---\n", minimal_yaml());
+        let local = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap();
+        assert_eq!(local.metadata.name, "cisco.foo");
+    }
+
+    #[test]
+    fn null_documents_do_not_make_a_file_multi_document() {
+        // Explicit start marker, comment-only document, leading blank docs.
+        for yaml in [
+            format!("---\n{}", minimal_yaml()),
+            format!("{}\n---\n# nothing here\n", minimal_yaml()),
+            format!("---\n---\n{}", minimal_yaml()),
+        ] {
+            let local = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap();
+            assert_eq!(local.metadata.name, "cisco.foo", "input: {yaml}");
+        }
+    }
+
+    #[test]
+    fn two_documents_are_rejected_with_guidance() {
+        let yaml = format!("{}\n---\n{}", minimal_yaml(), minimal_yaml());
+        let err = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap_err();
+        match err {
+            Error::Config(m) => assert!(m.contains("multi-document"), "msg: {m}"),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn empty_input_is_an_error() {
+        for input in ["", "# just a comment\n", "---\n"] {
+            let err = EventSourceLocal::from_yaml(input.as_bytes()).unwrap_err();
+            match err {
+                Error::Config(m) => assert!(m.contains("no document"), "msg: {m}"),
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn plain_scalars_still_read_as_strings() {
+        // `from_value` would type `12345` as an integer first and reject
+        // it for a String field; the text parser keeps the file's reading.
+        let yaml = minimal_yaml()
+            .replace("name: cisco.foo", "name: 12345")
+            .replace(r#"label: "Cisco Foo Cold Start""#, "label: 2024");
+        let local = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap();
+        assert_eq!(local.metadata.name, "12345");
+        assert_eq!(local.spec.events[0].label, "2024");
+    }
+
+    #[test]
+    fn document_separator_inside_a_block_scalar_is_not_a_boundary() {
+        let yaml = format!(
+            "{}      description: |\n        first line\n        ---\n        still the same document\n",
+            minimal_yaml()
+        );
+        let local = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap();
+        assert_eq!(local.metadata.name, "cisco.foo");
+    }
+
+    #[test]
+    fn non_utf8_input_is_an_error() {
+        let err = EventSourceLocal::from_yaml(&[0x6b, 0x69, 0x6e, 0x64, 0x3a, 0xff]).unwrap_err();
+        match err {
+            Error::Config(m) => assert!(m.contains("not UTF-8"), "msg: {m}"),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn malformed_yaml_is_an_error_not_a_hang() {
+        // Found by fuzz/fuzz_targets/event_source_from_yaml: a `.count()`
+        // over the serde_norway document iterator never returned on
+        // malformed input. The core splitter stops at the first error.
+        for input in ["spec: [1, 2\n", "spec: {}\n---\nspec: [1, 2\n"] {
+            let err = EventSourceLocal::from_yaml(input.as_bytes()).unwrap_err();
+            match err {
+                Error::Config(m) => assert!(m.contains("invalid YAML"), "msg: {m}"),
+                other => panic!("unexpected {other:?}"),
+            }
         }
     }
 

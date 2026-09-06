@@ -31,6 +31,8 @@ compatibility. The allowed license set is enforced by `cargo deny check`
 - Unicode-3.0 / Unicode-DFS-2016
 - Unlicense
 - Zlib
+- CDLA-Permissive-2.0  *(data license; the Mozilla CA bundle in webpki-roots)*
+- NCSA  *(BSD-style; in deny.toml a per-crate exception for libfuzzer-sys in the fuzz workspace, not a general allow. The dependency-review action cannot scope by crate, so it allows NCSA outright; cargo-deny is the gate that enforces the scoping.)*
 
 **Project-scope copyleft licenses (GPL, AGPL, LGPL) MUST NOT be introduced.**
 File-scope copyleft (MPL-2.0) is acceptable: it imposes obligations on
@@ -57,6 +59,11 @@ needs no toolchain beyond `curl` and `tar`. It covers workflow syntax,
 embedded shell, SHA pinning, least-privilege permissions, template
 injection, and credential persistence. The runner-pin and SPDX-header
 rules below are *not* machine-checked — they are on you.
+
+Parsers that read operator-supplied files (the `apply -f` YAML envelope, EventSource YAML, eventconf XML) have cargo-fuzz harnesses under `fuzz/`.
+They are a separate Cargo workspace because running them needs a nightly toolchain: `rustup toolchain install nightly`, then `make fuzz FUZZ_TARGET=eventconf_convert FUZZ_SECS=120` (it installs cargo-fuzz on first use).
+CI only fmt-, clippy- and license-checks them (`make fuzz-check`), so run a target for a few minutes when you change one of those parsers.
+A crash lands in `fuzz/artifacts/`; turn it into a regression unit test before fixing.
 
 ## CI runner images
 
