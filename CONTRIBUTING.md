@@ -52,13 +52,34 @@ CI runs `make licenses-check` on every pull request and fails if the committed r
 
 Run `make verify` before opening a pull request. CI runs the same target.
 
-If you touched anything under `.github/workflows/`, also run
-`make lint-actions` — actionlint plus zizmor, the same gate CI applies.
-It fetches both tools as pinned release binaries into `.bin/`, so it
-needs no toolchain beyond `curl` and `tar`. It covers workflow syntax,
-embedded shell, SHA pinning, least-privilege permissions, template
-injection, and credential persistence. The runner-pin and SPDX-header
-rules below are *not* machine-checked — they are on you.
+If you touched anything under `.github/workflows/`, also run `make lint-actions`, actionlint plus zizmor, the same gate CI applies.
+It covers workflow syntax, embedded shell, SHA pinning, least-privilege permissions, template injection, and credential persistence.
+The runner-pin and SPDX-header rules below are *not* machine-checked. They are on you.
+
+### Tool pins
+
+The third-party tools behind the gates run at versions committed in the Makefile, never at whatever a cache or package index resolves to today.
+Dependabot does not see these pins. Bumping them is a manual step; a Renovate manager for the version lines is tracked in #119.
+
+| Variable | Tool | Exercised by | How it is installed |
+|---|---|---|---|
+| `CARGO_DENY_VERSION` | cargo-deny | `make deny` (in `make verify`), `make fuzz-check` | pinned release binary in `.bin/`, SHA-256 verified |
+| `CARGO_CYCLONEDX_VERSION` | cargo-cyclonedx | `make sbom` (release pipeline) | pinned release binary in `.bin/`, SHA-256 verified |
+| `ACTIONLINT_VERSION` | actionlint | `make lint-actions` | pinned release binary in `.bin/`, SHA-256 verified |
+| `ZIZMOR_VERSION` | zizmor | `make lint-actions` | pinned release binary in `.bin/`, SHA-256 verified |
+| `CARGO_ABOUT_VERSION` | cargo-about | `make licenses`, `make licenses-check` | pinned `cargo install`, reinstalled on mismatch |
+
+The `.bin/` tools are verified against SHA-256 values committed next to the version, one per supported host, before they are extracted.
+Those hashes are ours, not upstream's checksum files, so a tampered release page cannot pass.
+To bump one: edit its `*_VERSION`, run `make tool-pin-hashes TOOL=<name> VERSION=<ver>`, paste the printed block over the old `sha256_<name>_*` lines, then run the gate that uses the tool.
+A version bump without fresh hashes fails on the first fetch and names the helper.
+
+A tool already on your `PATH` is used as-is and never replaced.
+If its version differs from the pin, the recipe prints one warning and continues; CI runners have none on `PATH`, so they always run the exact pin.
+`.bin/` needs only `curl`, `tar` and `shasum`.
+
+cargo-about is different on purpose: the licenses-drift gate diffs its output against the committed `THIRD-PARTY-LICENSES.md`, so every machine must run the identical version and the recipe reinstalls on mismatch.
+cargo-fuzz is not pinned: `make fuzz` is local-only and runs on a nightly toolchain that moves under it anyway.
 
 Parsers that read operator-supplied files (the `apply -f` YAML envelope, EventSource YAML, eventconf XML) have cargo-fuzz harnesses under `fuzz/`.
 They are a separate Cargo workspace because running them needs a nightly toolchain: `rustup toolchain install nightly`, then `make fuzz FUZZ_TARGET=eventconf_convert FUZZ_SECS=120` (it installs cargo-fuzz on first use).

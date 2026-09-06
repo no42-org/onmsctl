@@ -145,7 +145,10 @@ jobs:
 
       # Deliberately NOT cached, for the same reason as the build job: the
       # SBOM is a published, signed artifact describing the dependency tree,
-      # so it is generated from a clean checkout. (zizmor: cache-poisoning)
+      # so it is generated from a clean checkout. cargo-cyclonedx itself is
+      # a pinned, hash-verified release binary the Makefile fetches into
+      # .bin/, so the generator version is the committed one, not whatever
+      # `cargo install` would resolve today. (zizmor: cache-poisoning)
       - name: Generate CycloneDX SBOM
         run: make sbom
 
