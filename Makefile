@@ -120,9 +120,10 @@ IMAGE ?= onmsctl:dev
 docker:  ## Build the distroless OCI image for the host arch (IMAGE=onmsctl:dev)
 	docker build -t $(IMAGE) .
 
-clean:  ## Remove the cargo target directories (root and fuzz/)
+clean:  ## Remove the cargo target directories (root and fuzz/) and the fetched tools in .bin/
 	cargo clean
 	cargo clean --manifest-path fuzz/Cargo.toml
+	rm -rf .bin
 
 install-tools: install-cargo-deny install-cargo-about install-cargo-cyclonedx install-cargo-fuzz install-actionlint install-zizmor
 
@@ -159,11 +160,15 @@ install-cargo-fuzz:
 # Every archive is verified against the SHA-256 committed below for that
 # tool and host before it is extracted. The hashes are ours, not upstream's
 # checksum files: the four projects publish those in three formats or not
-# at all, and they sit on the same release page as the archive. To bump a
-# tool, edit its *_VERSION, run `make tool-pin-hashes TOOL=<name>
-# VERSION=<ver>`, paste the printed block over the old one, and run the gate
-# that uses the tool. Dependabot does not see these pins; CONTRIBUTING.md
-# "Tool pins" has the procedure.
+# at all. Committing them freezes what was downloaded when the pin was
+# taken, so a later change to a release asset cannot pass; it does not
+# vouch for the asset at bump time, which is why the bump procedure
+# cross-checks. To bump a tool: edit its *_VERSION, run `make
+# tool-pin-hashes TOOL=<name>`, compare the printed hashes with upstream's
+# checksum file or `gh attestation verify` where the project offers one,
+# paste the block over the old one, and run the gate that uses the tool.
+# Dependabot does not see these pins; CONTRIBUTING.md "Tool pins" has the
+# procedure.
 #
 # A tool already on PATH wins and is never replaced. If its version differs
 # from the pin the recipe says so once on stderr and continues. CI runners
@@ -172,19 +177,33 @@ BIN_DIR := $(CURDIR)/.bin
 
 UNAME_S := $(shell uname -s)
 UNAME_M := $(shell uname -m)
+# Explicit mapping, no fallback: an unsupported OS or arch produces a HOST
+# with no hash row, and fetch_tool then fails naming it instead of
+# installing a binary for the wrong platform. Parse-time $(error) is
+# avoided so `make help` still works on such a host.
 ifeq ($(UNAME_S),Darwin)
   HOST_OS := apple-darwin
-else
+else ifeq ($(UNAME_S),Linux)
   HOST_OS := unknown-linux-gnu
+else
+  HOST_OS := unsupported-$(UNAME_S)
 endif
 ifeq ($(UNAME_M),x86_64)
   HOST_ARCH := x86_64
-else
+else ifeq ($(filter arm64 aarch64,$(UNAME_M)),$(UNAME_M))
   HOST_ARCH := aarch64
+else
+  HOST_ARCH := unsupported-$(UNAME_M)
 endif
-# Key into the hash tables below; one of TOOL_HOSTS.
+# Key into the hash tables below; one of TOOL_HOSTS on a supported host.
 HOST := $(HOST_ARCH)-$(HOST_OS)
 TOOL_HOSTS := aarch64-apple-darwin x86_64-apple-darwin aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu
+
+# Fail on a PATH copy whose version differs from the pin instead of warning.
+# CI sets this so a runner image that starts shipping one of these tools
+# cannot silently displace the pin. Developers leave it unset.
+TOOL_PINS_STRICT ?=
+CURL := curl -fsSL --proto '=https' --tlsv1.2 --retry 3 --retry-all-errors
 
 # Release asset URL per tool: $(1) version, $(2) arch, $(3) os as a gnu
 # triple suffix. Tools that ship musl on Linux or use Go-style names
@@ -193,6 +212,12 @@ url_cargo-deny = https://github.com/EmbarkStudios/cargo-deny/releases/download/$
 url_cargo-cyclonedx = https://github.com/CycloneDX/cyclonedx-rust-cargo/releases/download/cargo-cyclonedx-$(1)/cargo-cyclonedx-$(2)-$(3).tar.xz
 url_zizmor = https://github.com/zizmorcore/zizmor/releases/download/v$(1)/zizmor-$(2)-$(3).tar.gz
 url_actionlint = https://github.com/rhysd/actionlint/releases/download/v$(1)/actionlint_$(1)_$(if $(findstring darwin,$(3)),darwin,linux)_$(if $(findstring x86_64,$(2)),amd64,arm64).tar.gz
+
+# Pinned version by tool name, for the bump helper's VERSION default.
+pin_cargo-deny = $(CARGO_DENY_VERSION)
+pin_cargo-cyclonedx = $(CARGO_CYCLONEDX_VERSION)
+pin_actionlint = $(ACTIONLINT_VERSION)
+pin_zizmor = $(ZIZMOR_VERSION)
 
 # How each tool reports its version number; $(1) is the binary path.
 # cargo-cyclonedx only answers as the cargo subcommand it is.
@@ -239,16 +264,19 @@ define fetch_tool
 set -e; \
 url='$(call url_$(1),$(2),$(HOST_ARCH),$(HOST_OS))'; \
 want='$(sha256_$(1)_$(HOST))'; \
-test -n "$$want" || { echo "$(1): no committed SHA-256 for $(HOST). Run: make tool-pin-hashes TOOL=$(1) VERSION=$(2)" >&2; exit 1; }; \
+test -n "$$want" || { echo "$(1): no committed SHA-256 for host $(HOST) (uname: $(UNAME_S) $(UNAME_M)). Supported: $(TOOL_HOSTS)" >&2; exit 1; }; \
+for t in curl tar shasum mktemp; do command -v $$t > /dev/null 2>&1 || { echo "$(1): '$$t' is required to fetch pinned tools" >&2; exit 1; }; done; \
+case "$$url" in *.xz) if tar --version 2> /dev/null | grep -q 'GNU tar' && ! command -v xz > /dev/null 2>&1; then echo "$(1): GNU tar needs 'xz' to unpack $$url" >&2; exit 1; fi;; esac; \
 mkdir -p '$(BIN_DIR)'; tmp="$$(mktemp -d)"; trap 'rm -rf "$$tmp"' EXIT; \
 echo "fetching $(1) $(2) ($(HOST))"; \
-curl -fsSL -o "$$tmp/archive" "$$url"; \
+$(CURL) -o "$$tmp/archive" "$$url"; \
 got="$$(shasum -a 256 "$$tmp/archive" | cut -c1-64)"; \
 test "$$got" = "$$want" || { \
   echo "$(1) $(2) ($(HOST)): SHA-256 mismatch, not installing" >&2; \
   echo "  expected $$want" >&2; \
   echo "  got      $$got" >&2; \
-  echo "  If you bumped $(1), refresh the hashes: make tool-pin-hashes TOOL=$(1) VERSION=$(2)" >&2; \
+  echo "  If you just bumped $(1), the committed hashes are stale: make tool-pin-hashes TOOL=$(1)" >&2; \
+  echo "  If you did not, the download differs from the release this repo pinned. Do not regenerate; investigate." >&2; \
   exit 1; \
 }; \
 tar -xf "$$tmp/archive" -C "$$tmp"; \
@@ -263,7 +291,10 @@ endef
 define ensure_tool
 if [ '$(3)' != '$(BIN_DIR)/$(1)' ]; then \
   v="$$($(call version_$(1),'$(3)'))"; \
-  test "$$v" = '$(2)' || echo "warning: $(1) $$v found on PATH at $(3); CI pins $(2)" >&2; \
+  if [ "$$v" != '$(2)' ]; then \
+    echo "$(if $(TOOL_PINS_STRICT),error,warning): $(1) $${v:-(no version reported)} found on PATH at $(3); this repo pins $(2)" >&2; \
+    $(if $(TOOL_PINS_STRICT),exit 1,:); \
+  fi; \
 elif [ "$$($(call version_$(1),'$(3)'))" != '$(2)' ]; then \
   $(call fetch_tool,$(1),$(2)); \
 fi
@@ -283,13 +314,20 @@ install-zizmor:
 
 # Bump helper: print the sha256_<tool>_<host> block for every host in
 # TOOL_HOSTS. Downloads into a temp dir only; .bin/ is untouched.
-tool-pin-hashes:  ## Print committed-hash lines for TOOL=<name> VERSION=<ver> (bump helper)
-	@test -n "$(TOOL)" && test -n "$(VERSION)" || { echo "usage: make tool-pin-hashes TOOL=cargo-deny VERSION=0.20.2" >&2; exit 1; }
-	@test -n "$(url_$(TOOL))" || { echo "tool-pin-hashes: unknown TOOL '$(TOOL)'. Known: cargo-deny cargo-cyclonedx actionlint zizmor" >&2; exit 1; }
+# VERSION defaults to the tool's committed pin, so the usual flow is: edit
+# the *_VERSION line, run `make tool-pin-hashes TOOL=<name>`. All four
+# downloads complete before anything is printed, so a failure cannot leave
+# a partial block on stdout.
+VERSION ?= $(pin_$(TOOL))
+tool-pin-hashes:  ## Print committed-hash lines for TOOL=<name> [VERSION=<ver>] (bump helper)
+	@test -n "$(TOOL)" || { echo "usage: make tool-pin-hashes TOOL=<cargo-deny|cargo-cyclonedx|actionlint|zizmor> [VERSION=<ver>]" >&2; exit 1; }
+	@test -n "$(pin_$(TOOL))" || { echo "tool-pin-hashes: unknown TOOL '$(TOOL)'. Known: cargo-deny cargo-cyclonedx actionlint zizmor" >&2; exit 1; }
+	@case '$(VERSION)' in v*) echo "tool-pin-hashes: VERSION without the leading v (got '$(VERSION)')" >&2; exit 1;; esac
 	@set -e; tmp="$$(mktemp -d)"; trap 'rm -rf "$$tmp"' EXIT; \
 	$(foreach h,$(TOOL_HOSTS),\
-	  curl -fsSL -o "$$tmp/a" '$(call url_$(TOOL),$(VERSION),$(firstword $(subst -, ,$(h))),$(patsubst $(firstword $(subst -, ,$(h)))-%,%,$(h)))'; \
-	  printf 'sha256_$(TOOL)_$(h) := %s\n' "$$(shasum -a 256 "$$tmp/a" | cut -c1-64)"; )
+	  $(CURL) -o "$$tmp/a" '$(call url_$(TOOL),$(VERSION),$(firstword $(subst -, ,$(h))),$(patsubst $(firstword $(subst -, ,$(h)))-%,%,$(h)))'; \
+	  printf 'sha256_$(TOOL)_$(h) := %s\n' "$$(shasum -a 256 "$$tmp/a" | cut -c1-64)" >> "$$tmp/out"; ) \
+	cat "$$tmp/out"
 
 # Release-only targets. CI invokes these from .github/workflows/release.yml
 # so the local developer command and the CI command stay in sync.

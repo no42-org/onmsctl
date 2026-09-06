@@ -16,6 +16,13 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
+env:
+  # A tool on PATH at a version other than the Makefile pin fails the
+  # job instead of warning, so a runner image that starts shipping
+  # cargo-deny, cargo-cyclonedx, actionlint or zizmor cannot displace
+  # the pinned .bin/ copy unnoticed. See "Tool pins" in CONTRIBUTING.md.
+  TOOL_PINS_STRICT: "1"
+
 jobs:
   gate:
     # Skip scheduled runs on forks — only the upstream repo's cron should fire.

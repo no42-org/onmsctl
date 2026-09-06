@@ -19,6 +19,13 @@ concurrency:
   # re-uploads onto the existing draft rather than failing.
   cancel-in-progress: false
 
+env:
+  # A tool on PATH at a version other than the Makefile pin fails the
+  # job instead of warning, so a runner image that starts shipping
+  # cargo-deny, cargo-cyclonedx, actionlint or zizmor cannot displace
+  # the pinned .bin/ copy unnoticed. See "Tool pins" in CONTRIBUTING.md.
+  TOOL_PINS_STRICT: "1"
+
 jobs:
   validate-tag:
     name: validate tag

@@ -52,7 +52,8 @@ CI runs `make licenses-check` on every pull request and fails if the committed r
 
 Run `make verify` before opening a pull request. CI runs the same target.
 
-If you touched anything under `.github/workflows/`, also run `make lint-actions`, actionlint plus zizmor, the same gate CI applies.
+If you touched anything under `.github/workflows/`, also run `make lint-actions`.
+It runs actionlint and zizmor, the same gate CI applies.
 It covers workflow syntax, embedded shell, SHA pinning, least-privilege permissions, template injection, and credential persistence.
 The runner-pin and SPDX-header rules below are *not* machine-checked. They are on you.
 
@@ -69,14 +70,25 @@ Dependabot does not see these pins. Bumping them is a manual step; a Renovate ma
 | `ZIZMOR_VERSION` | zizmor | `make lint-actions` | pinned release binary in `.bin/`, SHA-256 verified |
 | `CARGO_ABOUT_VERSION` | cargo-about | `make licenses`, `make licenses-check` | pinned `cargo install`, reinstalled on mismatch |
 
-The `.bin/` tools are verified against SHA-256 values committed next to the version, one per supported host, before they are extracted.
-Those hashes are ours, not upstream's checksum files, so a tampered release page cannot pass.
-To bump one: edit its `*_VERSION`, run `make tool-pin-hashes TOOL=<name> VERSION=<ver>`, paste the printed block over the old `sha256_<name>_*` lines, then run the gate that uses the tool.
-A version bump without fresh hashes fails on the first fetch and names the helper.
+The `.bin/` tools are verified against SHA-256 values committed next to the version, one per supported host (macOS and Linux, x86_64 and arm64), before they are extracted.
+Committing the hashes freezes what was downloaded when the pin was taken, so a release asset that changes afterwards cannot pass.
+It does not vouch for the asset at bump time; that is what the cross-check step below is for.
+
+To bump one:
+
+1. Edit its `*_VERSION` line.
+2. Run `make tool-pin-hashes TOOL=<name>`. It downloads the four archives and prints the `sha256_<name>_*` block; nothing is printed if any download fails.
+3. Cross-check the printed hashes against upstream: the release's checksum file (cargo-deny, cargo-cyclonedx, actionlint) or `gh attestation verify <archive> --repo <owner/repo>` (zizmor, cargo-cyclonedx, actionlint publish attestations).
+4. Paste the block over the old lines and run the gate that uses the tool.
+
+A version bump without fresh hashes fails on the first fetch and says so.
+A hash mismatch on a pin you did not bump means the download differs from what this repo pinned. Do not regenerate; investigate.
 
 A tool already on your `PATH` is used as-is and never replaced.
-If its version differs from the pin, the recipe prints one warning and continues; CI runners have none on `PATH`, so they always run the exact pin.
-`.bin/` needs only `curl`, `tar` and `shasum`.
+If its version differs from the pin, the recipe prints one warning and continues.
+CI sets `TOOL_PINS_STRICT=1`, which turns that warning into a failure, so a runner image that starts shipping one of these tools cannot displace the pin unnoticed; today no GitHub runner image ships any of them.
+Fetching needs `curl`, `tar` and `shasum`; on Linux, GNU tar also needs `xz` for cargo-cyclonedx's `.tar.xz` (macOS bsdtar does not).
+`make clean` removes `.bin/` along with the cargo target directories, which forces a fresh verified fetch.
 
 cargo-about is different on purpose: the licenses-drift gate diffs its output against the committed `THIRD-PARTY-LICENSES.md`, so every machine must run the identical version and the recipe reinstalls on mismatch.
 cargo-fuzz is not pinned: `make fuzz` is local-only and runs on a nightly toolchain that moves under it anyway.
