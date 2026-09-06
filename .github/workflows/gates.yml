@@ -12,6 +12,13 @@ on:
 permissions:
   contents: read
 
+env:
+  # A tool on PATH at a version other than the Makefile pin fails the
+  # job instead of warning, so a runner image that starts shipping
+  # cargo-deny, cargo-cyclonedx, actionlint or zizmor cannot displace
+  # the pinned .bin/ copy unnoticed. See "Tool pins" in CONTRIBUTING.md.
+  TOOL_PINS_STRICT: "1"
+
 jobs:
   verify:
     runs-on: ${{ matrix.os }}
@@ -32,7 +39,14 @@ jobs:
       - name: Install pinned Rust toolchain (honors rust-toolchain.toml)
         run: rustup show
 
+      # cache-bin off: cargo-deny is a pinned release binary the Makefile
+      # fetches into .bin/, so nothing under ~/.cargo/bin is needed here and
+      # a cached copy must not shadow the pin. The key rolled once when
+      # cache-bin turned off so an old entry with binaries is not restored.
       - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
+        with:
+          key: verify-nobin
+          cache-bin: "false"
 
       - name: Run verify
         run: make verify
@@ -55,8 +69,8 @@ jobs:
       - name: Install pinned Rust toolchain (honors rust-toolchain.toml)
         run: rustup show
 
-      # rust-cache restores ~/.cargo/bin, so cargo-about is only built
-      # from source on a cold cache.
+      # rust-cache restores ~/.cargo/bin, so cargo-about (a pinned
+      # `cargo install`) is only built from source on a cold cache.
       - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
         with:
           key: licenses-check
@@ -78,12 +92,9 @@ jobs:
         with:
           persist-credentials: false
 
-      # actionlint is a Go binary; zizmor installs via cargo. rust-cache
-      # restores ~/.cargo/bin, so neither is rebuilt on every run.
-      - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
-        with:
-          key: lint-actions
-
+      # No rust-cache: actionlint and zizmor are pinned, hash-verified
+      # release binaries the Makefile fetches into .bin/, and this job runs
+      # no cargo command at all.
       - name: Lint workflows
         run: make lint-actions
 
@@ -105,9 +116,12 @@ jobs:
       - name: Install pinned Rust toolchain (honors rust-toolchain.toml)
         run: rustup show
 
+      # cache-bin off for the same reason as `verify`: cargo-deny comes
+      # from .bin/, and a cached ~/.cargo/bin copy must not shadow the pin.
       - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
         with:
-          key: fuzz-check
+          key: fuzz-check-nobin
+          cache-bin: "false"
           workspaces: fuzz
 
       - name: Lint fuzz harnesses
