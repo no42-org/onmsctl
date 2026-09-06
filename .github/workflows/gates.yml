@@ -86,3 +86,29 @@ jobs:
 
       - name: Lint workflows
         run: make lint-actions
+
+  fuzz-check:
+    # fmt, clippy and cargo-deny for the cargo-fuzz harnesses under fuzz/ on
+    # the pinned stable toolchain. Running them needs nightly and is a local activity
+    # (`make fuzz`); this job only keeps them compiling when a parser API
+    # they call changes. Linux-only: a type/lint check of the harness code
+    # has nothing platform-specific to gain from the macOS runner.
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Rust toolchain (honors rust-toolchain.toml)
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
+        with:
+          key: fuzz-check
+          workspaces: fuzz
+
+      - name: Lint fuzz harnesses
+        run: make fuzz-check

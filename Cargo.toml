@@ -1,6 +1,9 @@
 [workspace]
 resolver = "2"
 members = ["crates/*"]
+# The fuzz harnesses are their own workspace (fuzz/Cargo.toml): they need a
+# nightly toolchain to run, so they stay out of the stable `make verify` gate.
+exclude = ["fuzz"]
 
 [workspace.package]
 version = "0.4.7"

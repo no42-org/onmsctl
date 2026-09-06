@@ -32,10 +32,15 @@ jobs:
       - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
           # Match deny.toml: project-scope copyleft is not introduced, while
-          # file-scope copyleft (MPL-2.0) is acceptable. Keep this list and
-          # deny.toml's `allow` in sync — see CONTRIBUTING.md.
+          # file-scope copyleft (MPL-2.0) is acceptable. Keep this list in
+          # sync with deny.toml's `allow` plus the licenses named in its
+          # `exceptions` — see CONTRIBUTING.md. This action cannot scope a
+          # license to one crate, so a per-crate exception in deny.toml
+          # (NCSA for libfuzzer-sys) is a blanket allow here; cargo-deny
+          # remains the gate that enforces the scoping.
           allow-licenses: >-
             Apache-2.0, MIT, BSD-2-Clause, BSD-3-Clause, ISC, MPL-2.0,
-            Unicode-3.0, Unicode-DFS-2016, Unlicense, Zlib
+            Unicode-3.0, Unicode-DFS-2016, Unlicense, Zlib, NCSA,
+            CDLA-Permissive-2.0
           fail-on-severity: low
           comment-summary-in-pr: on-failure
