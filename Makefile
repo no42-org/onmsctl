@@ -69,6 +69,14 @@ fuzz:  ## Run a fuzz target on nightly (FUZZ_TARGET=parse_documents FUZZ_SECS=60
 	  echo "fuzz: a nightly older than the workspace rust-version fails later with a clear cargo error; fix with: rustup update nightly" >&2; \
 	  exit 1; \
 	}
+	@test -f 'fuzz/fuzz_targets/$(FUZZ_TARGET).rs' || { \
+	  echo "fuzz: unknown target '$(FUZZ_TARGET)'. Targets: $(basename $(notdir $(wildcard fuzz/fuzz_targets/*.rs)))" >&2; \
+	  exit 1; \
+	}
+	@test -d 'fuzz/seeds/$(FUZZ_TARGET)' || { \
+	  echo "fuzz: no seed directory fuzz/seeds/$(FUZZ_TARGET)/. Every target ships seeds; add at least one input there." >&2; \
+	  exit 1; \
+	}
 	@$(MAKE) --no-print-directory install-cargo-fuzz
 	@mkdir -p '$(FUZZ_CORPUS)'
 	cargo +nightly fuzz run '$(FUZZ_TARGET)' '$(FUZZ_CORPUS)' $(FUZZ_SEEDS) -- '-max_total_time=$(FUZZ_SECS)' '-timeout=$(FUZZ_INPUT_TIMEOUT)'

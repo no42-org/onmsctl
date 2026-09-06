@@ -63,9 +63,13 @@ rules below are *not* machine-checked — they are on you.
 Parsers that read operator-supplied files (the `apply -f` YAML envelope, EventSource YAML, eventconf XML) have cargo-fuzz harnesses under `fuzz/`.
 They are a separate Cargo workspace because running them needs a nightly toolchain: `rustup toolchain install nightly`, then `make fuzz FUZZ_TARGET=eventconf_convert FUZZ_SECS=120` (it installs cargo-fuzz on first use).
 CI only fmt-, clippy- and license-checks them (`make fuzz-check`), so run a target for a few minutes when you change one of those parsers.
-A run starts from the committed seeds in `fuzz/seeds/<target>/` (plus `examples/` for the YAML targets); when you add a parser branch, add a seed that reaches it.
-A crash lands in `fuzz/artifacts/`; turn it into a regression unit test before fixing.
-The harnesses also check invariants, not just "no panic": a split document round-trips through serialization, and an accepted EventSource parses back equal from its own YAML, so a crash may point at a serde derive or `validate()` divergence rather than at the parser.
+A run starts from the committed seeds in `fuzz/seeds/<target>/`, plus `examples/` for the YAML targets (the `FUZZ_SEEDS` variable in the Makefile decides which).
+When you add a parser branch, add a seed that reaches it.
+Stable unit tests (`fuzz_seeds` in `onmsctl-core` and `onmsctl-eventconf`) assert what each seed is meant to exercise, so a seed that stops reaching its branch fails `make test`.
+A crash lands in `fuzz/artifacts/`. Turn it into a regression unit test before fixing.
+The harnesses also check invariants, not just "no panic".
+A split document round-trips through serialization, and an accepted EventSource parses back equal from its own YAML.
+A crash may therefore point at a serde derive or `validate()` divergence rather than at the parser.
 
 ## CI runner images
 

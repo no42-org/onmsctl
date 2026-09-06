@@ -1,4 +1,6 @@
-<events>
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Shaped like a vendor file: prolog, default namespace, comment. -->
+<events xmlns="http://xmlns.opennms.org/xsd/eventconf">
   <event-file>events/other.events.xml</event-file>
   <event>
     <mask>
