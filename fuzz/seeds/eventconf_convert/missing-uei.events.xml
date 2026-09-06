@@ -1,0 +1,6 @@
+<events>
+  <event>
+    <event-label>NoUei</event-label>
+    <severity>Warning</severity>
+  </event>
+</events>

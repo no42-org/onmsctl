@@ -1,0 +1,14 @@
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: cisco.seed
+spec:
+  enabled: false
+  events:
+    - uei: uei.opennms.org/cisco/seed/linkDown
+      label: "Seed Link Down"
+      severity: Minor
+      description: |
+        first line
+        ---
+        still the same document

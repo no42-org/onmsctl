@@ -1,0 +1,10 @@
+# Drives the guided rejection for the reserved spec.* keys.
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: cisco.seed
+spec:
+  fileOrder: 10
+  vendor: cisco
+  description: not allowed through apply
+  events: []

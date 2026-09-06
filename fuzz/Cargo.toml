@@ -18,6 +18,9 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 onmsctl-core = { path = "../crates/onmsctl-core" }
 onmsctl-eventconf = { path = "../crates/onmsctl-eventconf" }
+# Same major as the workspace: the round-trip invariants serialize with
+# the crate the parsers deserialize with.
+serde_norway = "0.9"
 
 [[bin]]
 name = "parse_documents"

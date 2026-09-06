@@ -1,0 +1,23 @@
+# Two real documents with null documents around and between them: a
+# leading marker, a comment-only document, and a trailing marker. The
+# splitter keeps two, with contiguous indexes.
+---
+apiVersion: eventconf.opennms.org/v1
+kind: EventSource
+metadata:
+  name: cisco.seed
+spec:
+  events:
+    - uei: uei.opennms.org/cisco/seed/coldStart
+      label: "Seed Cold Start"
+      severity: Warning
+---
+# nothing here
+---
+apiVersion: provisioning.opennms.org/v1
+kind: Requisition
+metadata:
+  name: seed
+spec:
+  nodes: []
+---
