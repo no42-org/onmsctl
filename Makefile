@@ -134,7 +134,7 @@ install-tools: install-cargo-deny install-cargo-about install-cargo-cyclonedx in
 # why cargo-about, unlike the prebuilt tools below, reinstalls on a version
 # mismatch instead of warning.
 # renovate: datasource=crate depName=cargo-about
-CARGO_ABOUT_VERSION ?= 0.9.1
+CARGO_ABOUT_VERSION ?= 0.9.2
 
 install-cargo-about:
 	@installed="$$(cargo about --version 2> /dev/null | awk '{print $$2}')"; \
