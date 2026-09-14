@@ -1,0 +1,13 @@
+rules:
+  # zizmor 1.30 wants the self-repository form (`uses: $/.github/...`) that
+  # GitHub shipped in July 2026. actionlint 1.7.12 — the latest release, cut
+  # in March 2026 — rejects it as a malformed reusable-workflow reference, so
+  # adopting it trades a zizmor finding for an actionlint error. The two
+  # linters are both gates; keep the workspace-relative form until actionlint
+  # learns the syntax, then drop this block and migrate all four call sites.
+  self-repository:
+    ignore:
+      - verify.yml
+      - release.yml
+      - preview.yml
+      - docker.yml
