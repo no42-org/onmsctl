@@ -252,7 +252,7 @@ sha256_actionlint_aarch64-unknown-linux-gnu := 325e971b6ba9bfa504672e29be93c2498
 sha256_actionlint_x86_64-unknown-linux-gnu := 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
 
 # renovate: datasource=github-releases depName=zizmorcore/zizmor extractVersion=^v(?<version>.*)$
-ZIZMOR_VERSION ?= 1.28.0
+ZIZMOR_VERSION ?= 1.30.1
 sha256_zizmor_aarch64-apple-darwin := 54949bbd6b4c8527046bb8990bac9e0dab3eec787640f4e6199ae121dd1040be
 sha256_zizmor_x86_64-apple-darwin := 40a58d8560d65c71357b3977d0da425773bf8f10bf1ffd38099d963d3afdf3aa
 sha256_zizmor_aarch64-unknown-linux-gnu := 324e43770cfacf4216f8aefb287263b5b5c733c85b03bf7583b5cc4a0460239e
