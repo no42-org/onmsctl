@@ -28,3 +28,8 @@ openspec/
 
 # Locally fetched lint binaries (actionlint, zizmor)
 .bin/
+
+# Docs site build output (website/)
+website/node_modules/
+website/build/
+website/.docusaurus/
