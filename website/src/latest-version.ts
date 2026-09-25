@@ -21,8 +21,30 @@ export function pickLatestStable(tags: readonly string[]): string | undefined {
   return best?.join('.');
 }
 
-/** Latest release from the checkout's git tags. Throws when there are none. */
+/**
+ * Validate an ONMSCTL_DOCS_VERSION value ("v0.4.7" or "0.4.7").
+ * Returns the version without the leading "v". Throws on anything else.
+ */
+export function normalizeVersionOverride(value: string): string {
+  const trimmed = value.trim();
+  const tag = trimmed.startsWith('v') ? trimmed : `v${trimmed}`;
+  if (!STABLE.test(tag)) {
+    throw new Error(
+      `ONMSCTL_DOCS_VERSION must be a stable release like v0.4.7 or 0.4.7, got "${value}".`,
+    );
+  }
+  return tag.slice(1);
+}
+
+/**
+ * Latest release for the landing-page badge.
+ * ONMSCTL_DOCS_VERSION wins when set: the deploy workflow puts the latest
+ * published GitHub Release there, because tags also exist for draft releases.
+ * Otherwise the highest stable git tag. Throws when neither yields a version.
+ */
 export function latestVersion(): string {
+  const override = process.env.ONMSCTL_DOCS_VERSION;
+  if (override !== undefined) return normalizeVersionOverride(override);
   const tags = execFileSync('git', ['tag', '--list', 'v*'], {encoding: 'utf8'}).split('\n');
   const version = pickLatestStable(tags);
   if (!version) {
