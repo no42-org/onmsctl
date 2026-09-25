@@ -1,0 +1,102 @@
+---
+title: Requisition
+description: Manage OpenNMS provisioning requisitions declaratively, migrate provision.pl XML, and drive the import lifecycle.
+---
+
+import CodeBlock from '@theme/CodeBlock';
+import example from '!!raw-loader!../../examples/requisition-acme-prod.yaml';
+
+Manage Horizon requisitions, the `provision.pl`-shape data, declaratively from git.
+`requisition convert` brings existing XML in, `apply` ships edits out, and `requisition import` / `status` cover the lifecycle.
+
+## YAML
+
+The composite `kind: Requisition` document carries both the requisition (nodes, interfaces, services, categories, assets) and its optional `spec.foreignSource` (scan interval, detectors, policies).
+
+A node may declare a `location` (its monitoring / Minion location); omit it for the Default location.
+
+```yaml
+apiVersion: provisioning.opennms.org/v1
+kind: Requisition
+metadata:
+  name: acme-prod
+spec:
+  # Omit this whole block for "portable" YAML that inherits Horizon's
+  # default foreign-source.
+  foreignSource:
+    scanInterval: 1d
+    detectors:
+      - name: ICMP
+        class: org.opennms.netmgt.provision.detector.icmp.IcmpDetector
+  nodes:
+    - foreignId: bbone-sw01
+      label: bbone-sw01
+      location: labmonkeys-hq          # monitoring (Minion) location
+      interfaces:
+        - ip: 192.168.8.8
+          snmpPrimary: P
+          services: [ICMP, SNMP]
+      categories: [Production, Network]
+```
+
+**Pinned vs portable `foreignSource`.** Include `spec.foreignSource` (detectors + policies) and the YAML owns both the requisition and its foreign source.
+Omit it and the requisition inherits Horizon's default foreign source; if a custom foreign source already existed for that name, `apply` deletes it (`--diff` enumerates the displaced detectors/policies).
+The example below shows the pinned style with every modeled field.
+
+**Unmodeled XML is preserved** under `metadata.x-onmsctl-unmodeled`, so a `convert` then `apply` then `export` then re-`apply` round trip keeps server-side fields onmsctl doesn't model yet.
+The annotation is stripped before the diff and the wire body, so it never changes the apply outcome.
+
+## Apply
+
+```sh
+onmsctl apply -f acme-prod.yaml --dry-run --diff   # preview the per-node diff
+onmsctl apply -f acme-prod.yaml                     # POST + auto-import
+```
+
+The apply path computes a three-level diff (canonical-bytes / per-node / per-leaf), auto-decides `rescanExisting` from the scan-relevance of what changed, writes the foreign source and requisition, and triggers the import.
+`apply` picks `rescanExisting` automatically from the diff: changes that affect what provisiond discovers (services, SNMP primary, detectors, location) trigger a rescan; pure metadata (labels, categories, assets) does not.
+Import completion is asynchronous: block with `import --wait` or poll `requisition status <fs>`.
+
+## Inspect and delete
+
+```sh
+onmsctl requisition list
+onmsctl requisition status acme-prod                # deployed state
+onmsctl requisition import acme-prod                # re-import without re-POST
+onmsctl requisition import acme-prod --rescan-existing   # re-evaluate existing nodes
+onmsctl requisition import acme-prod --wait --timeout 5m # block on the async import
+onmsctl requisition delete acme-prod --yes          # purge pending + deployed
+```
+
+`requisition delete <fs>` requires `--yes`: it purges both pending and deployed snapshots.
+
+Read-only inspection:
+
+```sh
+onmsctl requisition node list acme-prod
+onmsctl requisition interface list acme-prod <foreign-id>
+onmsctl requisition service list acme-prod <foreign-id> <ip>
+onmsctl requisition category list acme-prod <foreign-id>
+onmsctl requisition asset list acme-prod <foreign-id>
+```
+
+## Convert
+
+```sh
+# Migrate provision.pl-shape XML (requisitions + matching foreign-sources)
+onmsctl requisition convert --from ./reqs/ --foreign-sources-dir ./fs/ --out ./yaml/
+```
+
+Export what's already deployed, the reverse of apply:
+
+```sh
+onmsctl requisition export acme-prod > acme-prod.yaml      # one, to stdout
+onmsctl requisition export --out ./yaml/                   # all, per-file
+onmsctl requisition export acme-prod --include-defaults    # inline the default foreign source
+```
+
+The `provision.pl` migration is covered in the migration guide.
+
+## Example
+
+<CodeBlock language="yaml" title="examples/requisition-acme-prod.yaml">{example}</CodeBlock>

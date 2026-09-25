@@ -1,0 +1,72 @@
+---
+title: BusinessService
+description: Describe a Business Service Monitoring hierarchy declaratively, with reduce functions and four kinds of edge.
+---
+
+import CodeBlock from '@theme/CodeBlock';
+import example from '!!raw-loader!../../examples/business-service.yaml';
+
+Describe a Business Service Monitoring (BSM) hierarchy declaratively: a service, its per-service reduce function, optional attributes, and four kinds of edge (to child services, monitored IP services, applications, and raw alarm reduction keys), each with a `weight` and optional per-edge map function.
+Maps to the v2 `/api/v2/business-services` surface; named and multi-instance (one document per service).
+There is no version gate: the API is present in every supported Horizon/Meridian.
+
+## YAML
+
+```yaml
+apiVersion: bsm.opennms.org/v1
+kind: BusinessService
+metadata: { name: web-frontend }
+spec:
+  attributes: { owner: platform-team }
+  reduceFunction:
+    type: Threshold                 # HighestSeverity | Threshold | HighestSeverityAbove | ExponentialPropagation
+    properties: { threshold: "0.75" }
+  childServices:                    # → another BusinessService, by name
+    - { name: database-tier, weight: 2, mapFunction: { type: Increase } }
+  ipServices:                       # → a monitored service; node by label+location
+    - node: { label: webhost01, location: Default }
+      ipAddress: 10.0.0.10
+      service: HTTP
+  applications:                     # → an OpenNMS Application, by name
+    - { name: Webservers }
+  reductionKeys:                    # → a raw alarm reduction key (escape hatch)
+    - reductionKey: "uei.opennms.org/threshold/highThresholdExceeded::{{nodeId}}:10.0.0.10:ifHCInOctets:90.0:3:75.0:Gi1/0/1"
+      node: { label: webhost01 }    # resolves {{nodeId}} at apply
+      mapFunction: { type: SetTo, properties: { status: Major } }
+```
+
+References are by name (BSM's REST API is ID-centric; onmsctl resolves names to ids at apply, so the same YAML is portable across instances).
+
+**Node references.** A `node` is `{label, location}` (the default location is `Default`) or `{foreignSource, foreignId}`.
+Labels are not unique in OpenNMS; an ambiguous label fails the apply and tells you to use the foreignSource/foreignId form.
+
+**Prefer `ipServices` over hand-written reduction keys.** An `ipServices` edge auto-covers the service's standard alarms (`nodeLostService`/`interfaceDown`/`nodeDown`), so you never type a node id.
+Reach for `reductionKeys` only for custom alarms (thresholds, custom UEIs, situations); the literal key must match a resolved alarm reduction key (copy it from a real alarm, not the event-def formula), and `{{nodeId}}` (plus `{{foreignSource}}`/`{{foreignId}}`/`{{nodeLabel}}`) is expanded from the edge's `node`.
+
+## Apply
+
+```sh
+onmsctl apply -f examples/business-service.yaml --dry-run --diff
+```
+
+**Whole-object reconcile.** A service is created then fully PUT (a destructive full replace).
+Edges omitted from a document are pruned; an unchanged service (order-insensitive) is a no-op.
+Child references are resolved by a two-pass apply (create, then PUT with resolved ids), so two new services can reference each other in one file regardless of order; a child cycle fails at plan time.
+
+**Across-apply non-deletion.** A service present on the server but absent from your apply is not deleted; use `business-service delete <name>`.
+
+**Daemon reload.** Changes are inert until `bsmd` reloads; a mutating apply (and `delete`) issues exactly one `daemon/reload` automatically.
+
+## Inspect and delete
+
+```sh
+onmsctl business-service list                   # or: onmsctl bs list
+onmsctl business-service get web-frontend
+onmsctl business-service delete web-frontend     # explicit removal
+```
+
+`list`/`get` are Read; `apply`/`delete` are Write.
+
+## Example
+
+<CodeBlock language="yaml" title="examples/business-service.yaml">{example}</CodeBlock>

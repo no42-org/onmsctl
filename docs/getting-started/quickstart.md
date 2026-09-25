@@ -74,10 +74,10 @@ onmsctl apply -f ./gitops/ --recursive
 
 Each `kind` has its own reference page:
 
-- `EventSource`: event configuration sources.
-- `Requisition`: provisioning requisitions.
-- `User`: Horizon users and roles.
-- `SnmpConfig`: SNMP agent and trap config (singleton).
-- `Maintenance`: scheduled-outage maintenance windows.
-- `DataCollectionSource`: SNMP data-collection sources.
-- `BusinessService`: Business Service Monitoring (BSM).
+- [`EventSource`](../kinds/event-source.mdx): event configuration sources.
+- [`Requisition`](../kinds/requisition.mdx): provisioning requisitions.
+- [`User`](../kinds/user.mdx): Horizon users and roles.
+- [`SnmpConfig`](../kinds/snmp-config.mdx): SNMP agent and trap config (singleton).
+- [`Maintenance`](../kinds/maintenance.mdx): scheduled-outage maintenance windows.
+- [`DataCollectionSource`](../kinds/datacollection-source.mdx): SNMP data-collection sources.
+- [`BusinessService`](../kinds/business-service.mdx): Business Service Monitoring (BSM).

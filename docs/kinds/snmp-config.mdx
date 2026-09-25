@@ -1,0 +1,48 @@
+---
+title: SnmpConfig
+description: Manage Horizon's SNMP agent and trap-daemon configuration declaratively, as a whole-config singleton.
+---
+
+import CodeBlock from '@theme/CodeBlock';
+import example from '!!raw-loader!../../examples/snmp-config.yaml';
+
+Manage Horizon's SNMP configuration (`snmp-config.xml`: `defaults` + `profiles` + `definitions`) declaratively, and read it back with `snmp export` / `snmp lookup`.
+Targets `/api/v2/snmp-config`.
+
+## YAML
+
+`SnmpConfig` is a singleton: `metadata.name` is fixed to `default`.
+
+**Secrets are write-only.** Communities and v3 passphrases are rejected inline; reference an external secret (the same shape as IAM's `passwordRef`).
+They're excluded from the idempotency comparison, so a secret-only rotation isn't auto-detected; re-apply deliberately.
+`snmp export` emits placeholders, never cleartext.
+
+:::note Trap daemon requires a Horizon build with the Trapd REST API
+The trap daemon is configured via optional `spec.trapd`, reconciled against `/api/v2/trapd/config` in the same apply.
+It is additive: omit it and the trap daemon is untouched.
+This requires a Horizon build with the Trapd REST API (NMS-19128, the `37.x`/`develop` line); against older servers the `trapd` half fails with a clear version message while the snmp-config half still applies.
+:::
+
+## Apply
+
+Apply reconciles by whole-config replace: pull the deployed config, compare ignoring secret values, and re-upload only when it differs.
+
+```sh
+onmsctl apply -f examples/snmp-config.yaml --dry-run --diff
+onmsctl apply -f examples/snmp-config.yaml
+```
+
+**Order:** `SnmpConfig` applies before `Requisition`, so a co-located directory configures SNMP before importing nodes.
+An SNMP change does not auto-rescan already-imported nodes; follow with `requisition import <fs> --rescan-existing`.
+
+## Inspect and delete
+
+```sh
+onmsctl snmp export -O snmp-config.yaml          # deployed config to YAML (secrets as refs)
+onmsctl snmp lookup 192.168.8.8                  # effective params OpenNMS would use (masked)
+onmsctl snmp lookup 192.168.8.8 --location labmonkeys-hq --show-secrets
+```
+
+## Example
+
+<CodeBlock language="yaml" title="examples/snmp-config.yaml">{example}</CodeBlock>

@@ -19,6 +19,19 @@ const sidebars: SidebarsConfig = {
       label: 'Concepts',
       items: ['concepts/declarative-apply', 'concepts/read-only-contexts'],
     },
+    {
+      type: 'category',
+      label: 'Kinds',
+      items: [
+        'kinds/event-source',
+        'kinds/requisition',
+        'kinds/user',
+        'kinds/snmp-config',
+        'kinds/maintenance',
+        'kinds/datacollection-source',
+        'kinds/business-service',
+      ],
+    },
   ],
 };
 
