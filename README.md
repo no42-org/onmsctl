@@ -16,7 +16,7 @@ stay imperative.
 
 [horizon]: https://www.opennms.com/horizon/
 
-> **New to onmsctl?** Start with the [Quick Start](https://onmsctl.no42.org/getting-started/quickstart) — install,
+> **New to onmsctl?** Start with [Getting started](https://onmsctl.no42.org/getting-started/install) — install,
 > configure a context, and run your first `apply` in a few minutes.
 
 > **Pre-stability notice.** `v0.x.y` releases may break CLI flags, the config
@@ -30,7 +30,7 @@ stay imperative.
 # needs only curl). Set VERSION=vX.Y.Z by hand instead if you prefer to pin.
 VERSION=$(basename "$(curl -fsSLo /dev/null -w '%{url_effective}' \
   https://github.com/no42-org/onmsctl/releases/latest)")
-TARGET=x86_64-apple-darwin   # or one of the rows above
+TARGET=x86_64-apple-darwin   # see https://onmsctl.no42.org/getting-started/install for other targets
 
 curl -fL -O https://github.com/no42-org/onmsctl/releases/download/${VERSION}/onmsctl-${VERSION}-${TARGET}
 curl -fL -O https://github.com/no42-org/onmsctl/releases/download/${VERSION}/onmsctl-${VERSION}-${TARGET}.sha256

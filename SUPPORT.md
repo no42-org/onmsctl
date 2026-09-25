@@ -3,7 +3,7 @@
 ## Start with the docs
 
 - [Quick Start](https://onmsctl.no42.org/getting-started/quickstart) — install, configure a context, first `apply`.
-- [README](README.md) — every capability, with worked examples.
+- [Documentation site](https://onmsctl.no42.org) — every capability, with worked examples.
 - [EventSource reference](https://onmsctl.no42.org/kinds/event-source) — the `kind: EventSource` schema.
 - [Migration guide](https://onmsctl.no42.org/guides/migration) — bringing legacy eventconf and `provision.pl` files in.
 - `onmsctl <command> --help` — every command is self-documenting.

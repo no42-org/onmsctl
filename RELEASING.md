@@ -34,7 +34,7 @@ Each `v*.*.*` tag produces, via CI:
   below.
 
 Windows is not in the matrix yet; Windows operators build from source
-per the README.
+per `docs/getting-started/install.md`.
 
 ## Versioning
 
@@ -68,8 +68,8 @@ Before tagging, verify on `main`:
 2. **Version bumped** — `Cargo.toml`'s `[workspace.package].version` **and** the `=X.Y.Z` internal dep pins under `[workspace.dependencies]` match the tag you're about to push (without the leading `v`).
    Cargo.lock updates from a `cargo check` after the bump are committed.
    The same goes for `fuzz/Cargo.lock` after `make fuzz-check`: the harnesses depend on the workspace crates by path, so the bump changes their lockfile too.
-3. **README version references updated** — bump the version strings in
-   `README.md` so the docs match the release:
+3. **Install page version references updated** — bump the version strings in
+   `docs/getting-started/install.md` so the docs match the release:
    - the `VERSION=vX.Y.Z` value in the **Install** download example,
    - the `onmsctl X.Y.Z` sample output (and each capability line) under
      **Build from source**,
@@ -96,9 +96,9 @@ lands via a PR rather than a direct push.
 # 1. Bump the version on a branch.
 git checkout -b release/vX.Y.Z
 $EDITOR Cargo.toml                              # bump [workspace.package].version + the =X.Y.Z internal dep pins
-$EDITOR README.md                               # bump the version refs (see checklist item 3)
+$EDITOR docs/getting-started/install.md         # bump the version refs (see checklist item 3)
 cargo check --workspace                          # refresh Cargo.lock
-git add Cargo.toml Cargo.lock README.md
+git add Cargo.toml Cargo.lock docs/getting-started/install.md
 git commit -s -m "chore(release): bump workspace version to vX.Y.Z"
 git push -u origin release/vX.Y.Z
 gh pr create --fill
@@ -183,7 +183,7 @@ checkout rather than from artifacts a previous run left behind.
 
 ```sh
 VERSION=vX.Y.Z
-TARGET=x86_64-apple-darwin  # or another row from the README matrix
+TARGET=x86_64-apple-darwin  # or another row from the install page matrix
 
 curl -fL -O https://github.com/no42-org/onmsctl/releases/download/${VERSION}/onmsctl-${VERSION}-${TARGET}
 curl -fL -O https://github.com/no42-org/onmsctl/releases/download/${VERSION}/onmsctl-${VERSION}-${TARGET}.sha256
