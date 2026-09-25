@@ -52,5 +52,5 @@ onmsctl apply -f 'sources/cisco-*.yaml'           # glob (quote it)
 | `-R` / `--recursive` | Recurse into subdirectories (off by default). |
 
 **Exit codes:** `0` all applied/unchanged; `1` any document failed (incl. a plan-gate failure); `2` usage error.
-The full table is under the Conventions & tooling reference.
-The imperative mutators that predated this model are gone: see the migration guide, `docs/migration.md#removed-imperative-verbs--onmsctl-apply--f`.
+The full table is under [Exit codes](../reference/exit-codes.md).
+The imperative mutators that predated this model are gone: see the [migration guide](../guides/migration.md#removed-imperative-verbs--onmsctl-apply--f).

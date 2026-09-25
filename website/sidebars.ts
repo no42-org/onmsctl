@@ -32,6 +32,24 @@ const sidebars: SidebarsConfig = {
         'kinds/business-service',
       ],
     },
+    {
+      type: 'category',
+      label: 'Guides',
+      items: ['guides/migration', 'guides/troubleshooting'],
+    },
+    {
+      type: 'category',
+      label: 'Reference',
+      items: [
+        'reference/global-flags',
+        'reference/output-formats',
+        'reference/exit-codes',
+        'reference/shell-completions',
+        'reference/tls',
+        'reference/editor-integration',
+        'reference/compatibility',
+      ],
+    },
   ],
 };
 

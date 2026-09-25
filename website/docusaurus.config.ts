@@ -66,6 +66,14 @@ const config: Config = {
       style: 'dark',
       links: [
         {
+          title: 'Docs',
+          items: [
+            {label: 'Getting started', to: '/getting-started/install'},
+            {label: 'Kinds', to: '/kinds/event-source'},
+            {label: 'Reference', to: '/reference/global-flags'},
+          ],
+        },
+        {
           title: 'Project',
           items: [
             {label: 'GitHub', href: 'https://github.com/no42-org/onmsctl'},
