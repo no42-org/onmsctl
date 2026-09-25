@@ -68,6 +68,7 @@ Requires the toolchain pinned in `rust-toolchain.toml` (currently Rust 1.95):
 ```sh
 git clone https://github.com/no42-org/onmsctl && cd onmsctl
 make build                              # debug → target/debug/onmsctl
+cargo build --release                   # → target/release/onmsctl
 cargo install --path crates/onmsctl     # → ~/.cargo/bin
 ```
 

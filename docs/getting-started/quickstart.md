@@ -77,7 +77,7 @@ Each `kind` has its own reference page:
 - `EventSource`: event configuration sources.
 - `Requisition`: provisioning requisitions.
 - `User`: Horizon users and roles.
-- `SnmpConfig`: SNMP agent and trap-daemon configuration.
+- `SnmpConfig`: SNMP agent and trap config (singleton).
 - `Maintenance`: scheduled-outage maintenance windows.
 - `DataCollectionSource`: SNMP data-collection sources.
-- `BusinessService`: Business Service Monitoring (BSM) services and edges.
+- `BusinessService`: Business Service Monitoring (BSM).
