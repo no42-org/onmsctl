@@ -92,7 +92,7 @@ Export what's already deployed, the reverse of apply:
 ```sh
 onmsctl requisition export acme-prod > acme-prod.yaml      # one, to stdout
 onmsctl requisition export --out ./yaml/                   # all, per-file
-onmsctl requisition export acme-prod --include-defaults    # inline the default foreign source
+onmsctl requisition export acme-prod --include-defaults    # inline the default FS
 ```
 
 The `provision.pl` migration is covered in the migration guide.

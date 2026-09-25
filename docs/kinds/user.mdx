@@ -37,10 +37,10 @@ A context may tune defaults under an `iam:` block (`protected-roles`, `known-rol
 ## Apply
 
 ```sh
-JDOE_PASSWORD=... onmsctl apply -f user.yaml --dry-run --diff
-JDOE_PASSWORD=... onmsctl apply -f user.yaml
-onmsctl apply -f ./users/ --dry-run --diff            # a directory of users, previewed
-onmsctl apply -f ./users/                             # applied
+JDOE_PASSWORD=… onmsctl apply -f user.yaml --dry-run --diff
+JDOE_PASSWORD=… onmsctl apply -f user.yaml
+onmsctl apply -f ./users/ --dry-run --diff            # preview
+onmsctl apply -f ./users/                             # apply
 ```
 
 **Lockout protection.** Apply refuses a plan that would empty a protected role (`IAM-001`, exit 13; override per-context with `allow-admin-lockout: true`) or strip or delete the calling user's own protected role (`IAM-002`, exit 14, no override).

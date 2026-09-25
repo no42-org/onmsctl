@@ -22,7 +22,7 @@ See [Field semantics](#field-semantics) below for the full per-field schema and 
 onmsctl apply -f cisco.foo.yaml --diff   # push (diff to stderr)
 ```
 
-`apply` is idempotent: Horizon's upsert replaces events under an existing basename, so applying an unchanged document is a no-op.
+`apply` is idempotent: Horizon's upsert replaces events under an existing basename.
 
 ## Inspect and delete
 
@@ -38,9 +38,9 @@ onmsctl event list --source <id>                   # events for a source
 Snapshot server sources back to git-managed YAML, the reverse of `apply`:
 
 ```sh
-onmsctl event-source export cisco.foo             # one source to stdout (YAML)
-onmsctl event-source export cisco.foo --out ./s/  # one source to ./s/cisco.foo.yaml
-onmsctl event-source export --out ./sources/      # every source, one file each
+onmsctl event-source export cisco.foo            # one source → stdout (YAML)
+onmsctl event-source export cisco.foo --out ./s/  # one source → ./s/cisco.foo.yaml
+onmsctl event-source export --out ./sources/      # every source → one file each
 ```
 
 Export routes through the `convert` migrator, so it carries the same `EC###` findings, on stderr.

@@ -38,10 +38,12 @@ An SNMP change does not auto-rescan already-imported nodes; follow with `requisi
 ## Inspect and delete
 
 ```sh
-onmsctl snmp export -O snmp-config.yaml          # deployed config to YAML (secrets as refs)
-onmsctl snmp lookup 192.168.8.8                  # effective params OpenNMS would use (masked)
+onmsctl snmp export -O snmp-config.yaml          # deployed config → YAML (secrets as refs)
+onmsctl snmp lookup 192.168.8.8
 onmsctl snmp lookup 192.168.8.8 --location labmonkeys-hq --show-secrets
 ```
+
+They're write-only: masked on `lookup`, placeholders on `export`.
 
 ## Example
 
