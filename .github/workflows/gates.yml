@@ -126,3 +126,28 @@ jobs:
 
       - name: Lint fuzz harnesses
         run: make fuzz-check
+
+  docs:
+    # The Docusaurus site in website/. Separate from `verify` so a broken
+    # link is not reported as a Rust failure. No npm cache: this gate also
+    # runs on tag pushes (release.yml, docker.yml), and a restored cache
+    # there is a poisoning path (zizmor: cache-poisoning).
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The landing-page badge reads the latest release from v* tags.
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: website/.nvmrc
+          package-manager-cache: false
+
+      - name: Build docs and check links into the site
+        run: make docs-urls

@@ -16,6 +16,9 @@ Rust workspace, Apache-2.0, pre-1.0.
 | `make licenses` | Regenerate `THIRD-PARTY-LICENSES.md` after a dependency change. CI (`licenses-drift`) fails on a stale report. |
 | `make integration` | Live-Horizon tests. Needs `ONMSCTL_TEST_URL` / `_USER` / `_PASSWORD`. |
 | `make fuzz` | Run one cargo-fuzz harness from `fuzz/` on nightly (`FUZZ_TARGET=`, `FUZZ_SECS=`). `make fuzz-check` runs fmt, clippy and cargo-deny on them on stable and is a CI job. |
+| `make docs` | Build the documentation site into `website/build`. Fails on a broken link or anchor. |
+| `make docs-serve` | Serve the documentation site locally with live reload. |
+| `make docs-urls` | Build the site, then check that links from repo files into it resolve. CI runs this in the `docs` gate. |
 
 Single test: `cargo test -p onmsctl-core peek_kind` (add `-- --nocapture` for output).
 

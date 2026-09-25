@@ -74,3 +74,22 @@ updates:
       include: scope
     labels:
       - dependencies
+
+  # The docs site (website/) has its own npm lockfile.
+  - package-ecosystem: npm
+    directory: /website
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: build
+      include: scope
+    labels:
+      - dependencies
+    groups:
+      docs-deps:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch

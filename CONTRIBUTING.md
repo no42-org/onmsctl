@@ -106,6 +106,16 @@ The harnesses also check invariants, not just "no panic".
 A split document round-trips through serialization, and an accepted EventSource parses back equal from its own YAML.
 A crash may therefore point at a serde derive or `validate()` divergence rather than at the parser.
 
+## Documentation
+
+The documentation site source lives in `docs/`.
+The Docusaurus app that renders it lives in `website/`.
+It needs Node 24, pinned in `website/.nvmrc`.
+Build it with `make docs`; a broken link or anchor fails the build.
+Run `make docs-urls` to also check that links from repo files into the site resolve.
+Serve it locally with `make docs-serve`.
+For manual verification steps, see [`dev/manual-test-runbook.md`](dev/manual-test-runbook.md).
+
 ## CI runner images
 
 GitHub Actions jobs pin their runner to an explicit version label (e.g. `ubuntu-24.04`,

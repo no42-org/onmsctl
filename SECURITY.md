@@ -73,5 +73,6 @@ Out of scope:
 
 Every release artifact and container image is signed with Sigstore
 cosign (keyless, GitHub OIDC — no long-lived keys), and releases carry a
-CycloneDX SBOM. Verification recipes are in
-[`README.md`](README.md#install) and [`RELEASING.md`](RELEASING.md#verifying-a-published-release).
+CycloneDX SBOM. Verification recipes are at
+[onmsctl.no42.org/getting-started/install](https://onmsctl.no42.org/getting-started/install)
+and in [`RELEASING.md`](RELEASING.md#verifying-a-published-release).

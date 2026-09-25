@@ -1,0 +1,45 @@
+---
+title: DataCollectionSource
+description: Manage which MIB objects and system definitions Horizon collects over SNMP, declaratively, per source.
+---
+
+import CodeBlock from '@theme/CodeBlock';
+import example from '!!raw-loader!../../examples/datacollection-source.yaml';
+
+Manage Horizon's SNMP data-collection config, which MIB objects, resource types, and system definitions are collected, over the DB-backed `/api/v2/datacollectionconf` surface.
+One `kind: DataCollectionSource` document per `datacollection-group` (a "source"); onmsctl owns only the sources you write.
+The stock vendor library is left untouched: this is an additive prune, not a singleton.
+
+## YAML
+
+**`profiles` is the full truth (a true reconcile).** A name added is attached, a name dropped is detached.
+A new source must list at least one profile.
+An optional inline `profileSpec` creates or tunes that profile from zero.
+
+:::note Preflight version gate
+The `/api/v2/datacollectionconf` endpoint is absent from released Horizon `<= 37.0.0`.
+Apply probes it once and fails the whole apply early, before any write, on a server that lacks it.
+:::
+
+## Apply
+
+```sh
+onmsctl apply -f examples/datacollection-source.yaml
+```
+
+**Whole-source replace.** A changed group tree is re-uploaded and the server upserts and prunes removed children.
+An unchanged source (normalized, order-insensitive) is a no-op.
+
+## Inspect and delete
+
+```sh
+onmsctl datacollection list [--profiles]              # deployed sources / profiles
+onmsctl datacollection export acme-router             # the group as xml (or --format json)
+onmsctl datacollection delete acme-router             # remove the source + children
+```
+
+`list`/`export` are Read; `apply`/`delete` are Write.
+
+## Example
+
+<CodeBlock language="yaml" title="examples/datacollection-source.yaml">{example}</CodeBlock>

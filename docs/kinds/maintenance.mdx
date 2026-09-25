@@ -1,0 +1,64 @@
+---
+title: Maintenance
+description: Plan OpenNMS maintenance windows declaratively, mapped to scheduled outages with per-daemon suppression.
+---
+
+import CodeBlock from '@theme/CodeBlock';
+import example from '!!raw-loader!../../examples/maintenance.yaml';
+
+Plan a maintenance window: for a period, stop OpenNMS polling, notifications, and threshold (and optionally collection) evaluation on chosen devices.
+Maps to an OpenNMS scheduled outage (`/rest/sched-outages`); named and multi-instance (one document per window), reconciled like requisitions.
+There is no version gate: the API is present in every supported Horizon/Meridian.
+
+## YAML
+
+```yaml
+apiVersion: maintenance.opennms.org/v1
+kind: Maintenance
+metadata: { name: weekend-patching }
+spec:
+  schedule:
+    type: specific                  # specific | daily | weekly | monthly
+    times:
+      - { begins: "20-Jun-2026 22:00:00", ends: "21-Jun-2026 04:00:00" }
+  devices:                          # selectors are a UNION, deduped to nodeIds
+    interfaces: [192.168.8.8]       # an IP, or the single literal `match-any`
+    nodes: [ { foreignSource: hq, foreignId: web01 } ]   # resolved to a nodeId at apply
+    categories: [Routers]           # every node in ANY listed category
+    locations: [Berlin]             # every node at ANY listed Minion location
+    asset: { field: city, value: Berlin }
+  suppress:
+    polling: { packages: [production] }   # explicit packages required (no default)
+    notifications: true                   # global (no package)
+```
+
+**Explicit packages; server timezone; foreignId nodes.** `polling`/`thresholds`/`collection` require an explicit `packages` list.
+Times are the server's timezone.
+Nodes are named by `{foreignSource, foreignId}` and resolved at apply: an un-imported node fails that window, which is why `Maintenance` applies after `Requisition`.
+Prefer `interfaces`/`match-any` when nodes may be un-imported.
+
+**Dynamic selectors** (`categories`/`locations`/`asset`) are a union, not an intersection, re-resolved on every apply (a snapshot).
+A selector matching nothing warns; a window covering nothing fails.
+
+## Apply
+
+```sh
+onmsctl apply -f examples/maintenance.yaml --dry-run --diff
+```
+
+Apply writes the outage definition (a true `Created`/`Updated`/`Unchanged`), then attaches it per daemon (`polling` to pollerd, `thresholds` to threshd, `collection` to collectd per package; `notifications` to notifd global).
+
+**Attachments are ensure-present.** The API can't read which daemons an outage is attached to, so onmsctl re-issues the idempotent attach every apply and cannot detach; removing a `suppress` entry does not detach it.
+To reduce suppression, `maintenance delete <name>` and re-apply.
+
+## Inspect and delete
+
+```sh
+onmsctl maintenance list                       # or: onmsctl maint list
+onmsctl maintenance status 192.168.8.8 12     # IP or nodeId → in a window now?
+onmsctl maintenance delete weekend-patching    # full teardown
+```
+
+## Example
+
+<CodeBlock language="yaml" title="examples/maintenance.yaml">{example}</CodeBlock>

@@ -1,0 +1,73 @@
+---
+title: User
+description: Manage Horizon users and roles declaratively, and read, rotate, or delete them imperatively.
+---
+
+import CodeBlock from '@theme/CodeBlock';
+import example from '!!raw-loader!../../examples/iam-user.yaml';
+
+Manage Horizon users and roles declaratively (`kind: User`) and imperatively via the read / rotate / delete verbs.
+Targets the `users` REST surface on Horizon 35+.
+
+## YAML
+
+```yaml
+apiVersion: onmsctl.no42.org/v1alpha1
+kind: User
+metadata:
+  name: jdoe
+spec:
+  fullName: Jane Doe
+  email: jane@example.com
+  roles: [ROLE_USER]
+  passwordRef:            # passwords are create-only and never inline
+    fromEnv: JDOE_PASSWORD
+```
+
+**Roles reconcile as a set.** `roles: [B, C]` against a server holding `[A, B]` grants `C`, revokes `A`, and keeps `B`.
+Omitted scalar fields never clear the server value: this is a merge, not a replace.
+
+**`passwordRef`: passwords are create-only and never inline.** A literal `password:` is rejected at parse (`PR-IAM-001`); reference an external secret (`fromFile`/`fromEnv`/`fromKeyring`).
+It is honored on create only; `apply` never rotates a password (it can't read the current password to diff), so use `iam user set-password`.
+
+`dutySchedule` is create-only (`PR-IAM-004` warns on change); a purely numeric `metadata.name` is refused (`PR-IAM-003`).
+
+A context may tune defaults under an `iam:` block (`protected-roles`, `known-roles`, `allow-admin-lockout`).
+
+## Apply
+
+```sh
+JDOE_PASSWORD=… onmsctl apply -f user.yaml --dry-run --diff
+JDOE_PASSWORD=… onmsctl apply -f user.yaml
+onmsctl apply -f ./users/ --dry-run --diff            # preview
+onmsctl apply -f ./users/                             # apply
+```
+
+**Lockout protection.** Apply refuses a plan that would empty a protected role (`IAM-001`, exit 13; override per-context with `allow-admin-lockout: true`) or strip or delete the calling user's own protected role (`IAM-002`, exit 14, no override).
+If `whoami` is unavailable for a self-affecting change, apply refuses (exit 15) rather than skip the check.
+
+## Inspect and delete
+
+```sh
+onmsctl iam whoami                                    # the calling user
+onmsctl iam user list|get|export                      # reads
+onmsctl iam user delete alice --yes
+printf %s "$NEW_PW" | onmsctl iam user set-password alice --password-stdin
+```
+
+`iam user export` snapshots all users as YAML.
+
+Rotate a password (pick exactly one source):
+
+```sh
+onmsctl iam user set-password jdoe --password-stdin   # read one line from stdin
+onmsctl iam user set-password jdoe --from-env JDOE_PASSWORD
+onmsctl iam user set-password jdoe --from-file ./pw
+onmsctl iam user set-password jdoe --from-keyring myservice/jdoe
+```
+
+The legacy `users.xml` migration is covered in the [migration guide](../guides/migration.md#legacy-usersxml--onmsctl).
+
+## Example
+
+<CodeBlock language="yaml" title="examples/iam-user.yaml">{example}</CodeBlock>
