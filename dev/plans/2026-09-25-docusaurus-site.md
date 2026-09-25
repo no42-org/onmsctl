@@ -1074,6 +1074,7 @@ After merge, the maintainer needs to:
 - DNS: onmsctl.no42.org CNAME no42-org.github.io.
 - Settings, Pages: custom domain onmsctl.no42.org, then Enforce HTTPS.
 - Repo homepage URL: https://onmsctl.no42.org.
+- Add `gate / docs` to the required status checks of the `main protection` ruleset.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 EOF
@@ -1082,4 +1083,4 @@ Expected: `gate / docs` passes on the PR.
 
 - [ ] **Step 5: After merge and the manual steps**
 
-`curl -sI https://onmsctl.no42.org | head -1` → `HTTP/2 200`. Push of the next `v*` tag triggers `docs.yml` and the badge updates (Review Focus 5).
+`curl -sI https://onmsctl.no42.org | head -1` → `HTTP/2 200`. Publishing the next release triggers `docs.yml` and the badge updates (Review Focus 5).

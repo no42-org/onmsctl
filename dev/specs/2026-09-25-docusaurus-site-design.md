@@ -104,12 +104,14 @@ The README keeps:
 
 The landing page shows the latest release as a badge, modelled on `riptide.space`.
 
-- `docusaurus.config.ts` resolves the version at build start from git tags: `git tag --list 'v*' --sort=-version:refname`, keeping only stable tags that match `^v[0-9]+\.[0-9]+\.[0-9]+$`. The result goes into `customFields.latestVersion`.
+- `docusaurus.config.ts` resolves the version at build start into `customFields.latestVersion`.
+- The env var `ONMSCTL_DOCS_VERSION` wins when set. It accepts `v0.4.7` or `0.4.7`. Any other value fails the build.
+- Otherwise the version is the highest stable git tag matching `^v[0-9]+\.[0-9]+\.[0-9]+$`. Local builds use this path.
 - If no stable tag is found (for example in a shallow clone), the build fails with a message saying tags are required.
 - `website/src/components/VersionBadge.tsx` reads `customFields.latestVersion` and renders a pill link, `vX.Y.Z ↗`, to `https://github.com/no42-org/onmsctl/releases/tag/vX.Y.Z`. It carries an `aria-label` naming the release notes and a `focus-visible` outline.
 - Badge styles live in `src/css/custom.css` and use Infima colour variables so light and dark mode both work.
 - `docs/intro.mdx` renders `<VersionBadge />` above the pitch. The badge appears on the landing page only.
-- Assumption: a pushed `v*` tag means a published release. A tag whose release stays a draft would be advertised. The release workflow publishes on tag push, so this holds in normal operation.
+- `release.yml` creates every release as a draft, so a tag alone does not mean a published release. The deploy workflow therefore sets `ONMSCTL_DOCS_VERSION` to the latest published release (`gh release view`), and redeploys when a release is published.
 
 ## Build and CI
 
@@ -123,8 +125,10 @@ Workflows:
 - `gates.yml` gains a `docs` job on `ubuntu-24.04` running `make docs`. PRs, `main` pushes and releases enforce a buildable site through the existing gate. It is a separate job so a docs failure is not reported as a Rust failure.
 - The `gates.yml` docs job checks out with `fetch-depth: 0` and `fetch-tags: true` so the version badge resolves.
 - New `docs.yml` deploys the site:
-  - Triggers: push to `main` touching `docs/**`, `website/**` or `examples/**`, push of a `v*` tag (so the badge updates on every release), plus `workflow_dispatch`.
-  - Checkout uses `fetch-depth: 0` and `fetch-tags: true`.
+  - Triggers: push to `main` touching `docs/**`, `website/**` or `examples/**`, `release: published` (so the badge moves when a draft is published), plus `workflow_dispatch`.
+  - Checkout builds the default branch, also on a release event, with `fetch-depth: 0` and `fetch-tags: true`.
+  - A step resolves the latest published release with `gh release view` and exports it as `ONMSCTL_DOCS_VERSION` before `make docs`.
+  - The `build` job runs only in `no42-org/onmsctl`, so forks do not try to deploy.
   - Jobs: `build` runs `make docs` and `actions/upload-pages-artifact`. `deploy` runs `actions/deploy-pages`.
   - Permissions: `contents: read` at the top. `pages: write` and `id-token: write` only on `deploy`.
   - `environment: github-pages`, `concurrency: { group: pages, cancel-in-progress: false }`.
@@ -143,6 +147,7 @@ Dependency updates:
 2. DNS: `onmsctl.no42.org CNAME no42-org.github.io`.
 3. Settings, Pages: set the custom domain, then enable "Enforce HTTPS" once the certificate is issued.
 4. Set the repository homepage URL to `https://onmsctl.no42.org`.
+5. Add `gate / docs` to the required status checks of the `main protection` ruleset.
 
 ## Verification
 
