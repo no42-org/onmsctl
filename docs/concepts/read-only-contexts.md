@@ -5,7 +5,7 @@ description: Short verb aliases and how a read-only context refuses every write 
 
 ## Verb aliases
 
-Short aliases: `event-source`→`evtsrc`, `event`→`evt`, `requisition`→`req`, `config`→`cfg`, `maintenance`→`maint`, `datacollection`→`dc`.
+Short aliases: `event-source`→`evtsrc`, `event`→`evt`, `requisition`→`req`, `maintenance`→`maint`, `datacollection`→`dc`, `business-service`→`bs`, `config`→`cfg`.
 Both forms appear in `--help`.
 
 ## Read-only contexts

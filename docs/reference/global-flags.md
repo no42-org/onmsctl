@@ -25,4 +25,4 @@ Override precedence, highest wins:
 flags  >  environment  >  active context  >  built-in default
 ```
 
-Top-level verbs have short aliases: `event-source`→`evtsrc`, `event`→`evt`, `requisition`→`req`, `maintenance`→`maint`, `datacollection`→`dc`, `business-service`→`bs`, `config`→`cfg`.
+Top-level verbs have short aliases; see [Verb aliases](../concepts/read-only-contexts.md#verb-aliases).
