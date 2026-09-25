@@ -3,13 +3,17 @@ title: Quick Start
 description: Core concepts and a five-minute tour of onmsctl's declarative apply workflow.
 ---
 
-A practical, end-to-end guide to installing, configuring, and using `onmsctl`, the command-line interface for OpenNMS Horizon.
+This page covers the core concepts of `onmsctl`, the command-line interface for OpenNMS Horizon, and a five-minute tour.
+It assumes you have [installed](install.md) `onmsctl` and [configured a context](configure-context.md).
 
 `onmsctl` follows the kubectl pattern: one config file with named contexts, a single declarative `apply -f` mutation entrypoint, and read-only inspection verbs alongside it.
 It is a single statically linked binary that bundles seven capabilities: **eventconf** (`event-source` / `event`), **provisioning** (`requisition`), **IAM** (`iam`), **SNMP config** (`snmp`), **maintenance** (`maintenance`), **data collection** (`datacollection`), and **BSM** (`business-service`).
 
 > This is the fast path.
-> For signature verification, the full `provision.pl` migration map, the EventSource schema reference, and server-compatibility notes, see the [README](https://github.com/no42-org/onmsctl/blob/main/README.md).
+> For signature verification, see [Install](install.md).
+> For the full `provision.pl` migration map, see [Migration](../guides/migration.md).
+> For the EventSource schema reference, see [EventSource](../kinds/event-source.mdx).
+> For server-compatibility notes, see [Compatibility](../reference/compatibility.md).
 
 ## Core concepts
 
