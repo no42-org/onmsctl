@@ -49,7 +49,7 @@ const config: Config = {
   themes: [
     [
       '@easyops-cn/docusaurus-search-local',
-      {hashed: true, docsRouteBasePath: '/', indexBlog: false},
+      {hashed: true, docsDir: '../docs', docsRouteBasePath: '/', indexBlog: false},
     ],
   ],
 
