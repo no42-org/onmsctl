@@ -7,7 +7,7 @@ body:
       value: |
         GitHub Discussions is not enabled on this repository, so questions
         belong here. Please check [SUPPORT.md](https://github.com/no42-org/onmsctl/blob/main/SUPPORT.md)
-        and the [Quick Start](https://github.com/no42-org/onmsctl/blob/main/docs/quickstart.md)
+        and the [Quick Start](https://onmsctl.no42.org/getting-started/quickstart)
         first.
 
         Questions about **OpenNMS Horizon or Meridian itself** are better

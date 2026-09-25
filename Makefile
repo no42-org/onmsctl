@@ -1,4 +1,4 @@
-.PHONY: help build test verify fmt clippy deny fuzz-check fuzz lint-actions licenses licenses-check install-tools install-cargo-deny install-cargo-about install-cargo-cyclonedx install-cargo-fuzz install-actionlint install-zizmor tool-pin-hashes release-build sbom integration schema docker docs docs-serve clean
+.PHONY: help build test verify fmt clippy deny fuzz-check fuzz lint-actions licenses licenses-check install-tools install-cargo-deny install-cargo-about install-cargo-cyclonedx install-cargo-fuzz install-actionlint install-zizmor tool-pin-hashes release-build sbom integration schema docker docs docs-serve docs-urls clean
 
 # Self-documenting: annotate each user-facing target with `## description`
 # and it shows up in `make help`. Sorted in declaration order.
@@ -128,6 +128,9 @@ docs:  ## Build the documentation site into website/build (fails on broken links
 
 docs-serve:  ## Serve the documentation site locally with live reload
 	cd website && npm ci && npm start
+
+docs-urls: docs  ## Check links from repo files into the docs site resolve
+	scripts/check-site-urls.sh
 
 clean:  ## Remove the cargo target directories (root and fuzz/) and the fetched tools in .bin/
 	cargo clean
