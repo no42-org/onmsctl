@@ -5,7 +5,8 @@
     "start": "docusaurus start",
     "build": "docusaurus build",
     "serve": "docusaurus serve",
-    "clear": "docusaurus clear"
+    "clear": "docusaurus clear",
+    "test": "node --test src/latest-version.test.ts"
   },
   "dependencies": {
     "@docusaurus/core": "3.10.2",

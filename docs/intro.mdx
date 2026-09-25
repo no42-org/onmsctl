@@ -4,6 +4,10 @@ slug: /
 description: onmsctl is a kubectl-style command-line interface for OpenNMS Horizon.
 ---
 
+import VersionBadge from '@site/src/components/VersionBadge';
+
+<VersionBadge />
+
 A `kubectl`-style command-line interface for [OpenNMS Horizon](https://www.opennms.com/horizon/).
 One declarative entrypoint, `onmsctl apply -f`, peeks each YAML document's `kind` and routes it to the right handler.
 This lets users, event sources, SNMP config, requisitions, maintenance windows, and data-collection sources all reconcile through a single command.

@@ -6,6 +6,7 @@
 import type {Config} from '@docusaurus/types';
 import type * as Preset from '@docusaurus/preset-classic';
 import {themes as prismThemes} from 'prism-react-renderer';
+import {latestVersion} from './src/latest-version';
 
 const config: Config = {
   title: 'onmsctl',
@@ -26,6 +27,9 @@ const config: Config = {
   },
 
   i18n: {defaultLocale: 'en', locales: ['en']},
+
+  // Resolved from git tags at build start; see src/latest-version.ts.
+  customFields: {latestVersion: latestVersion()},
 
   presets: [
     [

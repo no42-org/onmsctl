@@ -124,7 +124,7 @@ docker:  ## Build the distroless OCI image for the host arch (IMAGE=onmsctl:dev)
 # links and anchors fail the build. `npm test` covers the release-version
 # picker behind the landing-page badge.
 docs:  ## Build the documentation site into website/build (fails on broken links)
-	cd website && npm ci && npm run build
+	cd website && npm ci && npm test && npm run build
 
 docs-serve:  ## Serve the documentation site locally with live reload
 	cd website && npm ci && npm start
