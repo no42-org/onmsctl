@@ -6,7 +6,20 @@
 import type {SidebarsConfig} from '@docusaurus/plugin-content-docs';
 
 const sidebars: SidebarsConfig = {
-  docs: ['intro'],
+  docs: [
+    'intro',
+    {
+      type: 'category',
+      label: 'Getting started',
+      collapsed: false,
+      items: ['getting-started/install', 'getting-started/configure-context', 'getting-started/quickstart'],
+    },
+    {
+      type: 'category',
+      label: 'Concepts',
+      items: ['concepts/declarative-apply', 'concepts/read-only-contexts'],
+    },
+  ],
 };
 
 export default sidebars;
