@@ -68,6 +68,7 @@ onmsctl requisition import acme-prod --wait --timeout 5m # block on the async im
 onmsctl requisition delete acme-prod --yes          # purge pending + deployed
 ```
 
+Lifecycle and read verbs: `requisition list|status|import|export|delete` and the `node|interface|service|category|asset list/get` reads.
 `requisition delete <fs>` requires `--yes`: it purges both pending and deployed snapshots.
 
 Read-only inspection:
@@ -77,7 +78,6 @@ onmsctl requisition node list acme-prod
 onmsctl requisition interface list acme-prod <foreign-id>
 onmsctl requisition service list acme-prod <foreign-id> <ip>
 onmsctl requisition category list acme-prod <foreign-id>
-onmsctl requisition asset list acme-prod <foreign-id>
 ```
 
 ## Convert
