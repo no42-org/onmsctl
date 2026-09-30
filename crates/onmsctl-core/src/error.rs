@@ -323,23 +323,20 @@ impl Error {
 
 /// Map a `reqwest::Error` to a transport-class variant, falling back to
 /// `Error::Transport` when reqwest's classification is ambiguous.
+///
+/// reqwest's own `Display` is only "error sending request for url (...)";
+/// the cause (a DNS failure, a rejected certificate, a refused connection)
+/// is further down the `source()` chain, so classification reads the whole
+/// chain.
 impl From<reqwest::Error> for Error {
     fn from(e: reqwest::Error) -> Self {
         let msg = e
             .url()
             .map(|u| u.to_string())
             .unwrap_or_else(|| e.to_string());
+        let chain = error_chain(&e);
         if e.is_connect() {
-            // `is_connect` covers DNS + TCP refusal in reqwest's API.
-            // Distinguish via the error chain when possible.
-            let chain = format!("{e}").to_lowercase();
-            if chain.contains("dns") || chain.contains("name resolution") {
-                return Error::Dns(msg);
-            }
-            if chain.contains("refused") {
-                return Error::ConnRefused(msg);
-            }
-            return Error::ConnRefused(msg);
+            return connect_error(&chain, msg);
         }
         if e.is_timeout() {
             return Error::Timeout(msg);
@@ -347,18 +344,100 @@ impl From<reqwest::Error> for Error {
         if e.is_redirect() {
             return Error::Redirect(msg);
         }
-        // TLS errors surface as `is_request` with chain mentioning rustls.
-        let chain = format!("{e}").to_lowercase();
-        if chain.contains("tls") || chain.contains("certificate") {
+        if is_tls(&chain) {
             return Error::TlsHandshake(msg);
         }
         Error::Transport(e)
     }
 }
 
+/// An error's `Display` followed by every `source()`, joined with ` | `
+/// and lowercased, for substring classification.
+fn error_chain(e: &dyn std::error::Error) -> String {
+    let mut parts = vec![e.to_string()];
+    let mut next = e.source();
+    while let Some(s) = next {
+        parts.push(s.to_string());
+        next = s.source();
+    }
+    parts.join(" | ").to_lowercase()
+}
+
+/// Classify a connect-phase failure. reqwest reports DNS failures, TLS
+/// handshake failures and refused connections all as `is_connect()`.
+fn connect_error(chain: &str, msg: String) -> Error {
+    if chain.contains("dns") || chain.contains("name resolution") {
+        Error::Dns(msg)
+    } else if is_tls(chain) {
+        Error::TlsHandshake(msg)
+    } else {
+        Error::ConnRefused(msg)
+    }
+}
+
+fn is_tls(chain: &str) -> bool {
+    chain.contains("tls") || chain.contains("certificate") || chain.contains("handshake")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Chains as observed from reqwest 0.12 + rustls (Display, then every
+    // `source()`), lowercased: a self-signed server and an unresolvable host.
+    const TLS_CHAIN: &str = "error sending request for url (https://localhost:18443/x) | \
+        client error (connect) | invalid peer certificate: other(othererror(caused as endentity))";
+    const DNS_CHAIN: &str = "error sending request for url (https://no-such-host.invalid/x) | \
+        client error (connect) | dns error | failed to lookup address information: nodename nor \
+        servname provided, or not known";
+    const REFUSED_CHAIN: &str = "error sending request for url (http://localhost:1/x) | \
+        client error (connect) | tcp connect error | connection refused (os error 61)";
+
+    #[test]
+    fn connect_errors_classify_from_the_whole_chain() {
+        assert!(matches!(
+            connect_error(TLS_CHAIN, "u".into()),
+            Error::TlsHandshake(_)
+        ));
+        assert!(matches!(
+            connect_error(DNS_CHAIN, "u".into()),
+            Error::Dns(_)
+        ));
+        assert!(matches!(
+            connect_error(REFUSED_CHAIN, "u".into()),
+            Error::ConnRefused(_)
+        ));
+        assert_eq!(connect_error(TLS_CHAIN, "u".into()).exit_code(), 7);
+        assert_eq!(connect_error(DNS_CHAIN, "u".into()).exit_code(), 4);
+    }
+
+    #[test]
+    fn error_chain_includes_every_source() {
+        #[derive(Debug)]
+        struct Leaf;
+        impl std::fmt::Display for Leaf {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("Invalid Peer Certificate")
+            }
+        }
+        impl std::error::Error for Leaf {}
+        #[derive(Debug)]
+        struct Top(Leaf);
+        impl std::fmt::Display for Top {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("error sending request")
+            }
+        }
+        impl std::error::Error for Top {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                Some(&self.0)
+            }
+        }
+        assert_eq!(
+            error_chain(&Top(Leaf)),
+            "error sending request | invalid peer certificate"
+        );
+    }
 
     #[test]
     fn exit_codes_are_stable() {
