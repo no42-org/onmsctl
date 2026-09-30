@@ -326,8 +326,11 @@ pub async fn plan_requisition(
     // Unchanged while still owing a DELETE to bring the server back
     // to default — leaving the server in the wrong state.
     let delta = diff_requisition(&local_composite, &remote_composite);
-    let foreign_source_action =
-        classify_fs_action(remote_fs.is_some(), local.spec.foreign_source.is_some());
+    let foreign_source_action = classify_fs_action(
+        remote_fs.is_some(),
+        local.spec.foreign_source.is_some(),
+        !delta.foreign_source_changes.is_empty(),
+    );
 
     let unchanged = delta.is_empty()
         && remote_req.is_some()
@@ -427,12 +430,19 @@ pub async fn execute_plan(
 }
 
 /// Map (remote-has-custom-FS, local-has-FS) onto the apply action
-/// for `/foreignSources/{fs}` per the table in design D1.
-fn classify_fs_action(remote_has_fs: bool, local_has_fs: bool) -> ForeignSourceAction {
+/// for `/foreignSources/{fs}` per the table in design D1. When both
+/// sides have a custom FS it is re-sent only if it differs: an
+/// identical pinned FS must not turn every apply into an update.
+fn classify_fs_action(
+    remote_has_fs: bool,
+    local_has_fs: bool,
+    fs_changed: bool,
+) -> ForeignSourceAction {
     match (remote_has_fs, local_has_fs) {
         (false, false) => ForeignSourceAction::NoChange,
         (false, true) => ForeignSourceAction::Created,
-        (true, true) => ForeignSourceAction::Updated,
+        (true, true) if fs_changed => ForeignSourceAction::Updated,
+        (true, true) => ForeignSourceAction::NoChange,
         (true, false) => ForeignSourceAction::Deleted,
     }
 }
@@ -627,6 +637,48 @@ mod tests {
         assert!(outcome.delta.is_empty());
         // No mutating mocks were defined — if writes had been issued
         // the test would fail with an unmatched-request panic.
+    }
+
+    // -- Path 2b: identical pinned custom FS on both sides -> UNCHANGED ----
+
+    #[tokio::test]
+    async fn identical_custom_foreign_source_is_unchanged() {
+        let (server, client) = mock_with_client().await;
+        let api = ProvisioningApi::new(&client);
+
+        Mock::given(method("GET"))
+            .and(path("/rest/requisitions/acme-prod"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "foreign-source": "acme-prod",
+                "node": []
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/rest/foreignSources/acme-prod"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "name": "acme-prod", "scan-interval": "1d",
+                "detectors": [{"name": "ICMP", "class": "org.opennms.netmgt.provision.detector.icmp.IcmpDetector", "parameter": []}],
+                "policies": []
+            })))
+            .mount(&server)
+            .await;
+
+        let local = parse_local(
+            "apiVersion: provisioning.opennms.org/v1\n\
+             kind: Requisition\n\
+             metadata:\n  name: acme-prod\n\
+             spec:\n  foreignSource:\n    scanInterval: 1d\n    detectors:\n\
+             \x20     - name: ICMP\n        class: org.opennms.netmgt.provision.detector.icmp.IcmpDetector\n\
+             \x20 nodes: []\n",
+        );
+        let outcome = apply_requisition(&local, &api, &ApplyOptions::default())
+            .await
+            .unwrap();
+        assert!(outcome.delta.is_empty(), "{:?}", outcome.delta);
+        assert_eq!(outcome.foreign_source_action, ForeignSourceAction::NoChange);
+        assert_eq!(outcome.state, ApplyState::Unchanged);
+        // No mutating mocks: a re-POST of the FS or requisition would panic.
     }
 
     // -- Path 3: dry-run never writes ------------------------------------
@@ -1118,19 +1170,12 @@ mod tests {
 
     #[test]
     fn fs_action_classification_matches_design_d1() {
-        // (remote_has_fs, local_has_fs) -> action
-        assert_eq!(
-            classify_fs_action(false, false),
-            ForeignSourceAction::NoChange
-        );
-        assert_eq!(
-            classify_fs_action(false, true),
-            ForeignSourceAction::Created
-        );
-        assert_eq!(classify_fs_action(true, true), ForeignSourceAction::Updated);
-        assert_eq!(
-            classify_fs_action(true, false),
-            ForeignSourceAction::Deleted
-        );
+        // (remote_has_fs, local_has_fs, fs_changed) -> action
+        use ForeignSourceAction::*;
+        assert_eq!(classify_fs_action(false, false, false), NoChange);
+        assert_eq!(classify_fs_action(false, true, true), Created);
+        assert_eq!(classify_fs_action(true, true, true), Updated);
+        assert_eq!(classify_fs_action(true, true, false), NoChange);
+        assert_eq!(classify_fs_action(true, false, true), Deleted);
     }
 }
