@@ -42,9 +42,9 @@ const PATH_SEGMENT: &AsciiSet = &CONTROLS
 /// Default page size applied to filter endpoints when the caller passes no
 /// explicit `limit`. Horizon's eventconf filter endpoints reject the
 /// request with `400 "Invalid offset/limit values"` (and in one case 500
-/// "offset is null") when `limit` is missing — `offset` is server-defaulted
-/// on `/filter/sources` and `/filter`, but is required on
-/// `/filter/{id}/events`. Real eventconf installs have far fewer than 1000
+/// "offset is null") when `limit` is missing. `offset` is server-defaulted
+/// on `/filter`. It is required on `/filter/{id}/events`, and newer builds
+/// answer `/filter/sources` with 204 when it is missing. Real eventconf installs have far fewer than 1000
 /// sources or events-per-source, so a single page of 1000 is effectively
 /// "show everything" without paginating.
 const DEFAULT_PAGE_LIMIT: i32 = 1000;
@@ -214,9 +214,10 @@ impl EventConfApi<'_> {
 
     /// `GET /eventconf/filter/sources` with `SourceFilter` parameters.
     ///
-    /// Horizon requires `limit` on this endpoint; `offset` is optional and
-    /// server-defaulted. When the caller omits `limit` we apply
-    /// [`DEFAULT_PAGE_LIMIT`] so the request does not 400.
+    /// Horizon requires `limit` on this endpoint. Newer builds also need
+    /// `offset`: without it they answer 204 No Content even when sources
+    /// match. When the caller omits either we apply `offset=0` /
+    /// [`DEFAULT_PAGE_LIMIT`].
     pub async fn filter_sources(&self, filter: &SourceFilter) -> Result<Page<EventConfSourceDto>> {
         validate_paging(filter.offset, filter.limit, "filter_sources")?;
         let path = format!("{BASE}/filter/sources");
@@ -230,9 +231,8 @@ impl EventConfApi<'_> {
         if let Some(o) = &filter.order {
             q.push(("order", o.clone()));
         }
-        if let Some(off) = filter.offset {
-            q.push(("offset", off.to_string()));
-        }
+        let offset = filter.offset.unwrap_or(0);
+        q.push(("offset", offset.to_string()));
         let limit = filter.limit.unwrap_or(DEFAULT_PAGE_LIMIT);
         q.push(("limit", limit.to_string()));
         // 204 No Content is normal when the filter matches nothing — turn
@@ -561,6 +561,8 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/api/v2/eventconf/filter/sources"))
             .and(query_param("filter", "cisco.foo"))
+            // Newer Horizon answers 204 without an offset, so the lookup must send one.
+            .and(query_param("offset", "0"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "totalRecords": 1,
                 "items": [
