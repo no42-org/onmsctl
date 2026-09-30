@@ -47,6 +47,8 @@ enum ProfilePlan {
 /// The resolved per-document plan, replayed in `execute`.
 struct DocPlan {
     local: DataCollectionSourceLocal,
+    /// Non-fatal advisories, carried into the preview and the outcome.
+    warnings: Vec<String>,
     xml: String,
     /// `Some(id)` when the source already exists; `None` ⇒ create.
     source_id: Option<i64>,
@@ -133,6 +135,11 @@ impl KindHandler for DataCollectionSourceHandler {
 
         for local in locals {
             let name = local.metadata.name.clone();
+            // Advisory warnings (e.g. a profileSpec not listed in profiles), non-fatal.
+            let warnings = local.warnings();
+            for w in &warnings {
+                eprintln!("warning: {name}: {w}");
+            }
             let xml = to_group_xml(&local);
             let source_id = summaries.iter().find(|s| s.name == name).map(|s| s.id);
 
@@ -240,7 +247,7 @@ impl KindHandler for DataCollectionSourceHandler {
             } else {
                 ApplyOutcome::would(KIND, &name, action)
             };
-            previews.push(preview);
+            previews.push(with_warnings(preview, &warnings));
             diff_lines.push(render_diff_line(
                 &name,
                 source_id.is_some(),
@@ -254,6 +261,7 @@ impl KindHandler for DataCollectionSourceHandler {
 
             plans.push(DocPlan {
                 local,
+                warnings,
                 xml,
                 source_id,
                 tree_unchanged,
@@ -338,7 +346,7 @@ impl KindHandler for DataCollectionSourceHandler {
             if outcome.status.is_failure() && !params.continue_on_error {
                 halted = true;
             }
-            outcomes.push(outcome);
+            outcomes.push(with_warnings(outcome, &dp.warnings));
         }
 
         Ok(outcomes)
@@ -533,6 +541,28 @@ fn render_diff_line(
     format!("{name}: {}", bits.join(", "))
 }
 
+/// Attach advisory warnings to an outcome, the way the IAM handler does:
+/// a count in `message` and the texts under `details.warnings`, so they
+/// survive `-o json|yaml` and a dropped stderr. Existing details are kept.
+fn with_warnings(mut o: ApplyOutcome, warnings: &[String]) -> ApplyOutcome {
+    if !warnings.is_empty() {
+        let hint = format!("{} warning(s)", warnings.len());
+        o.message = if o.message.is_empty() {
+            hint
+        } else {
+            format!("{} ({hint})", o.message)
+        };
+        // Merge into existing details (the per-part results) rather than
+        // replacing them.
+        let mut details = o.details.take().unwrap_or_else(|| serde_json::json!({}));
+        if let Some(map) = details.as_object_mut() {
+            map.insert("warnings".into(), serde_json::json!(warnings));
+        }
+        o.details = Some(details);
+    }
+    o
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -609,6 +639,67 @@ spec:
                 .await,
         );
         assert!(err.to_string().contains("duplicate"), "{err}");
+    }
+
+    #[test]
+    fn with_warnings_keeps_existing_details() {
+        let mut o = ApplyOutcome::new(
+            KIND,
+            "acme",
+            Action::Create,
+            OutcomeStatus::Created,
+            "created",
+        );
+        o.details = part_details(&["tree: uploaded".into()]);
+        let o = with_warnings(o, &["w1".into()]);
+        let d = o.details.expect("details");
+        assert_eq!(
+            d["parts"][0], "tree: uploaded",
+            "per-part results survive: {d}"
+        );
+        assert_eq!(d["warnings"][0], "w1", "{d}");
+        assert_eq!(o.message, "created (1 warning(s))");
+    }
+
+    /// A profileSpec not listed in profiles is reconciled but not attached;
+    /// the warning must reach the report, not only stderr.
+    #[tokio::test]
+    async fn profile_spec_warning_reaches_the_outcome() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(NAI))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(PROFILES))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                {"id":1,"name":"default","rrdStep":300,"rrdRras":["RRA:X"],"storageFlag":"select","sourceNames":[],"enabled":true}
+            ])))
+            .mount(&server)
+            .await;
+        let yaml = format!(
+            "{}  profileSpec: {{ name: extra, rrdStep: 300, rras: [\"RRA:AVERAGE:0.5:1:2016\"], storageFlag: select }}\n",
+            NEW_SRC
+        );
+        let plan = DataCollectionSourceHandler
+            .plan(&doc(&yaml), &ApplyParams::default(), &ctx_for(&server))
+            .await
+            .unwrap();
+        let o = &plan.preview[0];
+        assert!(o.message.contains("1 warning(s)"), "{o:?}");
+        let warnings = o
+            .details
+            .as_ref()
+            .and_then(|d| d["warnings"].as_array())
+            .expect("details.warnings");
+        assert!(
+            warnings[0]
+                .as_str()
+                .unwrap()
+                .contains("not listed in spec.profiles"),
+            "{o:?}"
+        );
     }
 
     #[tokio::test]
