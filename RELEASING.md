@@ -47,7 +47,6 @@ Semantic versioning:
 
 - **`v0.x.y` (current):** Pre-stability. CLI flags, the config schema,
   and the `EventSource` YAML schema may break between minor versions.
-  See the pre-stability notice in `README.md`.
 - **`vX.Y.Z` (post-1.0):** Standard semver. Breaking surface changes
   require a major bump.
 
