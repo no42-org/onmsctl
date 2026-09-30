@@ -202,7 +202,11 @@ differently than the operator expects.
 
 What to do: cross-check the policy class's documentation for the \
 expected parameter key/value shape. Either correct the source XML \
-before conversion, or correct the YAML after conversion and re-apply."
+before conversion, or correct the YAML after conversion and re-apply.
+
+Reserved: the converter does not emit this code yet. Detecting the \
+mismatch needs a catalog of each policy class's expected parameters, \
+which onmsctl does not have. Policy parameters are copied verbatim."
         }
 
         FindingCode::Pr005 => {
@@ -246,6 +250,15 @@ foreign-source XML and re-run convert with `--foreign-sources-dir`."
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// PR003 is reserved: nothing emits it, so its explanation must not
+    /// read as if the converter ran the check.
+    #[test]
+    fn pr003_explain_says_it_is_reserved() {
+        let text = explain(FindingCode::Pr003);
+        assert!(text.contains("Reserved"), "{text}");
+        assert!(text.contains("does not emit"), "{text}");
+    }
 
     #[test]
     fn as_str_matches_variant_number() {
