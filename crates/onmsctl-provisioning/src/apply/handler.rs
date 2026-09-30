@@ -106,8 +106,10 @@ impl KindHandler for ProvisioningHandler {
             .filter(|f| f.code != CollisionCode::DuplicateMetadataName)
             .collect();
         let preview = plan.entries.iter().map(|e| preview_for(e, &soft)).collect();
+        let diffs: Vec<String> = plan.entries.iter().filter_map(diff_for).collect();
+        let diff = (!diffs.is_empty()).then(|| diffs.join("\n"));
 
-        Ok(Plan::new(preview, Box::new(ProvExecPayload { plan })))
+        Ok(Plan::new(preview, Box::new(ProvExecPayload { plan })).with_diff(diff))
     }
 
     async fn execute(
@@ -151,6 +153,23 @@ fn preview_for(entry: &MultiApplyPlanEntry, soft: &[&CollisionFinding]) -> Apply
         o.details = Some(serde_json::json!({ "warnings": warns }));
     }
     o
+}
+
+/// The `--diff` text for one planned requisition, or `None` when it is
+/// unchanged. Renders the plan as the outcome execute would produce, so the
+/// header reads `create` / `update` on a real apply as well as a dry run.
+fn diff_for(entry: &MultiApplyPlanEntry) -> Option<String> {
+    let state = match entry.plan.state {
+        PlanState::Unchanged => return None,
+        PlanState::WouldCreate => ApplyState::Created,
+        PlanState::WouldUpdate => ApplyState::Updated,
+    };
+    let mut outcome = entry.plan.clone().into_short_circuit(ApplyState::DryRun);
+    outcome.state = state;
+    Some(crate::render::render_apply_diff(
+        &entry.plan.local,
+        &outcome,
+    ))
 }
 
 /// Map an execute-phase per-file result to an `ApplyOutcome`.
@@ -256,6 +275,28 @@ mod tests {
             .respond_with(ResponseTemplate::new(200))
             .mount(server)
             .await;
+    }
+
+    #[tokio::test]
+    async fn plan_renders_a_diff_for_a_new_requisition() {
+        let server = MockServer::start().await;
+        mount_create(&server, "acme").await;
+        Mock::given(method("GET"))
+            .and(path("/rest/foreignSources/default"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(empty_default_fs()))
+            .mount(&server)
+            .await;
+        let plan = ProvisioningHandler
+            .plan(
+                &req_docs(&[("acme", "web01")]),
+                &ApplyParams::default(),
+                &ctx_for(&server),
+            )
+            .await
+            .unwrap();
+        let diff = plan.diff.expect("a create renders a diff");
+        assert!(diff.starts_with("Requisition/acme (create)"), "{diff}");
+        assert!(diff.contains("web01"), "{diff}");
     }
 
     #[tokio::test]

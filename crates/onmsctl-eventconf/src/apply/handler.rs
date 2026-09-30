@@ -25,6 +25,7 @@ use onmsctl_core::{
     Result,
 };
 
+use crate::apply::diff::{diff_event_sets, render_diff};
 use crate::apply::local::{EventSourceLocal, KIND};
 use crate::apply::target::{diff_source, fetch_remote, upload_then_optionally_disable};
 
@@ -88,13 +89,28 @@ impl KindHandler for EventSourceHandler {
         // -- Fetch + diff per source (read-only). Ambiguous name → Err → gate. --
         let mut sources: Vec<(EventSourceLocal, ExecAction)> = Vec::with_capacity(parsed.len());
         let mut preview: Vec<ApplyOutcome> = Vec::with_capacity(parsed.len());
+        let mut diffs: Vec<String> = Vec::new();
         for (_, local) in parsed {
-            let action = match fetch_remote(&local.metadata.name, ctx).await? {
-                None => ExecAction::Create,
+            let name = &local.metadata.name;
+            let action = match fetch_remote(name, ctx).await? {
+                None => {
+                    let mut added = render_diff(&diff_event_sets(&local.spec.events, &[]));
+                    if !local.spec.enabled {
+                        // Created enabled by the upload, then disabled.
+                        added.push_str("spec.enabled: false    [disabled after upload]\n");
+                    }
+                    diffs.push(format!("EventSource/{name}: create\n{}", indent(&added)));
+                    ExecAction::Create
+                }
                 Some(remote) => {
-                    if diff_source(&local, &remote).is_empty() {
+                    let d = diff_source(&local, &remote);
+                    if d.is_empty() {
                         ExecAction::Unchanged
                     } else {
+                        diffs.push(format!(
+                            "EventSource/{name}: update\n{}",
+                            indent(d.as_str())
+                        ));
                         ExecAction::Update
                     }
                 }
@@ -107,7 +123,8 @@ impl KindHandler for EventSourceHandler {
             sources.push((local, action));
         }
 
-        Ok(Plan::new(preview, Box::new(EventExecPayload { sources })))
+        let diff = (!diffs.is_empty()).then(|| diffs.join("\n"));
+        Ok(Plan::new(preview, Box::new(EventExecPayload { sources })).with_diff(diff))
     }
 
     async fn execute(
@@ -156,6 +173,15 @@ impl KindHandler for EventSourceHandler {
         }
         Ok(outcomes)
     }
+}
+
+/// Indent every line of a rendered diff under its `Kind/name` header.
+fn indent(text: &str) -> String {
+    text.trim_end()
+        .lines()
+        .map(|l| format!("  {l}"))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Refuse a bucket that declares the same `metadata.name` in more than one
@@ -255,6 +281,75 @@ mod tests {
         assert_eq!(outcomes.len(), 1);
         assert_eq!(outcomes[0].name, "cisco.foo");
         assert_eq!(outcomes[0].status, OutcomeStatus::Created);
+    }
+
+    #[tokio::test]
+    async fn plan_renders_a_diff_for_create_and_update() {
+        // Create: the source is absent.
+        let server = MockServer::start().await;
+        mount_source_list(&server, serde_json::json!({"totalRecords": 0, "items": []})).await;
+        let plan = EventSourceHandler
+            .plan(
+                &source_doc("cisco.foo"),
+                &ApplyParams::default(),
+                &ctx_for(&server),
+            )
+            .await
+            .unwrap();
+        let diff = plan.diff.expect("a create renders a diff");
+        assert!(diff.starts_with("EventSource/cisco.foo: create"), "{diff}");
+        assert!(diff.contains("uei.opennms.org/test/cisco.foo"), "{diff}");
+        assert!(
+            !diff.contains("spec.enabled"),
+            "enabled: true is the default: {diff}"
+        );
+
+        // A new source declared disabled says so: it is created, then disabled.
+        let disabled = parse_documents(
+            "src.yaml",
+            "apiVersion: eventconf.opennms.org/v1\nkind: EventSource\nmetadata:\n  name: cisco.foo\n\
+             spec:\n  enabled: false\n  events:\n    - uei: uei.opennms.org/test/cisco.foo\n\
+             \x20     label: Test\n      severity: Warning\n",
+        )
+        .unwrap();
+        let plan = EventSourceHandler
+            .plan(&disabled, &ApplyParams::default(), &ctx_for(&server))
+            .await
+            .unwrap();
+        let diff = plan.diff.unwrap();
+        assert!(diff.contains("spec.enabled: false"), "{diff}");
+
+        // Update: the server holds a different event under the same name.
+        let server = MockServer::start().await;
+        mount_source_list(
+            &server,
+            serde_json::json!({"totalRecords": 1, "items": [
+                {"id": 7, "name": "cisco.foo", "fileOrder": 50, "eventCount": 1, "enabled": true}
+            ]}),
+        )
+        .await;
+        Mock::given(method("GET"))
+            .and(path("/api/v2/eventconf/sources/7/events/download"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                "<events xmlns=\"http://xmlns.opennms.org/xsd/eventconf\"><event>\
+                 <uei>uei.opennms.org/test/other</uei><event-label>Other</event-label>\
+                 <descr>x</descr><logmsg dest=\"logndisplay\">x</logmsg>\
+                 <severity>Warning</severity></event></events>",
+            ))
+            .mount(&server)
+            .await;
+        let plan = EventSourceHandler
+            .plan(
+                &source_doc("cisco.foo"),
+                &ApplyParams::default(),
+                &ctx_for(&server),
+            )
+            .await
+            .unwrap();
+        assert_eq!(plan.preview[0].action, Action::Update);
+        let diff = plan.diff.expect("an update renders a diff");
+        assert!(diff.starts_with("EventSource/cisco.foo: update"), "{diff}");
+        assert!(diff.contains("spec.events:"), "{diff}");
     }
 
     #[tokio::test]
