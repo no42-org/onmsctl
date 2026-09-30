@@ -71,13 +71,29 @@ onmsctl apply -f cisco.foo.yaml --dry-run   # preview
 onmsctl apply -f cisco.foo.yaml             # push
 ```
 
-**`--diff`** prints nothing extra for `EventSource`: the handler renders no diff.
-
 `apply` is idempotent: Horizon's upsert replaces events under an existing basename.
 When the server's events and `enabled` flag already match, apply reports the source unchanged and sends no upload.
 Two documents with the same `metadata.name` in one apply fail the plan, because the upload upserts by name.
 
 **Order:** `EventSource` applies before `EventSourceOrder` and `ThresholdGroup`, so one apply can create a source, place it first, and reference its UEIs from thresholds.
+
+## Diff
+
+**`--diff`** prints one block per source that would change, on stderr.
+Events are matched by UEI; a create lists every event as added.
+
+```sh
+onmsctl apply -f opennms.alarm.events.yaml --dry-run --diff
+```
+
+Expected output (stderr):
+
+```text
+EventSource/opennms.alarm.events: update
+  spec.events: 3 → 3   (+0 added, ~1 modified, =2 unchanged, -0 removed)
+    ~ uei.opennms.org/alarms/trigger
+        event-label: "Alarm: Generic Trigger" → "Alarm: Generic Trigger (edited)"
+```
 
 ## Inspect and delete
 

@@ -119,6 +119,25 @@ A `foreignId` that appears in more than one requisition is a warning, not an err
 **Order:** `Requisition` applies after `SnmpConfig` and before `Maintenance`, so a maintenance window in the same apply can refer to nodes this apply imports.
 The import is asynchronous, so such a reference may still need a follow-up apply.
 
+## Diff
+
+**`--diff`** prints one block per requisition that would change, on stderr: the decided `rescanExisting`, the foreign-source changes, and the per-node changes.
+
+```sh
+onmsctl apply -f examples/requisition-acme-prod.yaml --dry-run --diff
+```
+
+Expected output (stderr, trimmed):
+
+```text
+Requisition/acme-prod (create)
+  rescanExisting: true
+
+  ~ foreignSource: updating
+    spec.foreignSource.detectors[0].name: "DNS" → "ICMP"
+...
+```
+
 ## Inspect and delete
 
 ```sh
