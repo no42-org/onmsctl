@@ -9,7 +9,9 @@
 //! Documents apply in ascending rank order. Most kinds are independent and
 //! their ranks only fix a deterministic order. `EventSourceOrder` after
 //! `EventSource` is a real dependency: an order document places sources the
-//! same apply may create. Because the ordering is a strict
+//! same apply may create. So are the threshold kinds: groups after event
+//! sources, packages after groups, and `Maintenance` after packages.
+//! Because the ordering is a strict
 //! total order, "acyclic" reduces to "every rank is distinct"
 //! ([`ranks_are_total_order`]), checked by a unit test.
 
@@ -18,6 +20,12 @@ pub const RANK_EVENT_SOURCE: u32 = 200;
 /// Event-source order applies after `EventSource` so it can place sources
 /// created by the same apply. This is a real dependency.
 pub const RANK_EVENT_SOURCE_ORDER: u32 = 210;
+/// Threshold groups apply after event sources, because a threshold's
+/// `triggeredUEI` may name an event the same apply creates.
+pub const RANK_THRESHOLD_GROUP: u32 = 220;
+/// threshd packages apply after the groups they bind and before
+/// `Maintenance`, which attaches outages to packages.
+pub const RANK_THRESHD_PACKAGE: u32 = 230;
 pub const RANK_SNMP_CONFIG: u32 = 250;
 pub const RANK_REQUISITION: u32 = 300;
 /// Maintenance windows apply after `Requisition` so a co-located apply imports
@@ -40,6 +48,8 @@ pub const KNOWN_RANKS: &[(&str, u32)] = &[
     ("User", RANK_USER),
     ("EventSource", RANK_EVENT_SOURCE),
     ("EventSourceOrder", RANK_EVENT_SOURCE_ORDER),
+    ("ThresholdGroup", RANK_THRESHOLD_GROUP),
+    ("ThreshdPackage", RANK_THRESHD_PACKAGE),
     ("SnmpConfig", RANK_SNMP_CONFIG),
     ("Requisition", RANK_REQUISITION),
     ("Maintenance", RANK_MAINTENANCE),
@@ -81,6 +91,14 @@ mod tests {
     fn event_source_order_ranks_between_event_source_and_snmp_config() {
         let r = default_rank("EventSourceOrder").unwrap();
         assert!(RANK_EVENT_SOURCE < r && r < RANK_SNMP_CONFIG);
+    }
+
+    #[test]
+    fn threshold_kinds_rank_after_event_sources_and_before_snmp_and_maintenance() {
+        let g = default_rank("ThresholdGroup").unwrap();
+        let p = default_rank("ThreshdPackage").unwrap();
+        assert!(RANK_EVENT_SOURCE_ORDER < g && g < p && p < RANK_SNMP_CONFIG);
+        assert!(p < RANK_MAINTENANCE);
     }
 
     #[test]

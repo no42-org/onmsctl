@@ -1,0 +1,101 @@
+---
+title: ThresholdGroup
+description: Declare threshold groups (thresholds and expressions) and apply them to Horizon through the thresholding REST API.
+---
+
+import CodeBlock from '@theme/CodeBlock';
+import example from '!!raw-loader!../../examples/threshold-group.yaml';
+
+Declare one threshold group per document: its basic thresholds and its expression thresholds.
+Targets `/api/v2/thresholding`.
+Requires Horizon 37.0.0 (NMS-19837); older servers fail with a version error.
+
+A group does nothing on its own.
+A [`ThreshdPackage`](threshd-package.mdx) service binds it to interfaces.
+
+## YAML
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| **`apiVersion`** | string | required | `thresholding.opennms.org/v1` |
+| **`kind`** | string | required | `ThresholdGroup` |
+| **`metadata.name`** | string | required | Group name. Packages bind the group by this name. |
+| **`spec.rrdRepository`** | string | required | Directory holding the RRD files the group thresholds against. |
+| **`spec.thresholds`** | list | `[]` | Basic thresholds on one datasource each, in evaluation order. |
+| **`spec.expressions`** | list | `[]` | Thresholds on an expression over datasources, in evaluation order. |
+
+Fields of a threshold or expression entry:
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| **`type`** | string | required | `high`, `low`, `relativeChange`, `absoluteChange` or `rearmingAbsoluteChange`. |
+| **`dsType`** | string | required | `node`, `if`, or a generic resource type known to the server. |
+| **`dsName`** | string | required on thresholds | Collected datasource, at most 19 characters. |
+| **`expression`** | string | required on expressions | Expression over datasource names. |
+| **`value`** | number or string | required | Trigger value. A string can hold a metadata reference such as `${requisition:cpu-high\|90}`. |
+| **`rearm`** | number or string | required | Re-arm value. Unused for `relativeChange`, still required. |
+| **`trigger`** | integer or string | required | Consecutive polls before triggering: a positive integer or a `${…}` reference. |
+| **`description`** | string | none | Free text. |
+| **`dsLabel`** | string | none | String attribute used to label the resource in events. |
+| **`exprLabel`** | string | none | Label for an expression threshold. |
+| **`triggeredUEI`** | string | standard threshold UEI | Event sent on trigger. An unknown UEI is created on the server from the built-in threshold event. |
+| **`rearmedUEI`** | string | standard UEI | Event sent on re-arm. Ignored for `relativeChange` and `absoluteChange`. |
+| **`filterOperator`** | string | `or` | How several resource filters combine: `and` or `or`. |
+| **`relaxed`** | boolean | `false` | Evaluate even when some referenced values are unknown. |
+| **`resourceFilters`** | list | `[]` | `{field, content}` Java regular expressions on resource fields. Ignored for `dsType: node`. |
+
+## Apply
+
+```sh
+onmsctl apply -f ./thresholds/ --dry-run --diff
+onmsctl apply -f ./thresholds/
+```
+
+- Apply creates an absent group and replaces a changed one.
+- It leaves a matching group untouched and sends no request, because every write reloads threshd.
+- Updates carry the ETag read during plan, so a group changed on the server in between fails instead of being overwritten.
+- Apply never deletes. Groups no document declares are left alone.
+- A group contributed by an extension is read-only and fails the plan.
+
+**Plan gate:** each `dsType` is checked against the server's list of datasource types before any write.
+The server itself accepts unknown types, so a typo would otherwise stop the threshold from ever matching.
+
+**Order:** `ThresholdGroup` applies after `EventSource`, so a `triggeredUEI` can name an event the same apply creates, and before `ThreshdPackage`.
+
+## Diff
+
+Entries are matched by position, because list order is evaluation order.
+
+```text
+ThresholdGroup/acme-cpu: update
+  ~ thresholds[0] high node/cpuPercentBusy: trigger 2 -> 3, value 85 -> 90
+  + expressions[1] high if: ifHCOutOctets * 8 / 1000000 / ifHighSpeed * 100
+  - thresholds[2] low node/memAvailReal
+```
+
+## Inspect, export and delete
+
+```sh
+onmsctl threshold group list
+onmsctl threshold group get mib2 > threshold-group-mib2.yaml
+onmsctl threshold export --out ./thresholds/
+onmsctl threshold group delete acme-cpu
+```
+
+- `get` and `export` write documents that apply back unchanged. Values stay the server's strings, quoted, such as `value: '1.0'`.
+- `export` writes every group and package, one file each, and skips extension groups.
+- `group delete` refuses while a package still binds the group. `--force` deletes anyway and leaves the package with a dangling reference.
+
+## Errors
+
+| Message | Probable cause | Recovery |
+|---|---|---|
+| `does not expose the threshold REST API` | The server predates NMS-19837. | Upgrade to Horizon 37.0.0 or later. |
+| `dsType '<x>' is not a datasource type on this server` | A typo, or a resource type not configured in `datacollection-config.xml`. | Fix `dsType`; list valid types with `GET /api/v2/thresholding/metadata`. |
+| `dsName '<x>' is longer than 19 characters` | RRDtool cannot store longer datasource names. | Use the collected datasource's real name. |
+| `contributed by an extension and cannot be managed` | The group comes from an OSGi extension. | Remove the document. |
+| `changed on the server since plan` | Someone edited the group between plan and write. | Re-run the apply. |
+
+## Example
+
+<CodeBlock language="yaml" title="examples/threshold-group.yaml">{example}</CodeBlock>

@@ -13,6 +13,8 @@ Recognized kinds:
 | `User` | `onmsctl.no42.org/v1alpha1` | Horizon users + roles |
 | `EventSource` | `eventconf.opennms.org/v1` | event configuration sources |
 | `EventSourceOrder` | `eventconf.opennms.org/v1` | event-source evaluation order (singleton) |
+| `ThresholdGroup` | `thresholding.opennms.org/v1` | threshold groups (thresholds and expressions) |
+| `ThreshdPackage` | `thresholding.opennms.org/v1` | threshd packages (what is thresholded, with which group) |
 | `SnmpConfig` | `snmp.opennms.org/v1` | SNMP agent + trap-daemon config (singleton) |
 | `Requisition` | `provisioning.opennms.org/v1` | provisioning requisitions |
 | `Maintenance` | `maintenance.opennms.org/v1` | scheduled-outage maintenance windows |
@@ -27,7 +29,7 @@ If *any* fails to plan (unknown `kind`, duplicate `metadata.name`, parse error),
 Once the gate passes, documents execute in a static precedence order so dependencies settle first:
 
 ```
-User (100) → EventSource (200) → EventSourceOrder (210) → SnmpConfig (250) → Requisition (300) → Maintenance (350) → DataCollectionSource (375) → BusinessService (400)
+User (100) → EventSource (200) → EventSourceOrder (210) → ThresholdGroup (220) → ThreshdPackage (230) → SnmpConfig (250) → Requisition (300) → Maintenance (350) → DataCollectionSource (375) → BusinessService (400)
 ```
 
 Each document yields one `ApplyOutcome` row, rendered through `-o table|yaml|json`:

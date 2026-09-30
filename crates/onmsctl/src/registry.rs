@@ -16,7 +16,8 @@
 use onmsctl_core::Registry;
 use onmsctl_core::kind::precedence::{
     RANK_BUSINESS_SERVICE, RANK_DATACOLLECTION, RANK_EVENT_SOURCE, RANK_EVENT_SOURCE_ORDER,
-    RANK_MAINTENANCE, RANK_REQUISITION, RANK_SNMP_CONFIG, RANK_USER, ranks_are_total_order,
+    RANK_MAINTENANCE, RANK_REQUISITION, RANK_SNMP_CONFIG, RANK_THRESHD_PACKAGE,
+    RANK_THRESHOLD_GROUP, RANK_USER, ranks_are_total_order,
 };
 
 use onmsctl_businessservice::apply::BusinessServiceHandler;
@@ -27,6 +28,7 @@ use onmsctl_iam::apply::UserHandler;
 use onmsctl_maintenance::apply::MaintenanceHandler;
 use onmsctl_provisioning::apply::ProvisioningHandler;
 use onmsctl_snmp::apply::SnmpConfigHandler;
+use onmsctl_thresholding::apply::{ThreshdPackageHandler, ThresholdGroupHandler};
 
 /// Build the populated kind registry: every supported `kind` mapped to its
 /// handler and static precedence rank.
@@ -42,6 +44,8 @@ pub fn build() -> Registry {
     reg.register(RANK_USER, Box::new(UserHandler));
     reg.register(RANK_EVENT_SOURCE, Box::new(EventSourceHandler));
     reg.register(RANK_EVENT_SOURCE_ORDER, Box::new(EventSourceOrderHandler));
+    reg.register(RANK_THRESHOLD_GROUP, Box::new(ThresholdGroupHandler));
+    reg.register(RANK_THRESHD_PACKAGE, Box::new(ThreshdPackageHandler));
     reg.register(RANK_SNMP_CONFIG, Box::new(SnmpConfigHandler));
     reg.register(RANK_REQUISITION, Box::new(ProvisioningHandler));
     reg.register(RANK_MAINTENANCE, Box::new(MaintenanceHandler));
@@ -69,7 +73,7 @@ mod tests {
     #[test]
     fn build_registers_all_kinds_at_their_canonical_ranks() {
         let reg = build();
-        assert_eq!(reg.len(), 8, "exactly the wired kinds are present");
+        assert_eq!(reg.len(), 10, "exactly the wired kinds are present");
         // Key off each handler's own `kind()` so the test can't drift from the
         // registration site if a KIND constant changes.
         assert_eq!(reg.rank(UserHandler.kind()), Some(RANK_USER));
@@ -77,6 +81,14 @@ mod tests {
         assert_eq!(
             reg.rank(EventSourceOrderHandler.kind()),
             Some(RANK_EVENT_SOURCE_ORDER)
+        );
+        assert_eq!(
+            reg.rank(ThresholdGroupHandler.kind()),
+            Some(RANK_THRESHOLD_GROUP)
+        );
+        assert_eq!(
+            reg.rank(ThreshdPackageHandler.kind()),
+            Some(RANK_THRESHD_PACKAGE)
         );
         assert_eq!(reg.rank(SnmpConfigHandler.kind()), Some(RANK_SNMP_CONFIG));
         assert_eq!(reg.rank(ProvisioningHandler.kind()), Some(RANK_REQUISITION));

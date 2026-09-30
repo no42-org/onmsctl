@@ -7,8 +7,8 @@ description: Supported OpenNMS Horizon versions and known eventconf quirks onmsc
 |---|---|
 | OpenNMS Horizon **35+** | Primary target (EventConf REST reproducible on 35.0.5 / 36.0.0). |
 
-Some capabilities need newer builds: the SNMP **Trapd** block (NMS-19128, `37.x`/`develop`) and **data collection** (absent from released Horizon ≤ 37.0.0).
-Both gate cleanly with a clear version message on older servers.
+Some capabilities need newer builds: the SNMP **Trapd** block (NMS-19128, `37.x`/`develop`), **data collection** (absent from released Horizon ≤ 37.0.0), and the **threshold** kinds `ThresholdGroup` and `ThreshdPackage` (NMS-19837, Horizon 37.0.0).
+All of them gate cleanly with a clear version message on older servers.
 
 **Known eventconf quirks** (Horizon 35.0.5 / 36.0.0, tracked upstream; onmsctl works around the load-bearing ones client-side):
 

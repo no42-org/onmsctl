@@ -1,0 +1,89 @@
+---
+title: ThreshdPackage
+description: Declare which interfaces and services threshd evaluates, and which threshold group applies to each service.
+---
+
+import CodeBlock from '@theme/CodeBlock';
+import example from '!!raw-loader!../../examples/threshd-package.yaml';
+
+Declare one threshd package per document: the interfaces it selects and the services it thresholds.
+Targets `/api/v2/threshd`.
+Requires Horizon 37.0.0 (NMS-19837); older servers fail with a version error.
+
+## YAML
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| **`apiVersion`** | string | required | `thresholding.opennms.org/v1` |
+| **`kind`** | string | required | `ThreshdPackage` |
+| **`metadata.name`** | string | required | Package name. |
+| **`spec.filter`** | string | required | Filter rule selecting interfaces, e.g. `IPADDR != '0.0.0.0'`. |
+| **`spec.includeRanges`** | list | `[]` | `{begin, end}` inclusive IP ranges. Both ends in one address family. |
+| **`spec.excludeRanges`** | list | `[]` | `{begin, end}` ranges excluded. |
+| **`spec.specifics`** | list | `[]` | Individual IP addresses always included. |
+| **`spec.includeUrls`** | list | `[]` | URLs of files listing further addresses. |
+| **`spec.services`** | list | `[]` | Services thresholded in this package. |
+
+Fields of a service:
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| **`name`** | string | required | Service name, unique in the package. |
+| **`interval`** | duration or integer | required | Time between evaluations: `30s`, `5m`, `1h`, `1d`, or milliseconds. |
+| **`status`** | string | none | `on` or `off`. Quote it (`"on"`) for YAML 1.1 tools. |
+| **`thresholdingGroup`** | string | none | The [`ThresholdGroup`](threshold-group.mdx) to apply. |
+| **`parameters`** | list | `[]` | Other `{key, value}` service parameters. |
+
+Not part of the document:
+
+- **`outageCalendars`** are managed by [`Maintenance`](maintenance.mdx). Apply keeps the server's value on every write.
+- **`userDefined`** is a server flag. Apply keeps it too.
+
+## Apply
+
+```sh
+onmsctl apply -f ./thresholds/ --dry-run --diff
+onmsctl apply -f ./thresholds/
+```
+
+Apply creates, replaces or leaves each package alone, exactly like [`ThresholdGroup`](threshold-group.mdx#apply).
+Updates carry the plan's ETag, unchanged packages get no request, and apply never deletes.
+
+**Plan gate:** every `thresholdingGroup` must name a group on the server or a `ThresholdGroup` in the same apply.
+A typo aborts the whole apply before any write.
+
+**Order:** `ThreshdPackage` applies after `ThresholdGroup`, so one apply can create a group and bind it, and before `Maintenance`, which attaches outages to packages.
+
+## Diff
+
+Services are matched by name.
+Ranges, specifics and include URLs are compared as sets.
+
+```text
+ThreshdPackage/acme: update
+  ~ services[SNMP]: interval 5m -> 10m
+  + includeRanges: 10.1.0.1-10.1.255.254
+```
+
+## Inspect and delete
+
+```sh
+onmsctl threshold package list
+onmsctl threshold package get mib2
+onmsctl threshold package delete acme
+```
+
+The server refuses to delete its last package.
+
+## Errors
+
+| Message | Probable cause | Recovery |
+|---|---|---|
+| `'<x>' names no threshold group on the server or as a ThresholdGroup in this apply` | A typo, or the group was deleted. | Fix `thresholdingGroup` or add the `ThresholdGroup` document. |
+| `set the group with thresholdingGroup` | A `thresholding-group` key under `parameters`. | Move it to `thresholdingGroup`. |
+| `duplicate service` | Two services with one name in the package. | Merge or rename them. |
+| `changed on the server since plan` | The package was edited between plan and write, for example by attaching an outage. | Re-run the apply. |
+
+## Example
+
+<CodeBlock language="yaml" title="examples/threshd-package.yaml">{example}</CodeBlock>

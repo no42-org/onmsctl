@@ -1,0 +1,36 @@
+# ThresholdGroup: one threshold group with its thresholds and expressions.
+#
+# List order is evaluation order. value, rearm and trigger take a number or
+# a string, e.g. a metadata reference like ${requisition:cpu-high|90}.
+# dsType must be a datasource type the server knows: node, if, or a generic
+# resource type (see GET /api/v2/thresholding/metadata).
+# Requires Horizon 37.0.0 (NMS-19837).
+#
+#     onmsctl apply -f examples/threshold-group.yaml --dry-run --diff
+#
+apiVersion: thresholding.opennms.org/v1
+kind: ThresholdGroup
+metadata:
+  name: acme-cpu
+spec:
+  rrdRepository: /opt/opennms/share/rrd/snmp/
+  thresholds:
+    - type: high
+      dsType: node
+      dsName: cpuPercentBusy
+      value: 90
+      rearm: 80
+      trigger: 3
+      description: CPU above 90% for three polls
+  expressions:
+    - type: high
+      dsType: if
+      expression: ifHCInOctets * 8 / 1000000 / ifHighSpeed * 100
+      value: 90
+      rearm: 75
+      trigger: 2
+      dsLabel: ifName
+      description: Inbound utilisation above 90%
+      resourceFilters:
+        - field: ifHighSpeed
+          content: "^[1-9]+[0-9]*$"

@@ -983,6 +983,7 @@ dependencies = [
  "onmsctl-maintenance",
  "onmsctl-provisioning",
  "onmsctl-snmp",
+ "onmsctl-thresholding",
  "serde",
  "serde_norway",
  "tempfile",
@@ -1093,6 +1094,8 @@ dependencies = [
  "onmsctl-eventconf",
  "onmsctl-iam",
  "onmsctl-provisioning",
+ "onmsctl-thresholding",
+ "serde_json",
  "serde_norway",
  "tempfile",
  "tokio",
@@ -1147,6 +1150,23 @@ dependencies = [
  "tokio",
  "wiremock",
  "zeroize",
+]
+
+[[package]]
+name = "onmsctl-thresholding"
+version = "0.4.7"
+dependencies = [
+ "async-trait",
+ "clap",
+ "onmsctl-core",
+ "percent-encoding",
+ "schemars",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "tempfile",
+ "tokio",
+ "wiremock",
 ]
 
 [[package]]

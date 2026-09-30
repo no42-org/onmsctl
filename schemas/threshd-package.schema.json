@@ -1,0 +1,170 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ThreshdPackageLocal",
+  "description": "A `ThreshdPackage` document: one threshd package.",
+  "type": "object",
+  "properties": {
+    "apiVersion": {
+      "type": "string"
+    },
+    "kind": {
+      "type": "string"
+    },
+    "metadata": {
+      "$ref": "#/$defs/Metadata"
+    },
+    "spec": {
+      "$ref": "#/$defs/ThreshdPackageSpec"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "spec"
+  ],
+  "$defs": {
+    "Interval": {
+      "description": "A duration string or integer milliseconds.",
+      "anyOf": [
+        {
+          "type": "integer",
+          "format": "int64"
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
+    "IpRangeDef": {
+      "description": "An inclusive range of IP addresses.",
+      "type": "object",
+      "properties": {
+        "begin": {
+          "type": "string"
+        },
+        "end": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "begin",
+        "end"
+      ]
+    },
+    "Metadata": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ]
+    },
+    "ParameterDef": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "value"
+      ]
+    },
+    "ServiceDef": {
+      "description": "A service thresholded within the package.",
+      "type": "object",
+      "properties": {
+        "interval": {
+          "description": "Time between evaluations: a duration (`30s`, `5m`, `1h`, `1d`) or\ninteger milliseconds.",
+          "$ref": "#/$defs/Interval"
+        },
+        "name": {
+          "type": "string"
+        },
+        "parameters": {
+          "description": "Other service parameters.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ParameterDef"
+          }
+        },
+        "status": {
+          "description": "`on` or `off`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "thresholdingGroup": {
+          "description": "The threshold group to apply (the `thresholding-group` parameter).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "interval"
+      ]
+    },
+    "ThreshdPackageSpec": {
+      "type": "object",
+      "properties": {
+        "excludeRanges": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/IpRangeDef"
+          }
+        },
+        "filter": {
+          "description": "Filter rule selecting the interfaces this package applies to.",
+          "type": "string"
+        },
+        "includeRanges": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/IpRangeDef"
+          }
+        },
+        "includeUrls": {
+          "description": "URLs of files listing further addresses to include.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "services": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ServiceDef"
+          }
+        },
+        "specifics": {
+          "description": "Individual IP addresses always included.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "filter"
+      ]
+    }
+  }
+}

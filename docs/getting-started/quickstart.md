@@ -26,6 +26,8 @@ The recognized kinds:
 |---|---|---|
 | `EventSource` | `eventconf.opennms.org/v1` | event configuration sources |
 | `EventSourceOrder` | `eventconf.opennms.org/v1` | event-source evaluation order (singleton) |
+| `ThresholdGroup` | `thresholding.opennms.org/v1` | threshold groups (thresholds and expressions) |
+| `ThreshdPackage` | `thresholding.opennms.org/v1` | threshd packages (what is thresholded, with which group) |
 | `Requisition` | `provisioning.opennms.org/v1` | provisioning requisitions |
 | `User` | `onmsctl.no42.org/v1alpha1` | Horizon users + roles |
 | `SnmpConfig` | `snmp.opennms.org/v1` | SNMP agent + trap config (singleton) |
@@ -81,6 +83,8 @@ Each `kind` has its own reference page:
 
 - [`EventSource`](../kinds/event-source.mdx): event configuration sources.
 - [`EventSourceOrder`](../kinds/event-source-order.mdx): event-source evaluation order (singleton).
+- [`ThresholdGroup`](../kinds/threshold-group.mdx): threshold groups.
+- [`ThreshdPackage`](../kinds/threshd-package.mdx): threshd packages.
 - [`Requisition`](../kinds/requisition.mdx): provisioning requisitions.
 - [`User`](../kinds/user.mdx): Horizon users and roles.
 - [`SnmpConfig`](../kinds/snmp-config.mdx): SNMP agent and trap config (singleton).

@@ -26,7 +26,7 @@
 
 use std::time::Duration;
 
-use reqwest::header::{ACCEPT, CONTENT_TYPE, HeaderValue};
+use reqwest::header::{ACCEPT, CONTENT_TYPE, ETAG, HeaderValue, IF_MATCH};
 use reqwest::{Method, RequestBuilder, StatusCode, Url};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -334,6 +334,62 @@ impl OnmsClient {
         }
         let resp = self.send(req, Method::DELETE, path).await?;
         // Drain the response body so the connection is reusable.
+        let _ = resp.bytes().await?;
+        Ok(())
+    }
+
+    /// `GET` returning the JSON body and the response's `ETag` header, for
+    /// endpoints that guard writes with `If-Match`. The ETag is returned
+    /// verbatim, quotes included, ready to send back.
+    pub async fn get_with_etag<T: DeserializeOwned>(
+        &self,
+        path: &str,
+    ) -> Result<(T, Option<String>)> {
+        let url = self.url_for(path)?;
+        let req = self
+            .inner
+            .request(Method::GET, url)
+            .header(ACCEPT, HeaderValue::from_static("application/json"));
+        let resp = self.send(req, Method::GET, path).await?;
+        let etag = resp
+            .headers()
+            .get(ETAG)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
+        Ok((json_or_no_content(resp, Method::GET, path).await?, etag))
+    }
+
+    /// `PUT` with a JSON body and an optional `If-Match` header, discarding
+    /// the response body. A server that rejects a stale `If-Match` answers
+    /// 412, surfaced as [`Error::HttpStatus`].
+    pub async fn put_drain_if_match<B: Serialize>(
+        &self,
+        path: &str,
+        body: &B,
+        if_match: Option<&str>,
+    ) -> Result<()> {
+        let url = self.url_for(path)?;
+        let mut req = self
+            .inner
+            .request(Method::PUT, url)
+            .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
+            .json(body);
+        if let Some(tag) = if_match {
+            req = req.header(IF_MATCH, tag);
+        }
+        let resp = self.send(req, Method::PUT, path).await?;
+        let _ = resp.bytes().await?;
+        Ok(())
+    }
+
+    /// `DELETE` with an optional `If-Match` header and no body.
+    pub async fn delete_if_match(&self, path: &str, if_match: Option<&str>) -> Result<()> {
+        let url = self.url_for(path)?;
+        let mut req = self.inner.request(Method::DELETE, url);
+        if let Some(tag) = if_match {
+            req = req.header(IF_MATCH, tag);
+        }
+        let resp = self.send(req, Method::DELETE, path).await?;
         let _ = resp.bytes().await?;
         Ok(())
     }
@@ -840,6 +896,85 @@ mod tests {
         .unwrap();
         client
             .delete::<serde_json::Value>("sources", Some(&serde_json::json!({"sourceIds": [1]})))
+            .await
+            .unwrap();
+    }
+
+    fn client_at(mock: &MockServer) -> OnmsClient {
+        OnmsClient::from_context(&ctx_for(
+            &format!("{}/api/v2/", mock.uri()),
+            AuthCreds::bearer("tok"),
+        ))
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn get_with_etag_returns_body_and_etag() {
+        let mock = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v2/things/a"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("ETag", "\"v1\"")
+                    .set_body_json(serde_json::json!({"name": "a", "count": 1})),
+            )
+            .mount(&mock)
+            .await;
+        let (body, etag): (Sample, _) = client_at(&mock).get_with_etag("things/a").await.unwrap();
+        assert_eq!(body.name, "a");
+        assert_eq!(etag.as_deref(), Some("\"v1\""));
+    }
+
+    #[tokio::test]
+    async fn put_drain_if_match_sends_the_header() {
+        let mock = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/api/v2/things/a"))
+            .and(header("If-Match", "\"v1\""))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&mock)
+            .await;
+        client_at(&mock)
+            .put_drain_if_match(
+                "things/a",
+                &serde_json::json!({"name": "a"}),
+                Some("\"v1\""),
+            )
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn put_drain_if_match_surfaces_412() {
+        let mock = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/api/v2/things/a"))
+            .respond_with(ResponseTemplate::new(412).set_body_string("changed"))
+            .mount(&mock)
+            .await;
+        let err = client_at(&mock)
+            .put_drain_if_match("things/a", &serde_json::json!({}), Some("\"old\""))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, Error::HttpStatus { status: 412, .. }),
+            "{err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_if_match_sends_the_header() {
+        let mock = MockServer::start().await;
+        Mock::given(method("DELETE"))
+            .and(path("/api/v2/things/a"))
+            .and(header("If-Match", "\"v2\""))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&mock)
+            .await;
+        client_at(&mock)
+            .delete_if_match("things/a", Some("\"v2\""))
             .await
             .unwrap();
     }

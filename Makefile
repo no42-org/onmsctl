@@ -411,3 +411,9 @@ schema:  ## Regenerate every committed schemas/*.schema.json from the Rust types
 	cargo run --quiet --release --example gen_schema -p onmsctl-businessservice \
 		> schemas/business-service.schema.json.tmp \
 		&& mv schemas/business-service.schema.json.tmp schemas/business-service.schema.json
+	cargo run --quiet --release --example gen_group_schema -p onmsctl-thresholding \
+		> schemas/threshold-group.schema.json.tmp \
+		&& mv schemas/threshold-group.schema.json.tmp schemas/threshold-group.schema.json
+	cargo run --quiet --release --example gen_package_schema -p onmsctl-thresholding \
+		> schemas/threshd-package.schema.json.tmp \
+		&& mv schemas/threshd-package.schema.json.tmp schemas/threshd-package.schema.json
