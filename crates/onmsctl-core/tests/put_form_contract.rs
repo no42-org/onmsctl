@@ -4,7 +4,7 @@
  */
 
 //! End-to-end wire-contract test for `OnmsClient::put_form`. Asserts the
-//! exact bytes upstream Horizon's `UserRestService.updateUser` sees on the
+//! exact bytes Horizon's v1 `PUT /rest/users/{name}` receives on the
 //! wire: form-encoded body with percent-escaped special characters, set
 //! against the right `Content-Type` header. Mirrors the cli-core delta
 //! spec scenario "Form-encoded PUT sets the correct Content-Type".

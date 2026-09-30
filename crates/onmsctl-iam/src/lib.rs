@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//! IAM capability for `onmsctl` — users + roles via Horizon's v1
-//! `UserRestService`, declarative `iam apply -f`, lockout protection, and
+//! IAM capability for `onmsctl`: users + roles via Horizon's v1
+//! users API (`/rest/users`), declarative `iam apply -f`, lockout protection, and
 //! `passwordRef` secret resolution.
 
 pub mod api;
