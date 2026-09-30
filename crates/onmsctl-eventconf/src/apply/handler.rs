@@ -94,7 +94,11 @@ impl KindHandler for EventSourceHandler {
             let name = &local.metadata.name;
             let action = match fetch_remote(name, ctx).await? {
                 None => {
-                    let added = render_diff(&diff_event_sets(&local.spec.events, &[]));
+                    let mut added = render_diff(&diff_event_sets(&local.spec.events, &[]));
+                    if !local.spec.enabled {
+                        // Created enabled by the upload, then disabled.
+                        added.push_str("spec.enabled: false    [disabled after upload]\n");
+                    }
                     diffs.push(format!("EventSource/{name}: create\n{}", indent(&added)));
                     ExecAction::Create
                 }
@@ -295,6 +299,25 @@ mod tests {
         let diff = plan.diff.expect("a create renders a diff");
         assert!(diff.starts_with("EventSource/cisco.foo: create"), "{diff}");
         assert!(diff.contains("uei.opennms.org/test/cisco.foo"), "{diff}");
+        assert!(
+            !diff.contains("spec.enabled"),
+            "enabled: true is the default: {diff}"
+        );
+
+        // A new source declared disabled says so: it is created, then disabled.
+        let disabled = parse_documents(
+            "src.yaml",
+            "apiVersion: eventconf.opennms.org/v1\nkind: EventSource\nmetadata:\n  name: cisco.foo\n\
+             spec:\n  enabled: false\n  events:\n    - uei: uei.opennms.org/test/cisco.foo\n\
+             \x20     label: Test\n      severity: Warning\n",
+        )
+        .unwrap();
+        let plan = EventSourceHandler
+            .plan(&disabled, &ApplyParams::default(), &ctx_for(&server))
+            .await
+            .unwrap();
+        let diff = plan.diff.unwrap();
+        assert!(diff.contains("spec.enabled: false"), "{diff}");
 
         // Update: the server holds a different event under the same name.
         let server = MockServer::start().await;
