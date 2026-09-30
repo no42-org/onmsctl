@@ -6,7 +6,7 @@
 //! SNMP data-collection capability for `onmsctl`.
 //!
 //! Models OpenNMS's database-backed data-collection config (the v2
-//! `DataCollectionConfRestService`) as a declarative, named, multi-instance
+//! `/api/v2/datacollectionconf` API) as a declarative, named, multi-instance
 //! `kind: DataCollectionSource` document — one per `datacollection-group`. The
 //! `spec` carries the group tree (`resourceTypes` / `groups` / `systemDefs`),
 //! the snmp-collection `profiles` that include the source, and an optional

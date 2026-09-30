@@ -751,9 +751,8 @@ pub(crate) fn validate_source_name(field: &str, name: &str) -> Result<()> {
             "{field} '{name}' is reserved by OpenNMS"
         )));
     }
-    // Vendor derivation matches Horizon's server-side
-    // `StringUtils.substringBefore(name, ".")`: when no '.' is present,
-    // the whole name becomes the vendor. So `Cisco` → vendor `Cisco`;
+    // Vendor derivation matches Horizon's: the prefix before the first
+    // '.', or the whole name when no '.' is present. So `Cisco` → vendor `Cisco`;
     // `cisco.foo` → vendor `cisco`. Empty-vendor still rejected (e.g.
     // `.foo` would be caught by the earlier starts_with('.') check).
     let vendor = match name.split_once('.') {
@@ -1253,9 +1252,8 @@ spec:
 
     #[test]
     fn accepts_name_without_dot_and_derives_vendor_as_whole_name() {
-        // Horizon's server-side `StringUtils.substringBefore(name, ".")`
-        // returns the whole string when no '.' is present, so vendor =
-        // name itself. The local validator matches that behavior.
+        // Horizon derives the whole name as the vendor when no '.' is
+        // present, so vendor = name itself. The local validator matches that behavior.
         let yaml = minimal_yaml().replace("cisco.foo", "Cisco");
         let local = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap();
         assert_eq!(local.metadata.name, "Cisco");

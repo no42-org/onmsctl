@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//! Wire-format DTOs for Horizon's v1 `UserRestService`
+//! Wire-format DTOs for Horizon's v1 users API
 //! (`/rest/users`, `/rest/users/{name}`, `/rest/users/whoami`).
 //!
 //! ## Serialization split (spike 0.1, verified 2026-05-29 against the dev lab)

@@ -9,10 +9,10 @@
 //! against the desired one) and replace it wholesale. Both are absorbed here so
 //! the handler never touches the HTTP transport.
 //!
-//! NOTE: the endpoint paths and the multipart upload shape are derived from the
-//! `SnmpConfigRestService` v2 source, not yet a captured live exchange — confirm
-//! `GET /api/v2/snmp-config` and the `POST …/upload` multipart part against a
-//! real Horizon (see the change's task 9.2).
+//! The endpoint paths (`GET /api/v2/snmp-config`, `POST /api/v2/snmp-config/upload`
+//! with a multipart JSON part, `GET /api/v2/snmp-config/lookup`) and the upload
+//! shape were verified against a live Horizon, read and write paths
+//! (`add-snmp-config-capability` task 9.2, 2026-06-13).
 
 use onmsctl_core::client::MultipartPart;
 use onmsctl_core::{Error, OnmsClient, Result};
