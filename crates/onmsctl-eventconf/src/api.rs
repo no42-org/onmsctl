@@ -44,9 +44,9 @@ const PATH_SEGMENT: &AsciiSet = &CONTROLS
 /// request with `400 "Invalid offset/limit values"` (and in one case 500
 /// "offset is null") when `limit` is missing. `offset` is server-defaulted
 /// on `/filter`. It is required on `/filter/{id}/events`, and newer builds
-/// answer `/filter/sources` with 204 when it is missing. Real eventconf installs have far fewer than 1000
-/// sources or events-per-source, so a single page of 1000 is effectively
-/// "show everything" without paginating.
+/// answer `/filter/sources` with 204 when it is missing. Real eventconf
+/// installs have far fewer than 1000 sources or events-per-source, so a
+/// single page of 1000 is effectively "show everything" without paginating.
 const DEFAULT_PAGE_LIMIT: i32 = 1000;
 
 /// Hard cap on the page size used by `find_source_by_name` so a degenerate
