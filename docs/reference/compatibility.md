@@ -7,8 +7,16 @@ description: Supported OpenNMS Horizon versions and known eventconf quirks onmsc
 |---|---|
 | OpenNMS Horizon **35+** | Primary target (EventConf REST reproducible on 35.0.5 / 36.0.0). |
 
-Some capabilities need newer builds: the SNMP **Trapd** block (NMS-19128, `37.x`/`develop`), **data collection** (absent from released Horizon ≤ 37.0.0), and the **threshold** kinds `ThresholdGroup` and `ThreshdPackage` (NMS-19837, Horizon 37.0.0).
-All of them gate cleanly with a clear version message on older servers.
+Some kinds need newer server builds.
+onmsctl checks for those endpoints and fails with a version message instead of a bare error:
+
+| Kind | Server requirement | When onmsctl checks |
+|---|---|---|
+| `EventSource`, `Requisition`, `User`, `Maintenance`, `BusinessService` | Any supported Horizon | No version check |
+| `EventSourceOrder` | A server that reorders sources through an `eventconf.xml` upload part | After the write: a server that ignores the order fails the document with `server did not apply the requested order` |
+| `SnmpConfig` | Any supported Horizon; the `spec.trapd` block needs the Trapd REST API (NMS-19128, `37.x`/`develop`) | On the trapd write only; `--dry-run` does not detect it |
+| `DataCollectionSource` | A Horizon build with the DB-backed data-collection subsystem (absent from released Horizon ≤ 37.0.0) | Before every `datacollection` command and apply |
+| `ThresholdGroup`, `ThreshdPackage` | Horizon 37.0.0 (NMS-19837) | Before every `threshold` command and apply |
 
 **Known eventconf quirks** (Horizon 35.0.5 / 36.0.0, tracked upstream; onmsctl works around the load-bearing ones client-side):
 
