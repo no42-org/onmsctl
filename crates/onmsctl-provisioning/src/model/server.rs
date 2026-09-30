@@ -87,8 +87,9 @@ pub struct InterfaceServer {
     /// in local YAML (server-derived).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<i32>,
+    /// Whether the interface is managed. Horizon sends a JSON boolean.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub managed: Option<String>,
+    pub managed: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub descr: Option<String>,
     #[serde(default)]
@@ -194,6 +195,19 @@ mod tests {
     const FOREIGN_SOURCE_FIXTURE: &str = include_str!("../../tests/fixtures/foreign_source.json");
     const FOREIGN_SOURCE_DEFAULT_FIXTURE: &str =
         include_str!("../../tests/fixtures/foreign_source_default.json");
+
+    /// Horizon sends `managed` as a JSON boolean (the published OpenAPI
+    /// document types `RequisitionInterface.managed` as `boolean`). A
+    /// requisition carrying it, such as the stock `selfmonitor`, must decode.
+    #[test]
+    fn interface_managed_is_a_boolean() {
+        let json = r#"{"foreign-source":"selfmonitor","node":[{"foreign-id":"1",
+            "node-label":"localhost","location":null,"city":null,"building":"selfmonitor",
+            "interface":[{"ip-addr":"127.0.0.1","snmp-primary":"P","status":1,
+            "managed":true,"descr":"disc-if"}]}]}"#;
+        let r: RequisitionServer = serde_json::from_str(json).expect("managed: true decodes");
+        assert_eq!(r.node[0].interface[0].managed, Some(true));
+    }
 
     #[test]
     fn requisition_fixture_deserializes() {
