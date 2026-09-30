@@ -85,6 +85,7 @@ capabilities:
   - maintenance 0.4.7
   - datacollection 0.4.7
   - business-service 0.4.7
+  - thresholding 0.4.7
 ```
 
 The capability list grows as the binary links new capability crates.

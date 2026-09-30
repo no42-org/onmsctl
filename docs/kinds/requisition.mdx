@@ -43,8 +43,8 @@ spec:
 Omit it and the requisition inherits Horizon's default foreign source; if a custom foreign source already existed for that name, `apply` deletes it (`--diff` enumerates the displaced detectors/policies).
 The example below shows the pinned style with every modeled field.
 
-**Unmodeled XML is preserved** under `metadata.x-onmsctl-unmodeled`, so a `convert` then `apply` then `export` then re-`apply` round trip keeps server-side fields onmsctl doesn't model yet.
-The annotation is stripped before the diff and the wire body, so it never changes the apply outcome.
+**Unmodeled XML is recorded, not applied.** `convert` keeps XML that the YAML model doesn't represent under `metadata.x-onmsctl-unmodeled`, for review in the local YAML only.
+`apply` strips the annotation before the diff and the wire body, so those fields never reach Horizon, and a requisition that replaces one carrying them drops them from the server.
 
 ## Apply
 
@@ -55,7 +55,8 @@ onmsctl apply -f acme-prod.yaml                     # POST + auto-import
 
 The apply path computes a three-level diff (canonical-bytes / per-node / per-leaf), auto-decides `rescanExisting` from the scan-relevance of what changed, writes the foreign source and requisition, and triggers the import.
 `apply` picks `rescanExisting` automatically from the diff: changes that affect what provisiond discovers (services, SNMP primary, detectors, location) trigger a rescan; pure metadata (labels, categories, assets) does not.
-Import completion is asynchronous: block with `import --wait` or poll `requisition status <fs>`.
+Import completion is asynchronous: block with `import --wait` (exit `10` on `--timeout`, default `30m`), or watch `last-import` change in `requisition status <fs>`.
+`status` does not report whether an import succeeded.
 
 ## Inspect and delete
 
@@ -68,8 +69,10 @@ onmsctl requisition import acme-prod --wait --timeout 5m # block on the async im
 onmsctl requisition delete acme-prod --yes          # purge pending + deployed
 ```
 
-Lifecycle and read verbs: `requisition list|status|import|export|delete` and the `node|interface|service|category|asset list/get` reads.
-`requisition delete <fs>` requires `--yes`: it purges both pending and deployed snapshots.
+Lifecycle and read verbs: `requisition list|status|import|export|delete`, `node|interface list|get`, `service|category list`, and `asset list|get`.
+`requisition asset set` is a write: it changes an imported node's asset field immediately.
+`requisition delete <fs>` purges both pending and deployed snapshots.
+In a terminal it asks for confirmation; in a non-interactive run it refuses unless you pass `--yes` (`-y`).
 
 Read-only inspection:
 

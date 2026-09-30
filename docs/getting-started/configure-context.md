@@ -39,13 +39,14 @@ File and keyring references stay visible because they are pointers, not secrets.
 
 ## Credentials
 
-`auth.basic` / `auth.bearer` take exactly one source: inline (`password`/`token`), a file (`password-file`/`token-file`), or the OS `keyring`.
+`auth.basic` / `auth.bearer` take at most one source: inline (`password`/`token`), a file (`password-file`/`token-file`), or the OS `keyring`.
+Declare none to supply the secret only through `ONMS_PASSWORD` (basic) or `ONMS_TOKEN` (bearer).
 
 | Field | Notes |
 |---|---|
 | `password` / `token` | Inline plain-text. Convenient; leaks if the config leaks. |
-| `password-file` / `token-file` | Path to a file; mode `0600` recommended, trailing newline stripped. |
-| `keyring` | OS keyring (macOS Keychain / Windows Credential Manager work out of the box; Linux GNOME Keyring/KWallet needs a rebuild with `--features keyring/sync-secret-service`). |
+| `password-file` / `token-file` | Absolute path to a file. `~` is not expanded. Mode `0600` recommended. Trailing CR/LF is stripped; other whitespace is kept. |
+| `keyring` | OS keyring entry, `{service, account}`, both non-empty. macOS Keychain, Windows Credential Manager and the Linux kernel keyring work out of the box. GNOME Keyring/KWallet need a rebuild with `--features keyring/sync-secret-service`. |
 
 ```yaml
 contexts:
@@ -55,10 +56,17 @@ contexts:
     auth:
       basic:
         username: automation
-        password-file: ~/.secrets/onms-prod   # pointer, safe to commit the config
+        password-file: /home/automation/.secrets/onms-prod   # pointer, safe to commit the config
+  - name: lab
+    server:
+      url: https://horizon.lab.example.com/opennms
+    auth:
+      basic:
+        username: admin
+        keyring: { service: onmsctl, account: lab }
 ```
 
-Resolution at request time: `env ($ONMS_PASSWORD / $ONMS_TOKEN) > keyring > file > inline`.
+At request time a set `ONMS_PASSWORD` (basic) or `ONMS_TOKEN` (bearer) overrides the declared source.
 
 ## Verify connectivity
 

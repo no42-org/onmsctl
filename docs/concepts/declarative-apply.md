@@ -35,9 +35,11 @@ User (100) → EventSource (200) → EventSourceOrder (210) → ThresholdGroup (
 Each document yields one `ApplyOutcome` row, rendered through `-o table|yaml|json`:
 
 ```text
-kind         name       action  status     message
-Requisition  acme-prod  create  Skipped    dry-run: would create
-Requisition  site-b     none    Unchanged  in sync
++-------------+-----------+--------+---------+-----------------------+
+| kind        | name      | action | status  | message               |
++====================================================================+
+| Requisition | acme-prod | create | Skipped | dry-run: would create |
++-------------+-----------+--------+---------+-----------------------+
 ```
 
 ```sh
@@ -54,6 +56,8 @@ onmsctl apply -f 'sources/cisco-*.yaml'           # glob (quote it)
 | `--continue-on-error` (alias `--keep-going`) | Keep applying after a failing document. Default is stop-on-error. |
 | `-R` / `--recursive` | Recurse into subdirectories (off by default). |
 
-**Exit codes:** `0` all applied/unchanged; `1` any document failed (incl. a plan-gate failure); `2` usage error.
+**Exit codes:** `0` means every document applied or was unchanged.
+`1` means a document failed or the plan gate refused the input.
+Other failures keep their own codes: `2` for a usage or config error (including empty input), `4`-`9` for connection errors, `12` for a read-only refusal, `13`-`15` for the IAM safety gates.
 The full table is under [Exit codes](../reference/exit-codes.md).
 The imperative mutators that predated this model are gone: see the [migration guide](../guides/migration.md#removed-imperative-verbs--onmsctl-apply--f).

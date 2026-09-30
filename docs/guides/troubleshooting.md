@@ -7,16 +7,19 @@ description: "Diagnose common onmsctl problems: wrong binary, auth failures, TLS
   Check `which onmsctl`; a release binary in `/usr/local/bin` may shadow a `cargo install` one in `~/.cargo/bin` (or vice versa).
 - **Auth failures.**
   Confirm with `onmsctl iam whoami`.
-  Remember the resolution order: `$ONMS_PASSWORD`/`$ONMS_TOKEN` beats keyring beats file beats inline.
+  A set `$ONMS_PASSWORD` (basic auth) or `$ONMS_TOKEN` (bearer) overrides the context's declared secret.
   A stale env var can silently override the config.
 - **Wrong server.**
   `--url`/`$ONMS_URL` override the active context.
   Run `onmsctl config view` to see what's actually loaded.
-- **TLS handshake failed (exit 7).**
+- **Untrusted server certificate.**
+  onmsctl trusts only its bundled Mozilla root certificates, not the OS trust store, so a private CA fails too.
+  The failure currently surfaces as `error: connection refused` with exit `5`, not as a TLS error; `curl -v` against the same URL shows the certificate problem.
   For a lab with a self-signed cert, `--insecure-tls` skips verification (never in production).
 - **A write "did nothing".**
-  You're likely in a read-only context (exit `12`) or it was a `--dry-run`.
-  Drop `--dry-run` / `--read-only`.
+  A `--dry-run` writes nothing by design.
+  A read-only refusal is an error with exit `12`, not a silent no-op.
+  It comes from `--read-only`, `$ONMSCTL_READ_ONLY`, or the context's `read-only: true`; neither the flag nor the variable can switch it off, so edit the context or switch contexts.
 - **Unexpected diff on re-apply.**
   Run `apply --dry-run --diff` and inspect the leaves; cosmetic reordering of set-like fields (categories, services) is normalized away, so a real diff means real drift.
 - **See the full error chain.**

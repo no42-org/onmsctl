@@ -6,7 +6,8 @@ description: Plan OpenNMS maintenance windows declaratively, mapped to scheduled
 import CodeBlock from '@theme/CodeBlock';
 import example from '!!raw-loader!../../examples/maintenance.yaml';
 
-Plan a maintenance window: for a period, stop OpenNMS polling, notifications, and threshold (and optionally collection) evaluation on chosen devices.
+Plan a maintenance window: for a period, suppress OpenNMS polling, thresholds, collection or notifications on chosen devices.
+Each daemon is suppressed only when it is listed under `spec.suppress`, and at least one must be.
 Maps to an OpenNMS scheduled outage (`/rest/sched-outages`); named and multi-instance (one document per window), reconciled like requisitions.
 There is no version gate: the API is present in every supported Horizon/Meridian.
 

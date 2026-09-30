@@ -14,7 +14,8 @@ The loop has three steps: `event-source convert` brings existing XML in, `onmsct
 
 `metadata.name` becomes the server's stored source name verbatim.
 Horizon derives `vendor` as the prefix before the first `.` in that name: `cisco.foo` becomes vendor `cisco`.
-See [Field semantics](#field-semantics) below for the full per-field schema and [Example](#example) for a complete document.
+A name without a `.` becomes the vendor as a whole: `Cisco` becomes vendor `Cisco`.
+[Field semantics](#field-semantics) covers the fields with non-obvious behaviour; the [JSON Schema](../reference/editor-integration.md) lists every field, and [Example](#example) shows a complete document.
 
 ## Apply
 
@@ -31,9 +32,11 @@ onmsctl event-source list                          # filter / sort / page
 onmsctl event-source get <id>
 onmsctl event-source download <id|name> -O out.xml # raw XML for one source
 onmsctl event list --source <id>                   # events for a source
+onmsctl event-source delete <id>...                # delete sources by id
 ```
 
 `download` and `export` accept a selector that is either a numeric id or an exact source name.
+A value that parses as an integer is always treated as an id, so a source with a numeric name is reachable only by its id.
 
 Snapshot server sources back to git-managed YAML, the reverse of `apply`:
 
@@ -47,7 +50,7 @@ Export routes through the `convert` migrator, so it carries the same `EC###` fin
 In bulk it is continue-on-error: warnings are written, blocking and download-failed sources are reported and counted, and the exit code reflects the highest severity seen.
 `--out` validates every target filename before writing anything: it is all-or-nothing.
 
-Read/raw verbs stay imperative: `event-source list|get|names|names-and-ids`, `event list` (including cross-source `--uei`/`--vendor`), and the raw-XML `event-source upload|download` round trip.
+Read/raw verbs stay imperative: `event-source list|get|names|names-and-ids|delete`, `event list` (including cross-source `--uei`/`--vendor`), and the raw-XML `event-source upload|download` round trip.
 Use the raw-XML round trip for full fidelity when a source carries fields the YAML model doesn't represent yet.
 
 ## Convert
@@ -70,13 +73,30 @@ See [Convert findings](#convert-findings) below for the full catalog.
 ## Convert findings
 
 `event-source convert` parses each event against the local `EventSource` schema and emits findings on stderr.
-Example:
+For an event without a `uei`:
 
+```sh
+onmsctl event-source convert bad.events.xml > bad.yaml
 ```
-EC004  error    event missing required field: uei
-  At:   bad.events.xml:14:5  (event[3])
-  Fix:  Add the required uei to the event in the source XML.
-  For the full rationale: onmsctl event-source convert --explain EC004
+
+Expected output (stderr):
+
+```text
+─────────────────────────────────────────────────────────────────────
+  bad.events.xml → no YAML written
+─────────────────────────────────────────────────────────────────────
+
+  EC004  error    event missing required field: uei
+    Field: uei
+    At:    bad.events.xml:2:3  (event[0])
+    Fix: Add the required uei to the event in the source XML; the local schema requires it for a well-formed EventSource.
+    For the full rationale: onmsctl event-source convert --explain EC004
+
+─────────────────────────────────────────────────────────────────────
+  Summary: 1 events scanned, 0 converted, 1 dropped (0.0% modeled coverage)
+  Findings: 1 errors, 0 warnings
+  Exit: 2
+─────────────────────────────────────────────────────────────────────
 ```
 
 Finding codes (`EC001`-`EC008`) are stable across releases; `--explain <code>` prints the full rationale for any of them.
@@ -92,13 +112,17 @@ Finding codes (`EC001`-`EC008`) are stable across releases; `--explain <code>` p
 | EC007 | error   | `alarm-type` outside the accepted set `{1, 2, 3}`. |
 | EC008 | error   | Invalid `metadata.name` (disallowed characters). |
 
-Exit codes: `0` clean, `1` warnings (YAML written), `2` blocking findings (no YAML).
+Exit codes: `0` clean, `1` warnings (YAML written), `2` blocking findings (no YAML), `3` usage error before conversion ran.
+These replace the global [exit codes](../reference/exit-codes.md#conversion-commands) for `convert`.
 
 Flags:
 
 | Flag | Purpose |
 |---|---|
-| `--format json` | CI envelope with `output` path and `yaml` body. |
+| `-O, --output <path>` | Write the YAML to this file (single input only). Default: stdout. |
+| `--output-dir <dir>` | Write one YAML file per input into this directory. |
+| `--name <name>` | Override the derived `metadata.name`. Required for stdin input. |
+| `--format json` | JSON envelope on stdout instead of the text report: `version`, `input`, `output`, `exit_code`, `findings`, `metrics`, `yaml`. Default: `text`. |
 | `--max-bytes 64M` | Override the 16 MiB input cap. |
 | `--max-findings 0` | Disable the 1000-finding `EC001` cap (set `<n>` for any other limit). |
 | `--force` | Overwrite existing output. |
@@ -187,13 +211,11 @@ These are two different layers.
 
 ## Apply-time limitations
 
-Run `onmsctl apply --help` for the full text.
-
 | # | Limitation | Workaround |
 |---|---|---|
-| 1 | `description` not persisted server-side through `apply`. | Carry intent in the YAML and git review; the field round-trips locally. |
-| 2 | Disabled-state `apply` has a bounded enabled-flap window. | `--verbose` warns when this runs. |
-| 3 | `vendor` is filename-derived, not declared. | Encode as the prefix before the first `.` in `metadata.name`. |
+| 1 | `spec.description` is rejected at load, because the upload endpoint blanks it. Per-event `description` is modeled and applied. | Set the source description out-of-band through the Horizon REST API or web UI. |
+| 2 | Updating a disabled source briefly enables it: the upload lands enabled, then a follow-up call disables it. | `--verbose` warns when this happens. |
+| 3 | `spec.vendor` is rejected at load; the vendor is derived from the name. | Encode it as the prefix before the first `.` in `metadata.name`. |
 | 4 | `fileOrder` is not accepted on an `EventSource`. | Declare evaluation order with [`EventSourceOrder`](event-source-order.mdx). |
 
 ## Example

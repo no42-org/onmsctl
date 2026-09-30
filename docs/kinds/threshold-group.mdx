@@ -83,7 +83,7 @@ onmsctl threshold group delete acme-cpu
 ```
 
 - `get` and `export` write documents that apply back unchanged. Values stay the server's strings, quoted, such as `value: '1.0'`.
-- `export` writes every group and package, one file each, and skips extension groups.
+- `export --out <dir>` writes every group and package, one file each, and skips extension groups. It refuses to overwrite existing files unless you pass `--force`. Without `--out` it writes one `---`-separated stream to stdout.
 - `group delete` refuses while a package still binds the group. `--force` deletes anyway and leaves the package with a dangling reference.
 
 ## Errors
