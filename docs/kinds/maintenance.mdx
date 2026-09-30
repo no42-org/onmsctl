@@ -7,58 +7,164 @@ import CodeBlock from '@theme/CodeBlock';
 import example from '!!raw-loader!../../examples/maintenance.yaml';
 
 Plan a maintenance window: for a period, suppress OpenNMS polling, thresholds, collection or notifications on chosen devices.
-Each daemon is suppressed only when it is listed under `spec.suppress`, and at least one must be.
-Maps to an OpenNMS scheduled outage (`/rest/sched-outages`); named and multi-instance (one document per window), reconciled like requisitions.
-There is no version gate: the API is present in every supported Horizon/Meridian.
+Each document is one window, mapped to one OpenNMS scheduled outage.
+Targets `/rest/sched-outages`.
+See the [compatibility table](../reference/compatibility.md) for supported servers.
 
 ## YAML
 
-```yaml
-apiVersion: maintenance.opennms.org/v1
-kind: Maintenance
-metadata: { name: weekend-patching }
-spec:
-  schedule:
-    type: specific                  # specific | daily | weekly | monthly
-    times:
-      - { begins: "20-Jun-2026 22:00:00", ends: "21-Jun-2026 04:00:00" }
-  devices:                          # selectors are a UNION, deduped to nodeIds
-    interfaces: [192.168.8.8]       # an IP, or the single literal `match-any`
-    nodes: [ { foreignSource: hq, foreignId: web01 } ]   # resolved to a nodeId at apply
-    categories: [Routers]           # every node in ANY listed category
-    locations: [Berlin]             # every node at ANY listed Minion location
-    asset: { field: city, value: Berlin }
-  suppress:
-    polling: { packages: [production] }   # explicit packages required (no default)
-    notifications: true                   # global (no package)
-```
+| Field | Type | Default | Description |
+|---|---|---|---|
+| **`apiVersion`** | string | required | `maintenance.opennms.org/v1` |
+| **`kind`** | string | required | `Maintenance` |
+| **`metadata.name`** | string | required | Outage name. Must not be empty. Must be unique within one apply. |
+| **`spec.schedule.type`** | string | required | `specific`, `daily`, `weekly` or `monthly`. |
+| **`spec.schedule.times`** | list of time windows | required | At least one window. |
+| **`spec.devices.interfaces`** | list of strings | `[]` | IP addresses (IPv4 or IPv6), or the single literal `match-any` for every interface. |
+| **`spec.devices.nodes`** | list of node references | `[]` | Nodes by foreign reference, resolved to a nodeId at apply. |
+| **`spec.devices.categories`** | list of strings | `[]` | Every node in any listed category. |
+| **`spec.devices.locations`** | list of strings | `[]` | Every node at any listed monitoring (Minion) location. |
+| **`spec.devices.asset`** | asset selector | none | Nodes whose asset-record field equals a value. |
+| **`spec.suppress.polling`** | daemon suppression | none | Suppress pollerd for the listed packages. |
+| **`spec.suppress.thresholds`** | daemon suppression | none | Suppress threshd for the listed packages. |
+| **`spec.suppress.collection`** | daemon suppression | none | Suppress collectd for the listed packages. |
+| **`spec.suppress.notifications`** | boolean | `false` | Suppress notifd. Global, no package. |
 
-**Explicit packages; server timezone; foreignId nodes.** `polling`/`thresholds`/`collection` require an explicit `packages` list.
-Times are the server's timezone.
-Nodes are named by `{foreignSource, foreignId}` and resolved at apply: an un-imported node fails that window, which is why `Maintenance` applies after `Requisition`.
-Prefer `interfaces`/`match-any` when nodes may be un-imported.
+`spec.devices` must declare at least one selector.
+The selectors are a union: every matched node is covered once.
+`match-any` cannot be combined with any other interface or selector.
+To cover every interface, use `interfaces: [match-any]` alone.
+Values in `categories`, `locations`, `asset.field` and `asset.value` must not be empty and must not contain `,` `;` `=` `(` `)` or `*`.
 
-**Dynamic selectors** (`categories`/`locations`/`asset`) are a union, not an intersection, re-resolved on every apply (a snapshot).
-A selector matching nothing warns; a window covering nothing fails.
+Each daemon under `spec.suppress` is opt-in.
+Enable at least one.
+`polling`, `thresholds` and `collection` each require a non-empty `packages` list, because there is no default package.
+
+Fields of a time window (`spec.schedule.times[]`):
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| **`begins`** | string | required | Window start. Must be before `ends`. |
+| **`ends`** | string | required | Window end. |
+| **`day`** | string | none | Required for `weekly` (a weekday, `sunday` to `saturday`, any case) and `monthly` (a day of month, `"1"` to `"31"`). Forbidden for `specific` and `daily`. |
+
+The time format depends on `spec.schedule.type`:
+
+| Type | `begins` and `ends` format | Example |
+|---|---|---|
+| `specific` | `dd-MMM-yyyy HH:mm:ss` | `20-Jun-2026 22:00:00` |
+| `daily`, `weekly`, `monthly` | `HH:mm:ss` | `22:00:00` |
+
+Each field is two digits, except the four-digit year.
+The month abbreviation is case-insensitive.
+Because `begins` must be before `ends`, a `daily`, `weekly` or `monthly` window cannot cross midnight.
+Times are in the server's timezone.
+
+Fields of a node reference (`spec.devices.nodes[]`):
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| **`foreignSource`** | string | required | Requisition the node belongs to. Must not be empty. |
+| **`foreignId`** | string | required | Node's foreign ID in that requisition. Must not be empty. |
+
+Fields of the asset selector (`spec.devices.asset`):
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| **`field`** | string | required | Asset-record field, such as `city`. |
+| **`value`** | string | required | Exact value to match. |
+
+Node meta-data is not searchable through the node API, so it is not a selector.
+
+Fields of a daemon suppression (`spec.suppress.polling`, `.thresholds`, `.collection`):
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| **`packages`** | list of strings | required | Daemon packages the window applies to. At least one entry. |
 
 ## Apply
 
 ```sh
 onmsctl apply -f examples/maintenance.yaml --dry-run --diff
+onmsctl apply -f examples/maintenance.yaml
 ```
 
-Apply writes the outage definition (a true `Created`/`Updated`/`Unchanged`), then attaches it per daemon (`polling` to pollerd, `thresholds` to threshd, `collection` to collectd per package; `notifications` to notifd global).
+Apply reconciles each window in two steps:
 
-**Attachments are ensure-present.** The API can't read which daemons an outage is attached to, so onmsctl re-issues the idempotent attach every apply and cannot detach; removing a `suppress` entry does not detach it.
-To reduce suppression, `maintenance delete <name>` and re-apply.
+1. Write the outage definition. Apply creates an absent window, updates a changed one, and leaves a matching one untouched. The comparison ignores list order, IP spelling and case.
+2. Attach the window to each daemon in `spec.suppress`: pollerd, threshd and collectd once per package, notifd once.
+
+If the definition write fails, apply skips the attachments for that window.
+
+Attachments are ensure-present.
+The API cannot read which daemons an outage is attached to.
+Apply therefore re-issues every attachment on every apply, and never detaches.
+Removing a `suppress` entry does not detach it.
+To reduce suppression, run `onmsctl maintenance delete <name>`, then re-apply.
+
+Apply never deletes.
+Windows no document declares are left alone.
+
+Node selectors are resolved on every apply:
+
+- An explicit `nodes` entry that does not resolve fails that window. The other windows still apply.
+- `categories`, `locations` and `asset` are resolved through one node search. The result is a snapshot. Re-apply to follow membership changes.
+- A search that matches nothing prints a warning.
+- A window that covers no devices after resolution fails.
+
+A `specific` window that already ended prints a warning, and is still created.
+The check compares against UTC, so it is approximate near the boundary.
+
+`--diff` prints a fixed note on attachment behaviour, not a field-level diff.
+The plan row lists the attachments apply will ensure, such as `ensure pollerd/production, notifd`.
+
+**Plan gates:** every document is parsed and validated, and names are checked for duplicates, before any HTTP request.
+A node search that returns fewer nodes than it matched aborts the apply rather than cover a subset.
+
+**Order:** `Maintenance` applies after `ThreshdPackage` and `Requisition`, so one apply can create the packages it attaches to and import the nodes it names.
+Requisition import is asynchronous, so a node imported by the same apply can still fail to resolve.
+Re-run the apply in that case.
 
 ## Inspect and delete
 
 ```sh
-onmsctl maintenance list                       # or: onmsctl maint list
-onmsctl maintenance status 192.168.8.8 12     # IP or nodeId → in a window now?
-onmsctl maintenance delete weekend-patching    # full teardown
+onmsctl maintenance list
+onmsctl maintenance status 192.168.8.8 12
+onmsctl maintenance delete weekend-patching
 ```
+
+- `maint` is an alias for `maintenance`.
+- `list` shows each window's name, type, and number of times, interfaces and nodes.
+- `status` takes IP addresses and numeric nodeIds, and reports whether each is in a window now.
+- `delete` removes the window from every daemon and deletes its definition.
+
+## Errors
+
+| Message | Probable cause | Recovery |
+|---|---|---|
+| `spec.schedule.times must declare at least one window` | `times` is empty. | Add a window. |
+| `is not in the expected format` | `begins` or `ends` does not match the format for `spec.schedule.type`. | Use `dd-MMM-yyyy HH:mm:ss` for `specific`, `HH:mm:ss` otherwise. |
+| `must be before ends` | `begins` is equal to or later than `ends`. | Swap the times, or split a window that crosses midnight in two. |
+| ``weekly windows require a `day` (a weekday)`` | A `weekly` window has no `day`. | Add `day: monday` (or another weekday). |
+| ``monthly windows require a `day` (1–31)`` | A `monthly` window has no `day`. | Add `day: "15"` (or another day of month). |
+| `is not a weekday (sunday…saturday)` | A misspelled weekday. | Spell the weekday in full. |
+| `must be a day-of-month in 1–31` | A `monthly` `day` outside 1 to 31. | Fix the day. |
+| `` `day` is only valid for weekly/monthly windows `` | A `specific` or `daily` window sets `day`. | Remove `day`. |
+| `spec.devices must declare at least one selector` | `spec.devices` is empty. | Add `interfaces`, `nodes`, `categories`, `locations` or `asset`. |
+| ``spec.devices: `match-any` selects every interface and cannot be combined with`` | `match-any` appears next to another interface or selector. | Keep `match-any` alone, or list explicit selectors instead. |
+| `spec.devices.interfaces: invalid IP` | An interface is not an IP address. | Fix the address. |
+| `foreignSource and foreignId must both be non-empty` | A node reference is incomplete. | Set both fields. |
+| `spec.devices.asset.field and asset.value must both be non-empty` | The asset selector is incomplete. | Set both fields. |
+| `contains the disallowed character` | A selector value contains `,` `;` `=` `(` `)` or `*`. | Remove the character. Selectors match exact values. |
+| `spec.suppress must enable at least one of polling / thresholds / collection / notifications` | `spec.suppress` is empty. | Enable at least one daemon. |
+| ``requires a non-empty `packages` list`` | `polling`, `thresholds` or `collection` has no packages. | List the daemon packages. |
+| `kind: Maintenance names must be unique within an apply` | Two documents share a `metadata.name`. | Rename one. |
+| `not found / not yet imported` | A `nodes` entry names a node the server does not have yet. | Import the node, or fix the reference, then re-apply. |
+| `window covers no devices after resolution` | No interfaces, and the node selectors matched nothing. | Fix the selectors. |
+| `were returned (truncated)` | The node search matched more nodes than it returned. | Narrow the selectors. |
+| `attachments not attempted` | The definition write failed. | Check connectivity, then re-apply. |
+| `FAILED to attach` | A daemon rejected an attachment, often an unknown package. | Check the package names exist, then re-apply. |
+| `is neither an IP address nor a numeric nodeId` | `maintenance status` got another kind of argument. | Pass IP addresses or nodeIds. |
 
 ## Example
 

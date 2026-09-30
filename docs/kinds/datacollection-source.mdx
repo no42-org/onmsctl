@@ -6,39 +6,170 @@ description: Manage which MIB objects and system definitions Horizon collects ov
 import CodeBlock from '@theme/CodeBlock';
 import example from '!!raw-loader!../../examples/datacollection-source.yaml';
 
-Manage Horizon's SNMP data-collection config, which MIB objects, resource types, and system definitions are collected, over the DB-backed `/api/v2/datacollectionconf` surface.
-One `kind: DataCollectionSource` document per `datacollection-group` (a "source"); onmsctl owns only the sources you write.
-The stock vendor library is left untouched: this is an additive prune, not a singleton.
+Declare one SNMP data-collection source per document: the MIB objects, resource types and system definitions of one `datacollection-group`, and the collection profiles that include it.
+Targets `/api/v2/datacollectionconf`.
+Requires a Horizon build with the DB-backed data-collection subsystem, which released Horizon 37.0.0 and older lack.
+See the [compatibility table](../reference/compatibility.md).
+
+onmsctl manages only the sources you write documents for.
+The stock vendor sources stay untouched.
 
 ## YAML
 
-**`profiles` is the full truth (a true reconcile).** A name added is attached, a name dropped is detached.
-A new source must list at least one profile.
-An optional inline `profileSpec` creates or tunes that profile from zero.
+| Field | Type | Default | Description |
+|---|---|---|---|
+| **`apiVersion`** | string | required | `datacollection.opennms.org/v1` |
+| **`kind`** | string | required | `DataCollectionSource` |
+| **`metadata.name`** | string | required | Source (`datacollection-group`) name. Must not be empty. Must be unique within one apply. Renaming creates a new source. |
+| **`spec.enabled`** | boolean | `true` | Whether the source is active. |
+| **`spec.resourceTypes`** | list of resource types | `[]` | Custom resource types the source defines. |
+| **`spec.groups`** | list of MIB groups | `[]` | MIB objects collected together. |
+| **`spec.systemDefs`** | list of system definitions | `[]` | Which groups to collect for devices matching a sysoid. |
+| **`spec.profiles`** | list of profile names | `[]` | Collection profiles that include this source. A new source needs at least one. |
+| **`spec.profileSpec`** | profile | none | A profile to create or tune inline. |
 
-:::note Preflight version gate
-The `/api/v2/datacollectionconf` endpoint is absent from released Horizon `<= 37.0.0`.
-Apply probes it once and fails the whole apply early, before any write, on a server that lacks it.
-:::
+Declare at least one of `resourceTypes`, `groups` or `systemDefs`.
+Without `profileSpec`, every name in `profiles` must already exist on the server.
+With `profileSpec`, `profiles` can also name the profile it creates.
+
+Fields of a resource type (`spec.resourceTypes[]`):
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| **`name`** | string | required | Resource type name. Must not be empty. |
+| **`label`** | string | none | Display label. |
+| **`resourceLabel`** | string | none | Label template for each resource, such as `${acmeSensorName} (index ${index})`. |
+| **`persistenceSelector`** | strategy | none | Persistence-selector strategy. |
+| **`storageStrategy`** | strategy | none | Storage strategy. |
+
+Fields of a strategy (`persistenceSelector`, `storageStrategy`):
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| **`class`** | string | required | Fully qualified Java class name. Must not be empty. |
+| **`params`** | list of `{key, value}` | `[]` | Strategy parameters. Both `key` and `value` are required. Order is significant. |
+
+Fields of a MIB group (`spec.groups[]`):
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| **`name`** | string | required | Group name. Must not be empty. |
+| **`ifType`** | string | required | Interface filter: `all`, `ignore`, or a numeric ifType. |
+| **`mibObjects`** | list of MIB objects | required | At least one entry. |
+| **`includeGroups`** | list of group names | `[]` | Other groups this group includes. |
+
+Fields of a MIB object (`spec.groups[].mibObjects[]`):
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| **`oid`** | string | required | Object identifier. Must not be empty. |
+| **`instance`** | string | required | Instance, such as `"0"` or a resource type name. |
+| **`alias`** | string | required | Name the value is stored under. Must not be empty. |
+| **`type`** | string | required | SNMP type, case-insensitive: `counter`, `counter32`, `counter64`, `gauge`, `gauge32`, `integer`, `integer32`, `unsigned32`, `timeticks`, `octetstring`, `hexstring`, `string`, `ipaddress` or `opaque`. |
+| **`maxval`** | string | none | Upper collection bound. |
+| **`minval`** | string | none | Lower collection bound. |
+
+Fields of a system definition (`spec.systemDefs[]`):
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| **`name`** | string | required | System definition name. Must not be empty. |
+| **`sysoidMask`** | string | none | OID prefix. Matches every device under this subtree. Cannot be combined with `sysoid`. |
+| **`sysoid`** | string | none | Exact sysoid. Cannot be combined with `sysoidMask`. |
+| **`includeGroups`** | list of group names | `[]` | Groups to collect for matching devices. Each must be a group in this document's `spec.groups`. |
+
+Fields of the inline profile (`spec.profileSpec`):
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| **`name`** | string | required | Profile name. Must not be empty. |
+| **`rrdStep`** | integer | required | RRD step in seconds. Must be positive. |
+| **`rras`** | list of strings | required | Round-robin archive definitions, such as `RRA:AVERAGE:0.5:1:2016`. At least one. |
+| **`storageFlag`** | string | required | `all`, `select` or `primary`, case-insensitive. |
 
 ## Apply
 
 ```sh
+onmsctl apply -f examples/datacollection-source.yaml --dry-run --diff
 onmsctl apply -f examples/datacollection-source.yaml
 ```
 
-**Whole-source replace.** A changed group tree is re-uploaded and the server upserts and prunes removed children.
-An unchanged source (normalized, order-insensitive) is a no-op.
+Apply reconciles each source in this order:
+
+1. **Profile.** Apply creates the `profileSpec` profile if it is absent, and updates it if `rrdStep`, `rras` or `storageFlag` differ.
+2. **Source tree.** Apply uploads a new source attached to every profile in `spec.profiles`. For an existing source, it re-uploads the whole tree when it changed. The server then removes children the document no longer declares (Horizon behaviour). An unchanged tree sends no upload.
+3. **Profile membership.** `spec.profiles` is the full list. Apply attaches the source to profiles it is missing from, and detaches it from profiles no longer listed.
+4. **Enabled state.** Apply enables or disables the source to match `spec.enabled`.
+
+The tree comparison ignores the order of groups, MIB objects, resource types and system definitions.
+Strategy `params` order counts.
+
+Apply never deletes sources or profiles.
+Sources no document declares are left alone.
+A detached profile stays on the server.
+A `profileSpec` profile not listed in `spec.profiles` is reconciled, but the source is not attached to it.
+
+If a write fails partway, the result lists the steps that completed, then `FAILED:` and the error.
+
+**Plan gates:** every document is parsed and validated, and names are checked for duplicates, before any HTTP request.
+Apply then checks once that the server has `/api/v2/datacollectionconf`.
+On a server without it, the whole apply aborts before any write.
+A source that fails its plan checks, such as a missing profile, fails at execute.
+Later sources are not attempted unless you pass `--continue-on-error`.
+
+**Order:** `DataCollectionSource` (rank 375) applies after `Maintenance` (350) and before `BusinessService` (400).
+It has no dependency on other kinds.
+The rank only fixes a deterministic order.
+
+## Diff
+
+`--diff` prints one line per source.
+
+```text
+acme-router: create source, create profile, attach [acme-collection]
+cisco-extra: replace tree, detach [old-collection]
+juniper-extra: tree unchanged, update profile, disable
+```
+
+A source that fails its plan checks prints its name, `ERROR`, and the message.
 
 ## Inspect and delete
 
 ```sh
-onmsctl datacollection list [--profiles]              # deployed sources / profiles
-onmsctl datacollection export acme-router             # the group as xml (or --format json)
-onmsctl datacollection delete acme-router             # remove the source + children
+onmsctl datacollection list
+onmsctl datacollection list --profiles
+onmsctl datacollection export acme-router
+onmsctl datacollection export acme-router --format json
+onmsctl datacollection delete acme-router
 ```
 
-`list`/`export` are Read; `apply`/`delete` are Write.
+- `dc` is an alias for `datacollection`.
+- `list` shows each source's id and name. `--profiles` lists the collection profiles instead, with their RRD step, storage flag and source count.
+- `export` prints one source's `datacollection-group` document as `xml` (the default) or `json`.
+- `delete` removes the source with its MIB groups, resource types and system definitions. Profiles stay in place.
+- `list`, `export` and `delete` run the same endpoint check as apply. `list --profiles` does not.
+
+## Errors
+
+| Message | Probable cause | Recovery |
+|---|---|---|
+| `the data-collection REST endpoint (/api/v2/datacollectionconf) is not available on this server` | The server lacks the DB-backed data-collection subsystem. | Use a Horizon build that has it. See the [compatibility table](../reference/compatibility.md). |
+| `spec must declare at least one of resourceTypes / groups / systemDefs` | The source tree is empty. | Add a resource type, group or system definition. |
+| `must declare at least one mibObject` | A group has no `mibObjects`. | Add a MIB object, or remove the group. |
+| `oid and alias must both be non-empty` | A MIB object is incomplete. | Set both fields. |
+| `is not a recognized SNMP type` | A typo in a MIB object's `type`. | Use one of the listed SNMP types. |
+| `ifType must not be empty` | A group has an empty `ifType`. | Set `all`, `ignore`, or a numeric ifType. |
+| `sets both sysoid and sysoidMask` | A system definition sets both match fields. | Keep one. |
+| `which is not defined in this document's spec.groups` | A system definition includes a group this document does not define. | Define the group, or remove the entry. |
+| `spec.profileSpec.rrdStep must be a positive number of seconds` | `rrdStep` is `0`. | Set a positive step. |
+| `spec.profileSpec.rras must declare at least one RRA` | `rras` is empty. | Add an RRA definition. |
+| `must be one of all / select / primary` | A typo in `storageFlag`. | Use `all`, `select` or `primary`. |
+| `duplicate kind: DataCollectionSource metadata.name` | Two documents share a `metadata.name`. | Rename one. |
+| `a new source must be attached to at least one profile` | A new source has an empty `spec.profiles`. | List at least one profile. |
+| `spec.profiles references profile` | A listed profile does not exist on the server, and no `profileSpec` creates it. | Fix the name, or add a `profileSpec` for it. |
+| `server rejected the upload of source` | The server reported errors for the uploaded tree. | Fix the reported fields, then re-apply. |
+| `was created but did not appear in names-and-ids` | The new source could not be found again to disable it. | Re-apply to reconcile the enabled state. |
+| `no data-collection source named` | `export` or `delete` names a source the server does not have. | Check the name with `onmsctl datacollection list`. |
 
 ## Example
 

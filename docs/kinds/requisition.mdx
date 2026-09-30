@@ -6,73 +6,123 @@ description: Manage OpenNMS provisioning requisitions declaratively, migrate pro
 import CodeBlock from '@theme/CodeBlock';
 import example from '!!raw-loader!../../examples/requisition-acme-prod.yaml';
 
-Manage Horizon requisitions, the `provision.pl`-shape data, declaratively from git.
-`requisition convert` brings existing XML in, `apply` ships edits out, and `requisition import` / `status` cover the lifecycle.
+Declare one requisition per document: its nodes, interfaces, services, categories and assets, plus an optional foreign source (scan interval, detectors, policies).
+Targets `/rest/requisitions/{name}` and `/rest/foreignSources/{name}`, and triggers the import with `PUT /rest/requisitions/{name}/import`.
+`requisition convert` brings existing `provision.pl` XML in, `apply` ships edits out, and `requisition import` / `status` cover the lifecycle.
 
 ## YAML
 
-The composite `kind: Requisition` document carries both the requisition (nodes, interfaces, services, categories, assets) and its optional `spec.foreignSource` (scan interval, detectors, policies).
+Unknown keys fail the parse at every level.
 
-A node may declare a `location` (its monitoring / Minion location); omit it for the Default location.
+| Field | Type | Default | Description |
+|---|---|---|---|
+| **`apiVersion`** | string | required | `provisioning.opennms.org/v1` |
+| **`kind`** | string | required | `Requisition` |
+| **`metadata.name`** | string | required | Foreign-source name. Used in both REST paths. Must not be empty. |
+| **`metadata.x-onmsctl-unmodeled`** | map | none | Written by `convert`. Stripped before apply. See [Unmodeled XML is recorded, not applied](#unmodeled-xml-is-recorded-not-applied). |
+| **`spec.foreignSource`** | object | none | Scan interval, detectors and policies. Omit it to inherit Horizon's default foreign source. |
+| **`spec.nodes`** | list of nodes | required | May be `[]`. Order does not matter; nodes are matched by `foreignId`. No two nodes may share a `foreignId`. |
 
-```yaml
-apiVersion: provisioning.opennms.org/v1
-kind: Requisition
-metadata:
-  name: acme-prod
-spec:
-  # Omit this whole block for "portable" YAML that inherits Horizon's
-  # default foreign-source.
-  foreignSource:
-    scanInterval: 1d
-    detectors:
-      - name: ICMP
-        class: org.opennms.netmgt.provision.detector.icmp.IcmpDetector
-  nodes:
-    - foreignId: bbone-sw01
-      label: bbone-sw01
-      location: labmonkeys-hq          # monitoring (Minion) location
-      interfaces:
-        - ip: 192.168.8.8
-          snmpPrimary: P
-          services: [ICMP, SNMP]
-      categories: [Production, Network]
-```
+Fields of a node:
 
-**Pinned vs portable `foreignSource`.** Include `spec.foreignSource` (detectors + policies) and the YAML owns both the requisition and its foreign source.
-Omit it and the requisition inherits Horizon's default foreign source; if a custom foreign source already existed for that name, `apply` deletes it (`--diff` enumerates the displaced detectors/policies).
+| Field | Type | Default | Description |
+|---|---|---|---|
+| **`foreignId`** | string | required | Stable identifier in the source of truth, such as a CMDB id or hostname. Must not be empty. |
+| **`label`** | string | required | Display name. Becomes Horizon's node label. Must not be empty. |
+| **`location`** | string | Default location | Monitoring (Minion) location that polls the node. An empty string is the same as omitting it. |
+| **`interfaces`** | list of interfaces | `[]` | Order does not matter; interfaces are matched by `ip`. No two interfaces on one node may share an `ip`. |
+| **`categories`** | list of strings | `[]` | A set: order does not matter and duplicates collapse. |
+| **`assets`** | map of string to string | `{}` | Free-form asset record, such as `building: HQ`. |
+
+Fields of an interface:
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| **`ip`** | string | required | Interface address. Must not be empty. |
+| **`snmpPrimary`** | string | none | `P` (primary SNMP interface for data collection), `S` (secondary) or `N` (not eligible for SNMP). Any other value fails the parse. |
+| **`services`** | list of strings | `[]` | Service names known to provisiond, such as `ICMP`, `SNMP`, `HTTP`. A set: order does not matter and duplicates collapse. |
+
+Fields of `spec.foreignSource`:
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| **`scanInterval`** | string | none | Humanized interval such as `1d` or `30m`. |
+| **`detectors`** | list of detectors | `[]` | Ordered. provisiond runs them top-down, so reordering is a change. |
+| **`policies`** | list of policies | `[]` | Ordered. Evaluated in list order, so reordering is a change. |
+
+An empty `foreignSource: {}` is valid.
+It still pins a custom foreign source for the requisition.
+
+Fields of a detector or policy:
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| **`name`** | string | required | Entry name. Must not be empty. |
+| **`class`** | string | required on policies | Java class. Optional on detectors so `convert` can keep a name-only entry from sparse XML. Must not be empty on a policy. |
+| **`parameters`** | list | `[]` | `{key, value}` string pairs. Order does not matter. Both fields are required. |
+
+### Pinned vs portable foreignSource
+
+Include `spec.foreignSource` (detectors and policies) and the YAML owns both the requisition and its foreign source.
+Omit it and the requisition inherits Horizon's default foreign source.
 The example below shows the pinned style with every modeled field.
 
-**Unmodeled XML is recorded, not applied.** `convert` keeps XML that the YAML model doesn't represent under `metadata.x-onmsctl-unmodeled`, for review in the local YAML only.
-`apply` strips the annotation before the diff and the wire body, so those fields never reach Horizon, and a requisition that replaces one carrying them drops them from the server.
+:::warning
+Omitting `spec.foreignSource` deletes an existing custom foreign source of the same name.
+`apply` sends `DELETE /rest/foreignSources/{name}` and the requisition falls back to Horizon's default.
+The custom detectors and policies are gone from the server.
+Run `onmsctl requisition export <name>` first to keep a copy.
+:::
+
+### Unmodeled XML is recorded, not applied
+
+`convert` keeps XML that the YAML model doesn't represent under `metadata.x-onmsctl-unmodeled`, for review in the local YAML only.
+`apply` strips the annotation before the diff and the wire body, so those fields never reach Horizon.
+A requisition that replaces one carrying them drops them from the server.
 
 ## Apply
 
 ```sh
-onmsctl apply -f acme-prod.yaml --dry-run --diff   # preview the per-node diff
-onmsctl apply -f acme-prod.yaml                     # POST + auto-import
+onmsctl apply -f acme-prod.yaml --dry-run   # preview the action per document
+onmsctl apply -f acme-prod.yaml             # write + auto-import
 ```
 
-The apply path computes a three-level diff (canonical-bytes / per-node / per-leaf), auto-decides `rescanExisting` from the scan-relevance of what changed, writes the foreign source and requisition, and triggers the import.
-`apply` picks `rescanExisting` automatically from the diff: changes that affect what provisiond discovers (services, SNMP primary, detectors, location) trigger a rescan; pure metadata (labels, categories, assets) does not.
-Import completion is asynchronous: block with `import --wait` (exit `10` on `--timeout`, default `30m`), or watch `last-import` change in `requisition status <fs>`.
+Apply reads the deployed requisition and foreign source, then compares them with the document.
+When nothing differs, it sends no write and triggers no import.
+Otherwise it writes the foreign source (create, update or delete), posts the requisition, and triggers the import.
+
+`apply` picks `rescanExisting` automatically from what changed:
+
+- A rescan runs for changes that affect what provisiond discovers: a node added or removed, interfaces, services, SNMP primary, location, detectors and policies.
+- No rescan runs for pure metadata: labels, categories, assets and `scanInterval`. A new `scanInterval` takes effect at the next scheduled scan.
+- A change the classifier does not recognize triggers a rescan.
+
+Import completion is asynchronous.
+Block with `requisition import --wait` (exit `10` on `--timeout`, default `30m`), or watch `last-import` change in `requisition status <fs>`.
 `status` does not report whether an import succeeded.
+
+Two documents with the same `metadata.name` abort the plan before any write.
+A `foreignId` that appears in more than one requisition is a warning, not an error.
+
+**Order:** `Requisition` applies after `SnmpConfig` and before `Maintenance`, so a maintenance window in the same apply can refer to nodes this apply imports.
+The import is asynchronous, so such a reference may still need a follow-up apply.
 
 ## Inspect and delete
 
 ```sh
 onmsctl requisition list
-onmsctl requisition status acme-prod                # deployed state
-onmsctl requisition import acme-prod                # re-import without re-POST
+onmsctl requisition status acme-prod                     # deployed state
+onmsctl requisition import acme-prod                     # re-import without re-POST
 onmsctl requisition import acme-prod --rescan-existing   # re-evaluate existing nodes
 onmsctl requisition import acme-prod --wait --timeout 5m # block on the async import
-onmsctl requisition delete acme-prod --yes          # purge pending + deployed
+onmsctl requisition delete acme-prod --yes               # purge pending + deployed
 ```
 
 Lifecycle and read verbs: `requisition list|status|import|export|delete`, `node|interface list|get`, `service|category list`, and `asset list|get`.
 `requisition asset set` is a write: it changes an imported node's asset field immediately.
 `requisition delete <fs>` purges both pending and deployed snapshots.
-In a terminal it asks for confirmation; in a non-interactive run it refuses unless you pass `--yes` (`-y`).
+In a terminal it asks for confirmation.
+In a non-interactive run it refuses unless you pass `--yes` (`-y`).
 
 Read-only inspection:
 
@@ -83,22 +133,74 @@ onmsctl requisition service list acme-prod <foreign-id> <ip>
 onmsctl requisition category list acme-prod <foreign-id>
 ```
 
-## Convert
-
-```sh
-# Migrate provision.pl-shape XML (requisitions + matching foreign-sources)
-onmsctl requisition convert --from ./reqs/ --foreign-sources-dir ./fs/ --out ./yaml/
-```
+## Export
 
 Export what's already deployed, the reverse of apply:
 
 ```sh
 onmsctl requisition export acme-prod > acme-prod.yaml      # one, to stdout
-onmsctl requisition export --out ./yaml/                   # all, per-file
+onmsctl requisition export --out ./yaml/                   # all, one <fs>.yaml each
 onmsctl requisition export acme-prod --include-defaults    # inline the default FS
 ```
 
+Without `--include-defaults`, a requisition with no custom foreign source exports in portable style, without `spec.foreignSource`.
+With it, the export inlines Horizon's default foreign source and adds a snapshot-timestamp comment.
+
+## Convert
+
+Migrate `provision.pl`-shape XML, requisitions plus their matching foreign sources:
+
+```sh
+onmsctl requisition convert --from ./reqs/ --foreign-sources-dir ./fs/ --out ./yaml/
+```
+
+- `--from` reads every `*.xml` in the directory as a requisition.
+- `--foreign-sources-dir` pairs each requisition with the foreign-source XML of the same basename.
+- `--out` writes one `<foreign-source>.yaml` per requisition. Without it, convert writes one `---`-separated stream to stdout.
+
+Convert is a local transform. It issues no HTTP and needs no context, so it runs under `--read-only`.
+
 The `provision.pl` migration is covered in the [migration guide](../guides/migration.md#provisionpl-verb--onmsctl).
+
+## Convert findings
+
+Findings go to stderr as `<code> <severity> [<file>]: <message>`.
+
+| Code | Severity | Meaning |
+|---|---|---|
+| `PR001` | warning | The XML carries an element or attribute the model does not represent. It is kept under `metadata.x-onmsctl-unmodeled`. |
+| `PR002` | warning | A foreign-source XML file matches no requisition. Rename it to match its requisition, or remove it. |
+| `PR003` | warning | A policy parameter type does not match the policy class. Defined in the catalog. The migrator does not emit it today. |
+| `PR004` | info | A requisition has no matching foreign-source XML. The YAML omits `spec.foreignSource` and inherits Horizon's default on apply. |
+| `PR005` | warning | An interface `snmp-primary` value is not `P`, `S` or `N`. The attribute is dropped from the YAML. |
+
+Print the rationale for one code, without converting:
+
+```sh
+onmsctl requisition convert --explain PR001
+```
+
+Exit codes:
+
+- `0`: no findings, or info only.
+- `1`: warnings present. The YAML is still written.
+- `2`: an error-severity finding withheld the YAML, or a usage error such as a missing `--from`. No current code has error severity.
+
+## Errors
+
+| Message | Probable cause | Recovery |
+|---|---|---|
+| ``invalid `kind: Requisition` document`` | The document failed the strict parse. The rest of the message names the field. | Fix the named field. |
+| `unsupported apiVersion` | `apiVersion` is not `provisioning.opennms.org/v1`. | Set `apiVersion: provisioning.opennms.org/v1`. |
+| `unknown field` | A key the model does not define, often a typo or an unmodeled XML attribute. | Remove or rename the key. |
+| `must be a non-empty string` | `metadata.name`, `foreignId`, `label`, `ip`, a detector or policy `name`, or a policy `class` is `""`. | Give the field a value. |
+| `unknown variant` | `snmpPrimary` is not `P`, `S` or `N`. | Use one of the three letters. |
+| `duplicate foreignId` | Two nodes in one document share a `foreignId`. | Give each node its own `foreignId`. |
+| `duplicate interface ip` | Two interfaces on one node share an `ip`. | Merge the interfaces. |
+| `metadata.name '<name>' declared in` | Two documents in one apply target the same requisition. The plan aborts before any write. | Keep one document per requisition. |
+| `requires --yes in non-interactive` | `requisition delete` ran without a terminal. | Re-run with `--yes`. |
+| `missing --from <xml-dir>` | `requisition convert` ran without an input directory. | Pass `--from`, or use `--explain <code>`. |
+| `unknown finding code` | `--explain` got a code outside `PR001` to `PR005`. | Use a code from the findings table. |
 
 ## Example
 

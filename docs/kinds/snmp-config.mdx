@@ -6,47 +6,212 @@ description: Manage Horizon's SNMP agent and trap-daemon configuration declarati
 import CodeBlock from '@theme/CodeBlock';
 import example from '!!raw-loader!../../examples/snmp-config.yaml';
 
-Manage Horizon's SNMP configuration (`snmp-config.xml`: `defaults` + `profiles` + `definitions`) declaratively, and read it back with `snmp export` / `snmp lookup`.
-Targets `/api/v2/snmp-config`.
+Declare Horizon's whole SNMP configuration in one document: `defaults`, `profiles` and `definitions` from `snmp-config.xml`, plus the optional trap daemon.
+Targets `/api/v2/snmp-config`, and `/api/v2/trapd/config` when `spec.trapd` is present.
+The snmp-config half works on any supported Horizon.
+The `spec.trapd` block needs a Horizon build with the Trapd REST API (NMS-19128, the `37.x`/`develop` line).
 
 ## YAML
 
 `SnmpConfig` is a singleton: `metadata.name` is fixed to `default`.
 
-**Secrets are write-only.** Communities and v3 passphrases are rejected inline; reference an external secret (the same shape as IAM's `passwordRef`).
-They're excluded from the idempotency comparison, so a plain apply reports a secret-only change as in sync and uploads nothing.
-To push a rotated secret, apply with **`--force`**: an in-sync config is re-sent with its resolved secrets.
-Without `--force`, the new secrets go out with the next apply that also changes a non-secret field.
-`snmp export` emits placeholders, never cleartext.
+| Field | Type | Default | Description |
+|---|---|---|---|
+| **`apiVersion`** | string | required | `snmp.opennms.org/v1` |
+| **`kind`** | string | required | `SnmpConfig` |
+| **`metadata.name`** | string | required | `default` |
+| **`spec.defaults`** | SNMP parameters | none | Fallback parameters for any agent no definition matches. |
+| **`spec.profiles`** | list | `[]` | Named parameter templates. A definition adopts one by label. |
+| **`spec.definitions`** | list | `[]` | Per-target overrides. |
+| **`spec.trapd`** | object | none | Trap-daemon configuration. Omit it and apply never touches the trap endpoint. |
 
-:::note Trap daemon requires a Horizon build with the Trapd REST API
-The trap daemon is configured via optional `spec.trapd`, reconciled against `/api/v2/trapd/config` in the same apply.
-It is additive: omit it and the trap daemon is untouched.
-This requires a Horizon build with the Trapd REST API (NMS-19128, the `37.x`/`develop` line); against older servers the `trapd` half fails with a clear version message while the snmp-config half still applies.
+Unknown keys at the top level, in `metadata` and in `spec` fail the parse.
+Unknown keys inside `defaults`, a profile or a definition are ignored, not rejected.
+
+SNMP parameters, shared by `defaults`, each profile and each definition.
+Every field is optional. An omitted field inherits the server default, or on a profile or definition the `defaults` tier (Horizon behaviour).
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| **`version`** | string | none | `v1`, `v2c` or `v3`. |
+| **`port`** | integer | none | Agent UDP port. |
+| **`timeout`** | integer | none | Request timeout. |
+| **`retries`** | integer | none | Retry count. |
+| **`ttl`** | integer | none | Time to live. |
+| **`proxyHost`** | string | none | Proxy host. |
+| **`readCommunity`** | secret reference | none | v1/v2c read community. |
+| **`writeCommunity`** | secret reference | none | v1/v2c write community. |
+| **`maxRepetitions`** | integer | none | GETBULK max repetitions. |
+| **`maxVarsPerPdu`** | integer | none | Maximum variables per PDU. |
+| **`maxRequestSize`** | integer | none | Maximum request size. |
+| **`securityName`** | string | none | v3 user name. |
+| **`securityLevel`** | string | none | `noAuthNoPriv`, `authNoPriv` or `authPriv`. |
+| **`authProtocol`** | string | none | v3 authentication protocol, such as `SHA`. |
+| **`authPassphrase`** | secret reference | none | v3 authentication passphrase. |
+| **`privacyProtocol`** | string | none | v3 privacy protocol, such as `AES`. |
+| **`privacyPassphrase`** | secret reference | none | v3 privacy passphrase. |
+| **`contextName`** | string | none | v3 context name. |
+| **`engineId`** | string | none | v3 engine ID. |
+| **`contextEngineId`** | string | none | v3 context engine ID. |
+| **`enterpriseId`** | string | none | Enterprise ID. |
+
+Extra fields of a `spec.profiles` entry:
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| **`label`** | string | required | Profile name. Definitions reference it through `profileLabel`. |
+| **`filterExpression`** | string | none | OpenNMS filter expression, evaluated on the server. |
+
+Extra fields of a `spec.definitions` entry:
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| **`specifics`** | list of IPs | `[]` | Exact IPv4 or IPv6 addresses. |
+| **`ranges`** | list of `{begin, end}` | `[]` | Inclusive IP ranges. Both ends are required and must be IP addresses. |
+| **`ipMatches`** | list of strings | `[]` | IPLIKE patterns, such as `10.12.*.*`. |
+| **`location`** | string | none | Monitoring location the definition applies to. |
+| **`profileLabel`** | string | none | Adopt a profile. Must name a declared `spec.profiles[].label`. |
+
+A definition needs at least one selector: `specifics`, `ranges` or `ipMatches`.
+`ipMatches` cannot be combined with `specifics` or `ranges` in the same definition.
+
+Fields of `spec.trapd`:
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| **`snmpTrapPort`** | integer | required | UDP listen port, 1 to 65535. |
+| **`newSuspectOnTrap`** | boolean | required | Create a suspect node for a trap from an unknown source. |
+| **`snmpTrapAddress`** | string | server default | Listen address. `*` binds all interfaces. |
+| **`includeRawMessage`** | boolean | server default | Keep the raw trap PDU on the event. |
+| **`useAddressFromVarbind`** | boolean | server default | Take the source address from the trap varbinds when present. |
+| **`threads`** | integer | server default | Trap-processing threads. |
+| **`queueSize`** | integer | server default | Processing queue size. |
+| **`batchSize`** | integer | server default | Maximum traps per batch. |
+| **`batchInterval`** | integer | server default | Maximum milliseconds to hold a partial batch. |
+| **`snmpv3Users`** | list | `[]` | SNMPv3 users the trap daemon accepts. The full set. |
+
+The server rejects a trap-daemon update without `snmpTrapPort` or `newSuspectOnTrap`, so a bare `trapd: {}` fails validation.
+
+Fields of a `spec.trapd.snmpv3Users` entry:
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| **`securityName`** | string | required | v3 user name. Must not be empty. Unique within the list. |
+| **`securityLevel`** | string | none | `noAuthNoPriv`, `authNoPriv` or `authPriv`. |
+| **`engineId`** | string | none | Engine ID. |
+| **`authProtocol`** | string | none | Authentication protocol. |
+| **`authPassphrase`** | secret reference | none | Authentication passphrase. |
+| **`privacyProtocol`** | string | none | Privacy protocol. |
+| **`privacyPassphrase`** | secret reference | none | Privacy passphrase. |
+
+:::warning `snmpv3Users` replaces the whole list
+Apply sends the declared users as the complete set.
+A user on the server that the list omits is removed.
+Omitting `snmpv3Users` from a present `trapd` block removes every trap user.
+Run `snmp export` first and carry the existing users over.
 :::
 
-## Apply
+**Secrets are write-only.** A community or passphrase names exactly one source, the same shape as the [`User`](user.mdx) kind's `passwordRef`:
 
-Apply reconciles by whole-config replace: pull the deployed config, compare ignoring secret values, and re-upload only when it differs.
+- `{ fromFile: /run/secrets/snmp-ro }` reads the file, minus one trailing newline.
+- `{ fromEnv: ONMS_SNMP_RO }` reads the environment variable.
+- `{ fromKeyring: { service: onmsctl, account: snmp-auth } }` reads the OS keyring entry.
+
+An inline literal such as `readCommunity: public` fails the parse.
+A reference with two sources fails the parse.
+An empty resolved value fails the apply.
+
+## Apply
 
 ```sh
 onmsctl apply -f examples/snmp-config.yaml --dry-run --diff
 onmsctl apply -f examples/snmp-config.yaml
-onmsctl apply -f examples/snmp-config.yaml --force   # push a secret-only rotation
+onmsctl apply -f examples/snmp-config.yaml --force
 ```
 
-**Order:** `SnmpConfig` applies before `Requisition`, so a co-located directory configures SNMP before importing nodes.
-An SNMP change does not auto-rescan already-imported nodes; follow with `requisition import <fs> --rescan-existing`.
+- Apply reads the deployed config, compares it with the document, and re-uploads the whole config only when it differs.
+- A field the document omits is not compared. The server fills its default after a replace, so a minimal document stays in sync.
+- Removing a field from the document to fall back to the server default is not detected as a change.
+- Definitions and profiles compare as sets. Reordering them, or the selectors inside a definition, is no change.
+- Adding or removing a definition or profile is a change.
+- The upload replaces the whole snmp-config. A definition or profile the document omits is removed from the server.
+- Omitting `spec.trapd` leaves the trap daemon untouched.
+- The snmp-config half uploads first, then the trap-daemon half. There is no transaction across the two, so a trap-daemon failure leaves the snmp-config change in place.
 
-## Inspect the config
+**Secrets and `--force`.** Secrets are never compared, so a plain apply reports a secret-only change as in sync and uploads nothing.
+Pass `--force` to push a rotated secret: each in-sync half is re-sent with its resolved secrets.
+Without `--force`, new secrets go out with the next apply that also changes a non-secret field.
+Secrets resolve on the real apply only, so `--dry-run` does not detect a missing variable, file or keyring entry.
+
+**Plan gates:** apply refuses more than one `SnmpConfig` document, and validates the document before any request.
+The Trapd version check fires only on the write: an older server returns 404 or 405 to the trap-daemon update.
+`--dry-run` does not detect it, because the plan reads a missing endpoint as an empty trap-daemon config.
+
+**Order:** `SnmpConfig` applies after `ThreshdPackage` and before `Requisition`, so a co-located directory configures SNMP before importing nodes.
+An SNMP change does not rescan nodes already imported (Horizon behaviour).
+Follow with `onmsctl requisition import <fs> --rescan-existing`.
+
+## Diff
+
+`--diff` prints to stderr a secret-free summary per half that changes.
+A whole-config replace has no per-field patch, so the snmp-config half reports each tier and the definition and profile counts.
+
+```text
+snmp-config: whole-config replace via upload
+  defaults:    unchanged
+  definitions: changed (1 deployed -> 2 desired)
+  profiles:    changed (0 deployed -> 1 desired)
+
+trapd: trap-daemon config update
+  port:     162 -> 1162
+  v3 users: 2 deployed -> 1 desired
+```
+
+The port shows `-` when the server has no trap-daemon config yet.
+A half that is in sync prints nothing, unless `--force` re-sends it:
+
+```text
+SnmpConfig/default: snmp-config unchanged apart from secrets; re-sent with its secrets (--force)
+```
+
+## Inspect
 
 ```sh
-onmsctl snmp export -O snmp-config.yaml          # deployed config → YAML (secrets as refs)
+onmsctl snmp export -O snmp-config.yaml
 onmsctl snmp lookup 192.168.8.8
-onmsctl snmp lookup 192.168.8.8 --location labmonkeys-hq --show-secrets
+onmsctl snmp lookup 192.168.8.8 10.0.0.5 --location labmonkeys-hq --show-secrets
 ```
 
-Community strings and v3 passphrases are write-only: masked on `lookup` unless you pass `--show-secrets`, placeholders on `export`.
+- `export` writes the deployed config as a `kind: SnmpConfig` document, to stdout or to the file named by `-O` (`--output-file`).
+- `export` includes `spec.trapd` when the server exposes the trap-daemon config. A 404 leaves it out.
+- `export` writes each secret as a `fromEnv` placeholder, never cleartext. Each tier gets its own variable, such as `SNMP_READ_COMMUNITY_DEFAULTS` or `SNMP_AUTH_PASSPHRASE_PROFILE_CORE_V3`. Set them, or replace the references, before you apply the export.
+- `lookup` prints the effective parameters Horizon uses for each IP.
+- Without `--location`, `lookup` reports every location whose definition selector matches the IP, and falls back to `Default` when none match. A location matched only by a profile `filterExpression` needs `--location`.
+- `lookup` masks communities and passphrases unless you pass `--show-secrets`.
+
+There is no delete verb.
+
+## Errors
+
+| Message | Probable cause | Recovery |
+|---|---|---|
+| `kind: SnmpConfig is a singleton` | More than one `SnmpConfig` document in the apply. | Keep one document. |
+| `metadata.name must be "default"` | Any other name. | Set `metadata.name: default`. |
+| `data did not match any variant of untagged enum SecretRef` | An inline secret, or a reference with zero or two sources. | Use exactly one of `fromFile`, `fromEnv` or `fromKeyring`. |
+| `has no selector; declare at least one of` | A definition without `specifics`, `ranges` or `ipMatches`. | Add a selector. |
+| `` `ipMatches` cannot be combined with `specifics` or `ranges` `` | One definition mixes IPLIKE patterns with addresses or ranges. | Split it into two definitions. |
+| `invalid specific IP` | A `specifics` entry is not an IP address. | Fix the address, or move a pattern to `ipMatches`. |
+| `invalid range begin` / `invalid range end` | A range end is not an IP address. | Fix the address. |
+| `names no declared spec.profiles[].label` | `profileLabel` references an absent profile. | Fix the label, or declare the profile. |
+| `spec.trapd.snmpTrapPort is required` | A `trapd` block without `snmpTrapPort`, such as `trapd: {}`. | Set `snmpTrapPort`, or remove `trapd`. |
+| `spec.trapd.newSuspectOnTrap is required` | A `trapd` block without `newSuspectOnTrap`. | Set `newSuspectOnTrap`. |
+| `spec.trapd.snmpTrapPort must be between 1 and 65535` | Port out of range. | Use a valid UDP port. |
+| `securityName must not be empty` | A trap user with an empty `securityName`. | Name the user. |
+| `duplicate securityName` | Two trap users share a name. | Keep one entry per user. |
+| `secret fromEnv: environment variable "<NAME>" is not set` | The variable is missing on the real apply. | Export the variable, then re-run. |
+| `resolved SNMP secret is empty; refusing to send an empty credential` | The file, variable or keyring entry is empty. | Store the secret, then re-run. |
+| `does not expose the Trapd config REST API` | The server predates NMS-19128. The snmp-config half still applied. | Remove `spec.trapd`, or upgrade the server. |
+| `snmp-config upload rejected by the server` | The server accepted the upload request but rejected its content. | Read the reported detail, fix the document, and re-apply. |
 
 ## Example
 
