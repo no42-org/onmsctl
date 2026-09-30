@@ -17,42 +17,10 @@ It is a single statically linked binary that bundles eight capabilities: **event
 
 ## Core concepts
 
-**Declarative `apply -f` is the one mutation entrypoint.**
-It peeks each YAML document's `kind` and routes it to the right handler.
-There is no per-capability apply verb.
-The recognized kinds:
-
-| `kind` | `apiVersion` | Reconciles |
-|---|---|---|
-| `EventSource` | `eventconf.opennms.org/v1` | event configuration sources |
-| `EventSourceOrder` | `eventconf.opennms.org/v1` | event-source evaluation order (singleton) |
-| `ThresholdGroup` | `thresholding.opennms.org/v1` | threshold groups (thresholds and expressions) |
-| `ThreshdPackage` | `thresholding.opennms.org/v1` | threshd packages (what is thresholded, with which group) |
-| `Requisition` | `provisioning.opennms.org/v1` | provisioning requisitions |
-| `User` | `onmsctl.no42.org/v1alpha1` | Horizon users + roles |
-| `SnmpConfig` | `snmp.opennms.org/v1` | SNMP agent + trap config (singleton) |
-| `Maintenance` | `maintenance.opennms.org/v1` | scheduled-outage maintenance windows |
-| `DataCollectionSource` | `datacollection.opennms.org/v1` | SNMP data-collection sources |
-| `BusinessService` | `bsm.opennms.org/v1` | Business Service Monitoring (BSM) |
-
-A single file may hold many `---`-separated documents, and a directory may mix any of these kinds.
-
-**Plan → gate → execute.**
-Every document is planned first.
-If *any* document fails to plan (unknown `kind`, duplicate `metadata.name`, parse error), the whole apply aborts **before** any mutation.
-Then documents execute in a fixed kind-precedence order, stopping at the first failure unless you pass `--continue-on-error`.
-
-**`--dry-run` is always safe.**
-It plans and prints but issues no mutating HTTP, so it is allowed even in a read-only context.
-Pair it with `--diff` to see exactly what would change.
-
-**Idempotent.**
-Re-running the same input is the recovery path: an unchanged document reconciles to "no change" and skips the write.
-
-**Read-only contexts.**
-A context can set `read-only: true`, or you can pass `--read-only` (or set `ONMSCTL_READ_ONLY`).
-Any write verb is then refused locally before any HTTP call (exit code `12`).
-This is defense in depth on top of the server's own role checks.
+- **`apply -f` is the one mutation entrypoint.** It reads each YAML document's `kind` and routes it to that kind's handler; one file or directory may mix kinds. The [kind table](../concepts/declarative-apply.md) lists every kind and links its page.
+- **Plan, gate, execute.** Every document is planned first, and any planning failure aborts the whole apply before a write. See [Declarative apply](../concepts/declarative-apply.md).
+- **`--dry-run --diff` is always safe.** It shows what would change and issues no mutating request.
+- **Read-only contexts** refuse every write locally with exit `12`. See [Read-only contexts](../concepts/read-only-contexts.md).
 
 ## Five-minute tour
 

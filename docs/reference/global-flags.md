@@ -20,12 +20,31 @@ These work on every command:
 | | `ONMS_PASSWORD` | Password for a basic-auth context; overrides the context's declared source |
 | | `ONMS_TOKEN` | Token for a bearer context; overrides the context's declared source |
 
-`apply` adds `-f`/`--filename`, `--dry-run`, `--diff`, `--continue-on-error` (alias `--keep-going`), `-R`/`--recursive`, and `--force` (honoured by `SnmpConfig` only).
+For `--context`, `--url`, `--user` and `--read-only`, a flag beats its environment variable, which beats the active context.
+`-o`, `-v` and `--insecure-tls` have no environment variable.
 
-Override precedence, highest wins:
+## Apply flags
 
-```
-flags  >  environment  >  active context  >  built-in default
-```
+| Flag | Behavior |
+|---|---|
+| `-f`, `--filename <FILE\|DIR\|GLOB>` | Required. Input file, directory or quoted glob; directories and globs read `.yaml`/`.yml` files. |
+| `--dry-run` | Plan only; zero mutating HTTP. Classifies as a Read, so read-only contexts may run it. It still reads from the server. |
+| `--diff` | Render each kind-bucket's diff to stderr (stdout stays clean for `-o json/yaml`). |
+| `--continue-on-error` (alias `--keep-going`) | Keep applying after a failing document. Default is stop-on-error. |
+| `-R`, `--recursive` | Recurse into subdirectories (off by default). |
+| `--force` | Re-send a document that plans as unchanged. Only `SnmpConfig` honours it, to push a secret-only rotation. |
 
-Top-level verbs have short aliases; see [Verb aliases](../concepts/read-only-contexts.md#verb-aliases).
+## Verb aliases
+
+| Command | Alias |
+|---|---|
+| `event-source` | `evtsrc` |
+| `event` | `evt` |
+| `requisition` | `req` |
+| `maintenance` | `maint` |
+| `datacollection` | `dc` |
+| `business-service` | `bs` |
+| `threshold` | `thr` |
+| `config` | `cfg` |
+
+Both forms appear in `--help`.

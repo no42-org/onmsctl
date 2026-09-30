@@ -7,8 +7,8 @@ description: "Diagnose common onmsctl problems: wrong binary, auth failures, TLS
   Check `which onmsctl`; a release binary in `/usr/local/bin` may shadow a `cargo install` one in `~/.cargo/bin` (or vice versa).
 - **Auth failures.**
   Confirm with `onmsctl iam whoami`.
-  A set `$ONMS_PASSWORD` (basic auth) or `$ONMS_TOKEN` (bearer) overrides the context's declared secret.
-  A stale env var can silently override the config.
+  A set `$ONMS_PASSWORD` (basic auth) or `$ONMS_TOKEN` (bearer) overrides the context's declared secret, so a stale env var can silently win.
+  See [Credentials](../getting-started/configure-context.md#credentials).
 - **Wrong server.**
   `--url`/`$ONMS_URL` override the active context.
   Run `onmsctl config view` to see what's actually loaded.

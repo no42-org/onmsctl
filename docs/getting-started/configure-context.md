@@ -74,6 +74,7 @@ At request time a set `ONMS_PASSWORD` (basic) or `ONMS_TOKEN` (bearer) overrides
 onmsctl iam whoami                   # confirms URL + credentials work
 ```
 
-## Override precedence
+## Override context values
 
-`flags (--url, --user, --context) > env (ONMS_URL, ONMS_USER, ONMSCTL_CONTEXT) > active context > built-in default`.
+`--url`, `--user` and `--context` (or `ONMS_URL`, `ONMS_USER`, `ONMSCTL_CONTEXT`) override the active context for one command.
+The full list and their precedence are under [Global flags](../reference/global-flags.md).
