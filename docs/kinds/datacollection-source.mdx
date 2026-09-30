@@ -94,17 +94,37 @@ onmsctl apply -f examples/datacollection-source.yaml --dry-run --diff
 onmsctl apply -f examples/datacollection-source.yaml
 ```
 
+Expected output:
+
+```text
+$ onmsctl apply -f examples/datacollection-source.yaml --dry-run --diff
+acme-router: create source, create profile, attach [acme-collection]
++----------------------+-------------+--------+---------+-----------------------+
+| kind                 | name        | action | status  | message               |
++===============================================================================+
+| DataCollectionSource | acme-router | create | Skipped | dry-run: would create |
++----------------------+-------------+--------+---------+-----------------------+
+```
+
 Apply reconciles each source in this order:
 
-1. **Profile.** Apply creates the `profileSpec` profile if it is absent, and updates it if `rrdStep`, `rras` or `storageFlag` differ.
-2. **Source tree.** Apply uploads a new source attached to every profile in `spec.profiles`. For an existing source, it re-uploads the whole tree when it changed. The server then removes children the document no longer declares (Horizon behaviour). An unchanged tree sends no upload.
-3. **Profile membership.** `spec.profiles` is the full list. Apply attaches the source to profiles it is missing from, and detaches it from profiles no longer listed.
-4. **Enabled state.** Apply enables or disables the source to match `spec.enabled`.
+1. **Profile.**
+   Apply creates the `profileSpec` profile if it is absent, and updates it if `rrdStep`, `rras` or `storageFlag` differ.
+2. **Source tree.**
+   Apply uploads a new source attached to every profile in `spec.profiles`.
+   For an existing source, it re-uploads the whole tree when it changed.
+   The server then removes children the document no longer declares (Horizon behaviour).
+   An unchanged tree sends no upload.
+3. **Profile membership.**
+   `spec.profiles` is the full list.
+   Apply attaches the source to profiles it is missing from, and detaches it from profiles no longer listed.
+4. **Enabled state.**
+   Apply enables or disables the source to match `spec.enabled`.
 
 The tree comparison ignores the order of groups, MIB objects, resource types and system definitions.
 Strategy `params` order counts.
 
-Apply never deletes sources or profiles.
+Apply **never deletes** sources or profiles.
 Sources no document declares are left alone.
 A detached profile stays on the server.
 A `profileSpec` profile not listed in `spec.profiles` is reconciled, but the source is not attached to it.
@@ -143,11 +163,36 @@ onmsctl datacollection export acme-router --format json
 onmsctl datacollection delete acme-router
 ```
 
+Expected output:
+
+```text
+$ onmsctl datacollection list
++----+---------------------------------------+
+| ID | NAME                                  |
++============================================+
+| 1  | 3Com                                  |
+|----+---------------------------------------|
+| 2  | Acme Packet                           |
+|----+---------------------------------------|
+...
+$ onmsctl datacollection list --profiles
++---------+----------+---------+---------+
+| NAME    | RRD STEP | STORAGE | SOURCES |
++========================================+
+| default | 300      | select  | 77      |
+|---------+----------+---------+---------|
+| ejn     | 180      | select  | 1       |
++---------+----------+---------+---------+
+```
+
 - `dc` is an alias for `datacollection`.
-- `list` shows each source's id and name. `--profiles` lists the collection profiles instead, with their RRD step, storage flag and source count.
+- `list` shows each source's id and name.
+  `--profiles` lists the collection profiles instead, with their RRD step, storage flag and source count.
 - `export` prints one source's `datacollection-group` document as `xml` (the default) or `json`.
-- `delete` removes the source with its MIB groups, resource types and system definitions. Profiles stay in place.
-- `list`, `export` and `delete` run the same endpoint check as apply. `list --profiles` does not.
+- `delete` removes the source with its MIB groups, resource types and system definitions.
+  Profiles stay in place.
+- `list`, `export` and `delete` run the same endpoint check as apply.
+  `list --profiles` does not.
 
 ## Errors
 

@@ -67,8 +67,11 @@ The [JSON Schema](../reference/editor-integration.md) lists every field, and [Ex
 ## Apply
 
 ```sh
-onmsctl apply -f cisco.foo.yaml --diff   # push (diff to stderr)
+onmsctl apply -f cisco.foo.yaml --dry-run   # preview
+onmsctl apply -f cisco.foo.yaml             # push
 ```
+
+**`--diff`** prints nothing extra for `EventSource`: the handler renders no diff.
 
 `apply` is idempotent: Horizon's upsert replaces events under an existing basename.
 When the server's events and `enabled` flag already match, apply reports the source unchanged and sends no upload.
@@ -86,8 +89,22 @@ onmsctl event list --source <id>                   # events for a source
 onmsctl event-source delete <id>...                # delete sources by id
 ```
 
+Expected output:
+
+```text
+$ onmsctl event-source list
++----+-------------------------------------+---------+-----------+------------+---------+
+| id | name                                | vendor  | fileOrder | eventCount | enabled |
++=======================================================================================+
+| 23 | opennms.catch-all.events            | opennms | 1         | 4          | true    |
+|----+-------------------------------------+---------+-----------+------------+---------|
+| 22 | opennms.tl1d.events                 | opennms | 2         | 1          | true    |
+|----+-------------------------------------+---------+-----------+------------+---------|
+...
+```
+
 `download` and `export` accept a selector that is either a numeric id or an exact source name.
-A value that parses as an integer is always treated as an id, so a source with a numeric name is reachable only by its id.
+A value that parses as an integer is **always treated as an id**, so a source with a numeric name is reachable only by its id.
 
 Snapshot server sources back to git-managed YAML, the reverse of `apply`:
 
@@ -99,7 +116,7 @@ onmsctl event-source export --out ./sources/      # every source → one file ea
 
 Export routes through the `convert` migrator, so it carries the same `EC###` findings, on stderr.
 In bulk it is continue-on-error: warnings are written, blocking and download-failed sources are reported and counted, and the exit code reflects the highest severity seen.
-`--out` validates every target filename before writing anything: it is all-or-nothing.
+`--out` validates every target filename before writing anything: it is **all-or-nothing**.
 
 Read/raw verbs stay imperative: `event-source list|get|names|names-and-ids|delete`, `event list` (including cross-source `--uei`/`--vendor`), and the raw-XML `event-source upload|download` round trip.
 Use the raw-XML round trip for full fidelity when a source carries fields the YAML model doesn't represent yet.
@@ -150,7 +167,8 @@ Expected output (stderr):
 ─────────────────────────────────────────────────────────────────────
 ```
 
-Finding codes (`EC001`-`EC008`) are stable across releases; `--explain <code>` prints the full rationale for any of them.
+Finding codes (`EC001`-`EC008`) are stable across releases.
+`--explain <code>` prints the full rationale for any of them.
 
 | Code | Severity | Meaning |
 |------|----------|---------|
@@ -197,9 +215,11 @@ For full fidelity today, keep the XML alongside the YAML and use `event-source u
 | `resolution` | `2` |
 | `unresolvable` | `3` |
 
-Symbolic input is case-insensitive on parse; canonical YAML output is always lowercase.
+Symbolic input is case-insensitive on parse.
+Canonical YAML output is always lowercase.
 Anything else fails immediately: unknown symbolic strings (`"problem"`, the alarmd Java alias) or integers outside `{1, 2, 3}`.
-YAML inputs reject at deserialize time; eventconf XML inputs produce an `EC007` finding (error, exit 2).
+YAML inputs reject at deserialize time.
+Eventconf XML inputs produce an `EC007` finding (error, exit 2).
 
 ### `snmp`
 
@@ -218,7 +238,8 @@ String fields are rejected when empty or whitespace-only.
 ### `parameters`
 
 `spec.events[].parameters` mirrors `<parameter name value expand/>`: static per-event configuration eventd attaches to fired events.
-Each entry requires `name` and `value`; `expand` is optional and controls whether eventd substitutes `%parm[#N]%`-style placeholders at fire time.
+Each entry requires `name` and `value`.
+`expand` is optional and controls whether eventd substitutes `%parm[#N]%`-style placeholders at fire time.
 Document order is preserved.
 
 This is distinct from `parmCollection` on a fired event instance, a runtime field on the JSON wire that is not modeled here.
@@ -231,15 +252,19 @@ This is distinct from `parmCollection` on a fired event instance, a runtime fiel
 - `mechanism` is one of `snmpudp`, `snmptcp`, `xmltcp`, `xmludp`.
 
 Values outside these sets are rejected locally (otherwise Horizon returns a 400).
-An empty `forwards: [{}]` entry is rejected; at least one of `state`/`mechanism`/`target` must be set.
-A `target` that is empty or whitespace-only is rejected. Omit the field instead.
+An empty `forwards: [{}]` entry is rejected.
+At least one of `state`/`mechanism`/`target` must be set.
+A `target` that is empty or whitespace-only is rejected.
+Omit the field instead.
 
 `spec.events[].scripts` mirrors `<script language>body</script>`: embedded executable logic (typically BeanShell) that eventd runs on event arrival.
-`language` is required; `body` is optional and preserved byte-for-byte (use YAML's `|` literal block for multi-line bodies).
+`language` is required.
+`body` is optional and preserved byte-for-byte (use YAML's `|` literal block for multi-line bodies).
 
 :::caution Security note
 Shipping executable code via `onmsctl apply` lowers the friction for deploying server-side code execution on Horizon.
-The threat surface already exists at the raw eventconf-XML upload path; modeling `<script>` in YAML adds no new authority.
+The threat surface already exists at the raw eventconf-XML upload path.
+Modeling `<script>` in YAML adds no new authority.
 Ensure RBAC on eventconf write access reflects it: anyone who can upload an event source can run code on the Horizon JVM.
 :::
 
@@ -256,8 +281,10 @@ All three fields are required.
 `eventparm` and `pattern` are rejected when empty or when they carry leading or trailing whitespace.
 eventd uses the raw value as its lookup key, so padding would prevent matches.
 `replacement` may be empty: an empty replacement strips the match.
-`pattern` is Java regex; `replacement` supports `$1`/`$2` backreferences.
-The YAML is flat (`filters:` directly on the event); the `<filters>` wrapper materializes only on XML render.
+`pattern` is Java regex.
+`replacement` supports `$1`/`$2` backreferences.
+The YAML is flat (`filters:` directly on the event).
+The `<filters>` wrapper materializes only on XML render.
 
 `<mask>` versus `<filters>`: `<mask>` selects which events a source applies to (SNMP PDU shape matching on `id` / `generic` / `specific` / varbind values, each an OR-matched value list).
 `<filters>` operates after selection, rewriting parameter values on the fired event.

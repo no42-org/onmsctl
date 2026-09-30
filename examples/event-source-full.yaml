@@ -1,4 +1,4 @@
-# Comprehensive EventSource — exercises every nested type the EventSource
+# Comprehensive EventSource. It exercises every nested type the EventSource
 # model supports. Use this as a reference when authoring your own
 # EventSource documents.
 #
@@ -35,7 +35,7 @@ spec:
         # interface / snmphost / service / id (enterprise OID) / trapoid /
         # generic / specific / community. A maskelement matches when the event
         # value equals ANY listed value (OR within an element, AND across
-        # elements). `severity` is NOT a mask field — severity is assigned by
+        # elements). `severity` is NOT a mask field. Severity is assigned by
         # this definition, not matched on.
         elements:
           - name: id
@@ -60,7 +60,7 @@ spec:
       correlation:
         state: "off"
         # cmin / cmax are typed as Option<String> (event-correlation
-        # parameter strings, not raw integers) — quote to keep the
+        # parameter strings, not raw integers). Quote them to keep the
         # fixture portable across YAML and JSON loaders.
         cmin: "0"
         cmax: "0"
@@ -87,7 +87,7 @@ spec:
         # Static per-event configuration; distinct from runtime
         # parmCollection (which is per-fired-event, not eventconf XML).
         # eventd evaluates entries in document order. `expand` is
-        # optional — absent means the eventd default applies. The
+        # optional. When absent, the eventd default applies. The
         # absent vs explicit `true`/`false` distinction round-trips.
         - name: endpoint
           value: "/var/log/foo"
@@ -117,7 +117,7 @@ spec:
         # eventd regex-replacement rules on named event parameters.
         # `pattern` is Java regex; `replacement` is Matcher.replaceAll
         # syntax (use $1 / $2 for capture-group backreferences).
-        # NOT a suppression filter — these rewrite parm values at
+        # NOT a suppression filter. These rewrite parm values at
         # event-fire time.
         - eventparm: trapMsg
           pattern: '\bWARN\b'

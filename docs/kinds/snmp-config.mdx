@@ -29,7 +29,8 @@ Unknown keys at the top level, in `metadata` and in `spec` fail the parse.
 Unknown keys inside `defaults`, a profile or a definition are ignored, not rejected.
 
 SNMP parameters, shared by `defaults`, each profile and each definition.
-Every field is optional. An omitted field inherits the server default, or on a profile or definition the `defaults` tier (Horizon behaviour).
+Every field is optional.
+An omitted field inherits the server default, or on a profile or definition the `defaults` tier (Horizon behaviour).
 
 | Field | Type | Default | Description |
 |---|---|---|---|
@@ -129,16 +130,40 @@ onmsctl apply -f examples/snmp-config.yaml
 onmsctl apply -f examples/snmp-config.yaml --force
 ```
 
-- Apply reads the deployed config, compares it with the document, and re-uploads the whole config only when it differs.
-- A field the document omits is not compared. The server fills its default after a replace, so a minimal document stays in sync.
-- Removing a field from the document to fall back to the server default is not detected as a change.
-- Definitions and profiles compare as sets. Reordering them, or the selectors inside a definition, is no change.
-- Adding or removing a definition or profile is a change.
-- The upload replaces the whole snmp-config. A definition or profile the document omits is removed from the server.
-- Omitting `spec.trapd` leaves the trap daemon untouched.
-- The snmp-config half uploads first, then the trap-daemon half. There is no transaction across the two, so a trap-daemon failure leaves the snmp-config change in place.
+Expected output:
 
-**Secrets and `--force`.** Secrets are never compared, so a plain apply reports a secret-only change as in sync and uploads nothing.
+```text
+$ onmsctl apply -f examples/snmp-config.yaml --dry-run --diff
+snmp-config: whole-config replace via upload
+  defaults:    changed
+  definitions: changed (0 deployed -> 2 desired)
+  profiles:    changed (0 deployed -> 1 desired)
+
+trapd: trap-daemon config update
+  port:     1162 -> 162
+  v3 users: 0 deployed -> 1 desired
++------------+---------+--------+---------+-----------------------------------------------+
+| kind       | name    | action | status  | message                                       |
++=========================================================================================+
+| SnmpConfig | default | update | Skipped | snmp-config would replace; trapd would update |
++------------+---------+--------+---------+-----------------------------------------------+
+```
+
+- Apply reads the deployed config, compares it with the document, and re-uploads the whole config only when it differs.
+- A field the document omits is not compared.
+  The server fills its default after a replace, so a minimal document stays in sync.
+- Removing a field from the document to fall back to the server default is not detected as a change.
+- Definitions and profiles compare as sets.
+  Reordering them, or the selectors inside a definition, is no change.
+- Adding or removing a definition or profile is a change.
+- The upload **replaces the whole snmp-config**.
+  A definition or profile the document omits is removed from the server.
+- Omitting `spec.trapd` leaves the trap daemon untouched.
+- The snmp-config half uploads first, then the trap-daemon half.
+  There is no transaction across the two, so a trap-daemon failure leaves the snmp-config change in place.
+
+**Secrets and `--force`.**
+Secrets are never compared, so a plain apply reports a secret-only change as in sync and uploads nothing.
 Pass `--force` to push a rotated secret: each in-sync half is re-sent with its resolved secrets.
 Without `--force`, new secrets go out with the next apply that also changes a non-secret field.
 Secrets resolve on the real apply only, so `--dry-run` does not detect a missing variable, file or keyring entry.
@@ -182,11 +207,28 @@ onmsctl snmp lookup 192.168.8.8
 onmsctl snmp lookup 192.168.8.8 10.0.0.5 --location labmonkeys-hq --show-secrets
 ```
 
+Expected output:
+
+```text
+$ onmsctl snmp export -O snmp-config.yaml
+Exported snmp-config to snmp-config.yaml
+$ onmsctl snmp lookup 192.168.8.8
++-------------+----------+---------+------+---------+---------+------------+---------+
+| IP          | LOCATION | VERSION | PORT | TIMEOUT | RETRIES | CREDENTIAL | PROFILE |
++====================================================================================+
+| 192.168.8.8 | Default  | v2c     | 161  | 1800    | 1       | ****       | -       |
++-------------+----------+---------+------+---------+---------+------------+---------+
+```
+
 - `export` writes the deployed config as a `kind: SnmpConfig` document, to stdout or to the file named by `-O` (`--output-file`).
-- `export` includes `spec.trapd` when the server exposes the trap-daemon config. A 404 leaves it out.
-- `export` writes each secret as a `fromEnv` placeholder, never cleartext. Each tier gets its own variable, such as `SNMP_READ_COMMUNITY_DEFAULTS` or `SNMP_AUTH_PASSPHRASE_PROFILE_CORE_V3`. Set them, or replace the references, before you apply the export.
+- `export` includes `spec.trapd` when the server exposes the trap-daemon config.
+  A 404 leaves it out.
+- `export` writes each secret as a `fromEnv` placeholder, **never cleartext**.
+  Each tier gets its own variable, such as `SNMP_READ_COMMUNITY_DEFAULTS` or `SNMP_AUTH_PASSPHRASE_PROFILE_CORE_V3`.
+  Set them, or replace the references, before you apply the export.
 - `lookup` prints the effective parameters Horizon uses for each IP.
-- Without `--location`, `lookup` reports every location whose definition selector matches the IP, and falls back to `Default` when none match. A location matched only by a profile `filterExpression` needs `--location`.
+- Without `--location`, `lookup` reports every location whose definition selector matches the IP, and falls back to `Default` when none match.
+  A location matched only by a profile `filterExpression` needs `--location`.
 - `lookup` masks communities and passphrases unless you pass `--show-secrets`.
 
 There is no delete verb.

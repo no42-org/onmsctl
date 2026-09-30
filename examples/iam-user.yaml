@@ -23,7 +23,7 @@ spec:
   # form-encoded update (§D11.5). A dutySchedule change on an existing user
   # warns (PR-IAM-004) instead of mutating.
   dutySchedule: "MoTuWeThFr0800-1700"
-  # The password is NEVER stored inline — a literal `password:` key is
+  # The password is NEVER stored inline. A literal `password:` key is
   # rejected at parse time (PR-IAM-001). Reference an external secret
   # instead; exactly one source. passwordRef is honored on Create only.
   #

@@ -1,12 +1,12 @@
 # Copyright 2026 Ronny Trommer <ronny@no42.org>
 # SPDX-License-Identifier: Apache-2.0
 #
-# kind: DataCollectionSource — one SNMP data-collection group ("source"),
-# managed declaratively via `onmsctl apply -f`. Targets the v2
+# kind: DataCollectionSource. It declares one SNMP data-collection group
+# ("source"), managed declaratively via `onmsctl apply -f`. Targets the v2
 # /api/v2/datacollectionconf surface (the DB-backed data-collection subsystem;
 # absent from released Horizon <= 37.0.0, so apply preflights the endpoint).
 #
-# onmsctl owns ONLY the sources you write documents for — the stock vendor
+# onmsctl owns ONLY the sources you write documents for. The stock vendor
 # library is left untouched. A re-apply that changes the group tree replaces the
 # whole source (the server prunes children you removed); `profiles` is the full
 # source of truth for which collections include this source (attach AND detach).

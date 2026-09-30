@@ -8,7 +8,8 @@ import example from '!!raw-loader!../../examples/threshd-package.yaml';
 
 Declare one threshd package per document: the interfaces it selects and the services it thresholds.
 Targets `/api/v2/threshd`.
-Requires Horizon 37.0.0 (NMS-19837); older servers fail with a version error.
+Requires Horizon 37.0.0 (NMS-19837).
+Older servers fail with a version error.
 
 ## YAML
 
@@ -36,8 +37,10 @@ Fields of a service:
 
 Not part of the document:
 
-- **`outageCalendars`** are managed by [`Maintenance`](maintenance.mdx). Apply keeps the server's value on every write.
-- **`userDefined`** is a server flag. Apply keeps it too.
+- **`outageCalendars`** are managed by [`Maintenance`](maintenance.mdx).
+  Apply keeps the server's value on every write.
+- **`userDefined`** is a server flag.
+  Apply keeps it too.
 
 ## Apply
 
@@ -47,7 +50,7 @@ onmsctl apply -f ./thresholds/
 ```
 
 Apply creates, replaces or leaves each package alone, exactly like [`ThresholdGroup`](threshold-group.mdx#apply).
-Updates carry the plan's ETag, unchanged packages get no request, and apply never deletes.
+Updates carry the plan's ETag, unchanged packages get no request, and apply **never deletes**.
 
 **Plan gate:** every `thresholdingGroup` must name a group on the server or a `ThresholdGroup` in the same apply.
 A typo aborts the whole apply before any write.

@@ -147,9 +147,13 @@ onmsctl apply -f examples/business-service.yaml
 
 - Apply reconciles each service as a whole object.
 - A new service is created, then fully replaced with a PUT.
-- A changed service is fully replaced with a PUT. Edges omitted from the document are removed.
-- A service that matches the document sends no write. Edge order does not matter.
-- Apply never deletes a service. A service on the server but absent from the apply stays. Remove it with `business-service delete`.
+- A changed service is fully replaced with a PUT.
+  Edges omitted from the document are removed.
+- A service that matches the document sends no write.
+  Edge order does not matter.
+- Apply **never deletes** a service.
+  A service on the server but absent from the apply stays.
+  Remove it with `business-service delete`.
 
 **Two-pass execute:** pass 1 creates each new service with its name, attributes and reduce function only.
 Pass 2 PUTs the full body, with every edge resolved to an id.
@@ -192,11 +196,22 @@ onmsctl business-service get web-frontend
 onmsctl business-service delete web-frontend
 ```
 
+Expected output:
+
+```text
+$ onmsctl business-service list
++------+----------+-------------+--------------+----------------+
+| NAME | CHILDREN | IP-SERVICES | APPLICATIONS | REDUCTION-KEYS |
++===============================================================+
++------+----------+-------------+--------------+----------------+
+```
+
 - `bs` is an alias for `business-service`.
 - `list` prints one row per service with its edge counts: `NAME`, `CHILDREN`, `IP-SERVICES`, `APPLICATIONS` and `REDUCTION-KEYS`.
 - `get <name>` prints the same row for one service.
 - `delete <name>` removes the service, then reloads bsmd.
-- If the reload fails after the delete, `delete` prints a warning and exits successfully. Reload bsmd by hand.
+- If the reload fails after the delete, `delete` prints a warning and exits successfully.
+  Reload bsmd by hand.
 
 ## Errors
 

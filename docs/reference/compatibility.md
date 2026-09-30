@@ -3,12 +3,16 @@ title: Server compatibility
 description: Supported OpenNMS Horizon versions and known eventconf quirks onmsctl works around.
 ---
 
+onmsctl supports OpenNMS Horizon **35 and later**.
+Some kinds need a newer build, listed below.
+
 | Server | Status |
 |---|---|
 | OpenNMS Horizon **35+** | Primary target (EventConf REST reproducible on 35.0.5 / 36.0.0). |
 
-Some kinds need newer server builds.
-onmsctl checks for those endpoints and fails with a version message instead of a bare error:
+## Minimum server versions
+
+onmsctl checks for newer endpoints and fails with a version message instead of a bare error.
 
 | Kind | Server requirement | When onmsctl checks |
 |---|---|---|
@@ -18,9 +22,12 @@ onmsctl checks for those endpoints and fails with a version message instead of a
 | `DataCollectionSource` | A Horizon build with the DB-backed data-collection subsystem (absent from released Horizon ≤ 37.0.0) | Before every `datacollection` command and apply |
 | `ThresholdGroup`, `ThreshdPackage` | Horizon 37.0.0 (NMS-19837) | Before every `threshold` command and apply |
 
-**Known eventconf quirks** (Horizon 35.0.5 / 36.0.0, tracked upstream; onmsctl works around the load-bearing ones client-side):
+## Known server quirks
 
-- `event-source list` can print empty despite existing sources ([NMS-19810](https://opennms.atlassian.net/browse/NMS-19810)).
-  Use `event-source names-and-ids`; `apply --diff` may show a whole document as "added" rather than a true delta, though the upload still succeeds.
-- `POST /eventconf/upload` requires the multipart field name to be literally `upload` ([NMS-19813](https://opennms.atlassian.net/browse/NMS-19813)) and derives the source name by stripping only the final extension.
-  onmsctl handles both, and uploads `{metadata.name}.xml` so the stored name equals `metadata.name`.
+These eventconf quirks are tracked upstream.
+onmsctl works around the load-bearing ones client-side.
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `event-source list` prints empty despite existing sources (observed on 35.0.5 / 36.0.0). | Server-side listing bug ([NMS-19810](https://opennms.atlassian.net/browse/NMS-19810)). | Use **`event-source names-and-ids`**. |
+| An upload fails or stores the source under an unexpected name. | `POST /eventconf/upload` requires the multipart field name to be literally `upload` ([NMS-19813](https://opennms.atlassian.net/browse/NMS-19813)). It derives the source name by stripping only the final extension. | None needed. onmsctl sends the `upload` field and uploads **`{metadata.name}.xml`**, so the stored name equals `metadata.name`. |

@@ -91,31 +91,36 @@ onmsctl apply -f examples/maintenance.yaml
 
 Apply reconciles each window in two steps:
 
-1. Write the outage definition. Apply creates an absent window, updates a changed one, and leaves a matching one untouched. The comparison ignores list order, IP spelling and case.
+1. Write the outage definition.
+   Apply creates an absent window, updates a changed one, and leaves a matching one untouched.
+   The comparison ignores list order, IP spelling and case.
 2. Attach the window to each daemon in `spec.suppress`: pollerd, threshd and collectd once per package, notifd once.
 
 If the definition write fails, apply skips the attachments for that window.
 
-Attachments are ensure-present.
+Attachments are **ensure-present**.
 The API cannot read which daemons an outage is attached to.
-Apply therefore re-issues every attachment on every apply, and never detaches.
+Apply therefore re-issues every attachment on every apply, and **never detaches**.
 Removing a `suppress` entry does not detach it.
 To reduce suppression, run `onmsctl maintenance delete <name>`, then re-apply.
 
-Apply never deletes.
+Apply **never deletes**.
 Windows no document declares are left alone.
 
 Node selectors are resolved on every apply:
 
-- An explicit `nodes` entry that does not resolve fails that window. The other windows still apply.
-- `categories`, `locations` and `asset` are resolved through one node search. The result is a snapshot. Re-apply to follow membership changes.
+- An explicit `nodes` entry that does not resolve fails that window.
+  The other windows still apply.
+- `categories`, `locations` and `asset` are resolved through one node search.
+  The result is a snapshot.
+  Re-apply to follow membership changes.
 - A search that matches nothing prints a warning.
 - A window that covers no devices after resolution fails.
 
 A `specific` window that already ended prints a warning, and is still created.
 The check compares against UTC, so it is approximate near the boundary.
 
-`--diff` prints a fixed note on attachment behaviour, not a field-level diff.
+**`--diff`** prints a fixed note on attachment behaviour, not a field-level diff.
 The plan row lists the attachments apply will ensure, such as `ensure pollerd/production, notifd`.
 
 **Plan gates:** every document is parsed and validated, and names are checked for duplicates, before any HTTP request.
@@ -131,6 +136,24 @@ Re-run the apply in that case.
 onmsctl maintenance list
 onmsctl maintenance status 192.168.8.8 12
 onmsctl maintenance delete weekend-patching
+```
+
+Expected output:
+
+```text
+$ onmsctl maintenance list
++------+------+-------+------------+-------+
+| NAME | TYPE | TIMES | INTERFACES | NODES |
++==========================================+
++------+------+-------+------------+-------+
+$ onmsctl maintenance status 192.168.8.8 12
++-------------+-----------+
+| DEVICE      | IN OUTAGE |
++=========================+
+| 192.168.8.8 | false     |
+|-------------+-----------|
+| 12          | false     |
++-------------+-----------+
 ```
 
 - `maint` is an alias for `maintenance`.

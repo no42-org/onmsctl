@@ -5,7 +5,7 @@
 #
 # Apply against a configured context:
 #
-#     onmsctl apply -f examples/event-source-minimal.yaml --diff
+#     onmsctl apply -f examples/event-source-minimal.yaml --dry-run
 #
 apiVersion: eventconf.opennms.org/v1
 kind: EventSource
