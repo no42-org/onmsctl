@@ -16,7 +16,7 @@ to preview without writing). Filenames are prefixed with their kind.
 | [`event-source-full.yaml`](event-source-full.yaml) | `EventSource` | Every nested type the EventSource model supports (mask, alarmData, varbinds, snmp, forwards, scripts, filters, …). | [docs](https://onmsctl.no42.org/kinds/event-source) |
 | [`event-source-severities.yaml`](event-source-severities.yaml) | `EventSource` | The seven case-sensitive severity levels. | [docs](https://onmsctl.no42.org/kinds/event-source) |
 | [`event-source-disabled.yaml`](event-source-disabled.yaml) | `EventSource` | `enabled: false` (applied via upload-then-disable; brief enabled-flap — see `apply --help`). | [docs](https://onmsctl.no42.org/kinds/event-source) |
+| [`event-source-order.yaml`](event-source-order.yaml) | `EventSourceOrder` | The singleton evaluation order: which sources are evaluated first. | [docs](https://onmsctl.no42.org/kinds/event-source-order) |
 
-The `event-source-*` fixtures are also checked by a unit test
-(`published_examples_parse_against_the_schema`) so they cannot silently drift out
-of sync with the EventSource model.
+Unit tests also parse the `event-source-*` fixtures, so they cannot silently drift out of sync with their models.
+`published_examples_parse_against_the_schema` covers the `EventSource` files, and `published_example_parses` covers `event-source-order.yaml`.

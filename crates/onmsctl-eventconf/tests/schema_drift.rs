@@ -36,3 +36,26 @@ fn committed_schema_matches_generated() {
         );
     }
 }
+
+#[test]
+fn committed_order_schema_matches_generated() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("schemas")
+        .join("event-source-order.schema.json");
+
+    let committed =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+
+    let schema = schemars::schema_for!(onmsctl_eventconf::order::EventSourceOrderLocal);
+    let mut generated = serde_json::to_string_pretty(&schema).expect("schema serializes as JSON");
+    generated.push('\n');
+
+    if committed != generated {
+        panic!(
+            "schemas/event-source-order.schema.json is stale — run `make schema` and commit the result.\n\
+             Tip: `diff <(cat schemas/event-source-order.schema.json) <(cargo run --example gen_order_schema -p onmsctl-eventconf)`"
+        );
+    }
+}

@@ -24,6 +24,7 @@ const sidebars: SidebarsConfig = {
       label: 'Kinds',
       items: [
         'kinds/event-source',
+        'kinds/event-source-order',
         'kinds/requisition',
         'kinds/user',
         'kinds/snmp-config',

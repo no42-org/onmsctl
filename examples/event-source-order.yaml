@@ -1,0 +1,20 @@
+# EventSourceOrder: declare which event sources are evaluated first.
+#
+# When two sources define the same UEI, the one evaluated first wins.
+# The sources listed under spec.first are evaluated first, in list order.
+# Every other source keeps its relative order below them.
+# opennms.catch-all.events always stays last and cannot be listed.
+#
+# Singleton: metadata.name must be "default".
+# Apply it together with the sources it lists, or on its own:
+#
+#     onmsctl apply -f ./eventconf/ --dry-run --diff
+#
+apiVersion: eventconf.opennms.org/v1
+kind: EventSourceOrder
+metadata:
+  name: default
+spec:
+  first:
+    - cisco.custom
+    - vendor-example.cold-start

@@ -25,6 +25,7 @@ The recognized kinds:
 | `kind` | `apiVersion` | Reconciles |
 |---|---|---|
 | `EventSource` | `eventconf.opennms.org/v1` | event configuration sources |
+| `EventSourceOrder` | `eventconf.opennms.org/v1` | event-source evaluation order (singleton) |
 | `Requisition` | `provisioning.opennms.org/v1` | provisioning requisitions |
 | `User` | `onmsctl.no42.org/v1alpha1` | Horizon users + roles |
 | `SnmpConfig` | `snmp.opennms.org/v1` | SNMP agent + trap config (singleton) |
@@ -79,6 +80,7 @@ onmsctl apply -f ./gitops/ --recursive
 Each `kind` has its own reference page:
 
 - [`EventSource`](../kinds/event-source.mdx): event configuration sources.
+- [`EventSourceOrder`](../kinds/event-source-order.mdx): event-source evaluation order (singleton).
 - [`Requisition`](../kinds/requisition.mdx): provisioning requisitions.
 - [`User`](../kinds/user.mdx): Horizon users and roles.
 - [`SnmpConfig`](../kinds/snmp-config.mdx): SNMP agent and trap config (singleton).

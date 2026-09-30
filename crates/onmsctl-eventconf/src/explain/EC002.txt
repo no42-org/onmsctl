@@ -33,5 +33,5 @@ How to fix
 
 4. If the file is a master `eventconf.xml`, it should not be converted
    as a source — its <event-file> entries reference other files. The
-   converter does not currently support master-file conversion (tracked
-   as deferred work under `kind: EventConfMaster`).
+   converter does not support master-file conversion. Declare the
+   evaluation order with a `kind: EventSourceOrder` document instead.

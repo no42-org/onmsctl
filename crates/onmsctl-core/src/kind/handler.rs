@@ -29,7 +29,7 @@ use super::outcome::ApplyOutcome;
 /// real-apply-only invariants (e.g. IAM admin-lockout, which is deliberately
 /// not gated under `--dry-run`), and `continue_on_error` to control its own
 /// intra-bucket per-item failure handling.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct ApplyParams {
     /// Stop after the plan phase; issue no mutating HTTP.
     pub dry_run: bool,
@@ -37,6 +37,19 @@ pub struct ApplyParams {
     pub show_diff: bool,
     /// Attempt every item/bucket instead of halting after the first failure.
     pub continue_on_error: bool,
+    /// Every document in this apply, as (kind, metadata.name), in input order.
+    /// Read-only context for cross-kind checks at plan time. The router fills
+    /// it; a caller's value is replaced.
+    pub manifest: Vec<DocRef>,
+}
+
+/// One document of an apply, as peeked by the router: its `kind` and its
+/// `metadata.name` when that is a string. A document without a string name
+/// has `name: None`; its own handler reports that error.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DocRef {
+    pub kind: String,
+    pub name: Option<String>,
 }
 
 /// The product of a handler's read-only plan phase for one kind-bucket.

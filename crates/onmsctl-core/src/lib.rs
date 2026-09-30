@@ -34,7 +34,7 @@ pub use context::{Context, Overrides};
 pub use error::{Error, Result};
 pub use format::OutputFormat;
 pub use kind::{
-    Action, ApplyOutcome, ApplyParams, KindHandler, OutcomeStatus, Plan, RawDoc, Registry,
+    Action, ApplyOutcome, ApplyParams, DocRef, KindHandler, OutcomeStatus, Plan, RawDoc, Registry,
     apply_documents, parse_documents,
 };
 pub use render::{TableRow, render_list, render_one};

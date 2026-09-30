@@ -21,7 +21,7 @@ pub mod registry;
 pub mod router;
 
 pub use envelope::{RawDoc, load_documents, parse_documents};
-pub use handler::{KindHandler, Plan};
+pub use handler::{DocRef, KindHandler, Plan};
 pub use outcome::{Action, ApplyOutcome, OutcomeStatus};
 pub use precedence::{KNOWN_RANKS, default_rank};
 pub use registry::Registry;
