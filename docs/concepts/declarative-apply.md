@@ -55,6 +55,7 @@ onmsctl apply -f 'sources/cisco-*.yaml'           # glob (quote it)
 | `--diff` | Render each kind-bucket's diff to stderr (stdout stays clean for `-o json/yaml`). |
 | `--continue-on-error` (alias `--keep-going`) | Keep applying after a failing document. Default is stop-on-error. |
 | `-R` / `--recursive` | Recurse into subdirectories (off by default). |
+| `--force` | Re-send a document that plans as unchanged. Only `SnmpConfig` honours it, to push a secret-only rotation; other kinds ignore it. |
 
 **Exit codes:** `0` means every document applied or was unchanged.
 `1` means a document failed or the plan gate refused the input.

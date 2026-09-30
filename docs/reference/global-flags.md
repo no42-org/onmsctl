@@ -20,7 +20,7 @@ These work on every command:
 | | `ONMS_PASSWORD` | Password for a basic-auth context; overrides the context's declared source |
 | | `ONMS_TOKEN` | Token for a bearer context; overrides the context's declared source |
 
-`apply` adds `-f`/`--filename`, `--dry-run`, `--diff`, `--continue-on-error` (alias `--keep-going`), and `-R`/`--recursive`.
+`apply` adds `-f`/`--filename`, `--dry-run`, `--diff`, `--continue-on-error` (alias `--keep-going`), `-R`/`--recursive`, and `--force` (honoured by `SnmpConfig` only).
 
 Override precedence, highest wins:
 

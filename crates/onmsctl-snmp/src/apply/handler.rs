@@ -45,13 +45,17 @@ struct SnmpExecPayload {
     trapd_unchanged: Option<bool>,
 }
 
+/// `--diff` line for a half that is in sync but re-sent because of `--force`.
+const FORCED_NOTE: &str =
+    "SnmpConfig/default: {half} unchanged apart from secrets; re-sent with its secrets (--force)";
+
 #[async_trait]
 impl KindHandler for SnmpConfigHandler {
     fn kind(&self) -> &'static str {
         KIND
     }
 
-    async fn plan(&self, docs: &[RawDoc], _params: &ApplyParams, ctx: &Context) -> Result<Plan> {
+    async fn plan(&self, docs: &[RawDoc], params: &ApplyParams, ctx: &Context) -> Result<Plan> {
         // Singleton: exactly one document configures the whole server.
         if docs.len() != 1 {
             return Err(Error::Config(format!(
@@ -75,11 +79,16 @@ impl KindHandler for SnmpConfigHandler {
         let snmp_api = SnmpConfigApi::new(&client);
         let deployed = snmp_api.get_config().await?;
         let desired = convert::to_wire(&local);
-        let agent_unchanged = diff::unchanged(&desired, &deployed);
+        // Secrets are never compared, so `--force` is the only way to push a
+        // secret-only rotation: it turns an in-sync half into a write.
+        let agent_in_sync = diff::unchanged(&desired, &deployed);
+        let agent_unchanged = agent_in_sync && !params.force;
 
         let mut diff_sections = Vec::new();
-        if !agent_unchanged {
+        if !agent_in_sync {
             diff_sections.push(render_diff(&deployed, &desired));
+        } else if params.force {
+            diff_sections.push(FORCED_NOTE.replace("{half}", "snmp-config"));
         }
 
         // Trap-daemon half. A `404` on the GET means "no config persisted yet"
@@ -91,11 +100,13 @@ impl KindHandler for SnmpConfigHandler {
             let trapd_api = TrapdConfigApi::new(&client);
             let deployed_t = trapd_api.get_config().await?.unwrap_or_default();
             let desired_t = convert::trapd_to_wire(t);
-            let uc = diff::trapd_unchanged(&desired_t, &deployed_t);
-            if !uc {
+            let in_sync = diff::trapd_unchanged(&desired_t, &deployed_t);
+            if !in_sync {
                 diff_sections.push(render_trapd_diff(&deployed_t, &desired_t));
+            } else if params.force {
+                diff_sections.push(FORCED_NOTE.replace("{half}", "trapd config"));
             }
-            Some(uc)
+            Some(in_sync && !params.force)
         } else {
             None
         };
@@ -410,6 +421,71 @@ mod tests {
                 .all(|r| r.method.as_str() == "GET"),
             "unchanged config must issue no writes"
         );
+    }
+
+    /// A secret-only rotation: the deployed config equals the document except
+    /// for the (uncompared) secret. Without `--force` it is a no-op; with it,
+    /// the config is re-sent with the resolved secret.
+    #[tokio::test]
+    async fn force_resends_an_unchanged_config_with_its_secrets() {
+        // SAFETY: test-only env mutation for the readCommunity ref.
+        unsafe {
+            std::env::set_var("ONMS_SNMP_ROTATED", "rotated-secret");
+        }
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v2/snmp-config"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "version": "v2c"
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/v2/snmp-config/upload"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let docs = doc(
+            "  defaults:\n    version: v2c\n    readCommunity: { fromEnv: ONMS_SNMP_ROTATED }\n",
+        );
+        let ctx = ctx_for(&server);
+        let handler = SnmpConfigHandler;
+
+        let plan = handler
+            .plan(&docs, &ApplyParams::default(), &ctx)
+            .await
+            .unwrap();
+        assert_eq!(
+            plan.preview[0].status,
+            OutcomeStatus::Unchanged,
+            "secrets are not compared"
+        );
+
+        let forced = ApplyParams {
+            force: true,
+            ..Default::default()
+        };
+        let plan = handler.plan(&docs, &forced, &ctx).await.unwrap();
+        assert_eq!(plan.preview[0].action, Action::Update);
+        assert!(
+            plan.diff.as_deref().is_some_and(|d| d.contains("--force")),
+            "the diff says why"
+        );
+        let outcomes = handler.execute(plan, &forced, &ctx).await.unwrap();
+        assert_eq!(outcomes[0].status, OutcomeStatus::Updated);
+
+        let reqs = server.received_requests().await.unwrap();
+        let post = reqs
+            .iter()
+            .find(|r| r.method.as_str() == "POST")
+            .expect("an upload POST");
+        assert!(String::from_utf8_lossy(&post.body).contains("rotated-secret"));
+
+        unsafe {
+            std::env::remove_var("ONMS_SNMP_ROTATED");
+        }
     }
 
     /// A document with a `spec.trapd` block reconciles BOTH endpoints: the
