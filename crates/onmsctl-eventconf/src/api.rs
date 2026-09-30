@@ -255,6 +255,39 @@ impl EventConfApi<'_> {
         self.client.multipart(&path, parts).await
     }
 
+    /// Every source name in evaluation order, first-evaluated first.
+    /// Sorts by `fileOrder` descending (higher is evaluated first) and pages
+    /// until `totalRecords` is reached.
+    pub async fn list_source_order(&self) -> Result<Vec<String>> {
+        let mut names = Vec::new();
+        loop {
+            let page = self
+                .filter_sources(&SourceFilter {
+                    sort_by: Some("fileOrder".into()),
+                    order: Some("desc".into()),
+                    offset: Some(names.len() as i32),
+                    limit: Some(DEFAULT_PAGE_LIMIT),
+                    ..SourceFilter::default()
+                })
+                .await?;
+            let got = page.items.len();
+            names.extend(page.items.into_iter().map(|s| s.name));
+            if got == 0 || names.len() as i64 >= page.total_records {
+                return Ok(names);
+            }
+        }
+    }
+
+    /// Set the evaluation order by uploading a synthesized master: one
+    /// `upload` part with filename `eventconf.xml` listing `source_names`
+    /// first-evaluated first. The server does not store it as a source.
+    pub async fn upload_source_order(&self, source_names: &[String]) -> Result<UploadResult> {
+        let refs: Vec<&str> = source_names.iter().map(String::as_str).collect();
+        let master = crate::xml::synth_master_with_order(&refs)?;
+        self.upload(&[MultipartPart::xml("eventconf.xml", master.into_bytes())])
+            .await
+    }
+
     /// Look up a source by its exact name. Wraps `filter_sources` and
     /// post-filters (the `filter` query parameter is substring-matching;
     /// we require an exact name match).
@@ -682,6 +715,76 @@ mod tests {
         assert_eq!(r.success[0].event_count, 17);
         assert_eq!(r.errors.len(), 1);
         assert_eq!(r.errors[0].file, "bad");
+    }
+
+    fn source_json(id: i64, name: &str, file_order: i32) -> serde_json::Value {
+        serde_json::json!({
+            "id": id, "name": name, "fileOrder": file_order, "eventCount": 1, "enabled": true
+        })
+    }
+
+    #[tokio::test]
+    async fn list_source_order_pages_by_file_order_desc() {
+        let (mock, client) = mock_with_client().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v2/eventconf/filter/sources"))
+            .and(query_param("sortBy", "fileOrder"))
+            .and(query_param("order", "desc"))
+            .and(query_param("offset", "0"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "totalRecords": 3,
+                "items": [source_json(1, "a.first", 3), source_json(2, "b.second", 2)]
+            })))
+            .expect(1)
+            .mount(&mock)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/v2/eventconf/filter/sources"))
+            .and(query_param("offset", "2"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "totalRecords": 3,
+                "items": [source_json(3, "opennms.catch-all.events", 1)]
+            })))
+            .expect(1)
+            .mount(&mock)
+            .await;
+        let api = EventConfApi::new(&client);
+        let order = api.list_source_order().await.unwrap();
+        assert_eq!(
+            order,
+            vec!["a.first", "b.second", "opennms.catch-all.events"]
+        );
+    }
+
+    #[tokio::test]
+    async fn upload_source_order_sends_one_master_part() {
+        let (mock, client) = mock_with_client().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v2/eventconf/upload"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"success": [], "errors": []})),
+            )
+            .expect(1)
+            .mount(&mock)
+            .await;
+        let api = EventConfApi::new(&client);
+        api.upload_source_order(&["cisco.custom".into(), "cisco.syslog".into()])
+            .await
+            .unwrap();
+        let reqs = mock.received_requests().await.unwrap();
+        let body = String::from_utf8_lossy(&reqs[0].body);
+        assert_eq!(body.matches("Content-Disposition").count(), 1, "{body}");
+        assert!(
+            body.contains("name=\"upload\"; filename=\"eventconf.xml\""),
+            "{body}"
+        );
+        let custom = body.find("<event-file>cisco.custom.xml</event-file>");
+        let syslog = body.find("<event-file>cisco.syslog.xml</event-file>");
+        assert!(
+            custom.is_some() && syslog.is_some() && custom < syslog,
+            "{body}"
+        );
     }
 
     #[tokio::test]

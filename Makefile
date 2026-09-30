@@ -390,6 +390,9 @@ schema:  ## Regenerate every committed schemas/*.schema.json from the Rust types
 	cargo run --quiet --release --example gen_schema -p onmsctl-eventconf \
 		> schemas/event-source.schema.json.tmp \
 		&& mv schemas/event-source.schema.json.tmp schemas/event-source.schema.json
+	cargo run --quiet --release --example gen_order_schema -p onmsctl-eventconf \
+		> schemas/event-source-order.schema.json.tmp \
+		&& mv schemas/event-source-order.schema.json.tmp schemas/event-source-order.schema.json
 	cargo run --quiet --release --example gen_schema -p onmsctl-provisioning \
 		> schemas/requisition.schema.json.tmp \
 		&& mv schemas/requisition.schema.json.tmp schemas/requisition.schema.json

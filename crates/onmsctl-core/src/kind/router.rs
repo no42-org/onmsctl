@@ -21,6 +21,7 @@ use crate::context::Context;
 use crate::error::{Error, Result};
 
 use super::envelope::RawDoc;
+use super::handler::DocRef;
 use super::outcome::ApplyOutcome;
 use super::registry::Registry;
 
@@ -40,8 +41,18 @@ pub async fn apply_documents(
     //    work; group documents into per-kind buckets in first-seen order. --
     let mut order: Vec<String> = Vec::new();
     let mut groups: HashMap<String, Vec<RawDoc>> = HashMap::new();
+    let mut manifest: Vec<DocRef> = Vec::with_capacity(docs.len());
     for doc in docs {
         let kind = doc.peek_kind()?.to_string();
+        manifest.push(DocRef {
+            kind: kind.clone(),
+            name: doc
+                .value
+                .get("metadata")
+                .and_then(|m| m.get("name"))
+                .and_then(|n| n.as_str())
+                .map(str::to_string),
+        });
         if !registry.contains(&kind) {
             return Err(Error::Config(format!(
                 "{}: unknown kind {:?} — no handler registered (known kinds: {})",
@@ -55,6 +66,10 @@ pub async fn apply_documents(
         }
         groups.entry(kind).or_default().push(doc);
     }
+    let params = &ApplyParams {
+        manifest,
+        ..params.clone()
+    };
 
     // -- Order buckets by precedence rank (ranks are unique per kind). --
     order.sort_by_key(|k| registry.rank(k).expect("kind validated in the gate above"));
@@ -190,7 +205,9 @@ mod tests {
     use crate::kind::envelope::parse_documents;
     use crate::kind::handler::{KindHandler, Plan};
     use crate::kind::outcome::{Action, OutcomeStatus};
-    use crate::kind::precedence::{RANK_EVENT_SOURCE, RANK_REQUISITION, RANK_USER};
+    use crate::kind::precedence::{
+        RANK_EVENT_SOURCE, RANK_EVENT_SOURCE_ORDER, RANK_REQUISITION, RANK_SNMP_CONFIG, RANK_USER,
+    };
     use async_trait::async_trait;
     use std::sync::{Arc, Mutex};
 
@@ -428,6 +445,119 @@ metadata: {name: bob}
             "one plan call for the bucket"
         );
         assert_eq!(*log.lock().unwrap(), vec!["alice", "bob"]);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn every_handler_receives_the_apply_manifest_in_input_order() {
+        struct Recording {
+            kind: &'static str,
+            seen: Arc<Mutex<Vec<Vec<DocRef>>>>,
+        }
+        #[async_trait]
+        impl KindHandler for Recording {
+            fn kind(&self) -> &'static str {
+                self.kind
+            }
+            async fn plan(&self, docs: &[RawDoc], p: &ApplyParams, _c: &Context) -> Result<Plan> {
+                self.seen.lock().unwrap().push(p.manifest.clone());
+                let preview = docs
+                    .iter()
+                    .map(|d| ApplyOutcome::would(self.kind, doc_name(d), Action::Update))
+                    .collect();
+                Ok(Plan::new(preview, Box::new(())))
+            }
+            async fn execute(
+                &self,
+                _plan: Plan,
+                _p: &ApplyParams,
+                _c: &Context,
+            ) -> Result<Vec<ApplyOutcome>> {
+                unreachable!("dry-run")
+            }
+        }
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let mut reg = Registry::new();
+        reg.register(
+            RANK_EVENT_SOURCE,
+            Box::new(Recording {
+                kind: "EventSource",
+                seen: seen.clone(),
+            }),
+        );
+        reg.register(
+            RANK_EVENT_SOURCE_ORDER,
+            Box::new(Recording {
+                kind: "EventSourceOrder",
+                seen: seen.clone(),
+            }),
+        );
+        let input = "\
+kind: EventSourceOrder
+metadata: {name: default}
+---
+kind: EventSource
+metadata: {name: acme.traps}
+---
+kind: EventSource
+metadata: {name: [not, a, string]}
+";
+        let params = ApplyParams {
+            dry_run: true,
+            ..Default::default()
+        };
+        apply_documents(&reg, docs(input), &params, &test_ctx())
+            .await
+            .unwrap();
+        let expected = vec![
+            DocRef {
+                kind: "EventSourceOrder".into(),
+                name: Some("default".into()),
+            },
+            DocRef {
+                kind: "EventSource".into(),
+                name: Some("acme.traps".into()),
+            },
+            DocRef {
+                kind: "EventSource".into(),
+                name: None,
+            },
+        ];
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 2, "one plan call per bucket");
+        assert!(seen.iter().all(|m| *m == expected));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn event_source_order_bucket_runs_after_event_source() {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let mut reg = Registry::new();
+        reg.register(RANK_EVENT_SOURCE, Fake::new("EventSource", log.clone()));
+        reg.register(
+            RANK_EVENT_SOURCE_ORDER,
+            Fake::new("EventSourceOrder", log.clone()),
+        );
+        reg.register(RANK_SNMP_CONFIG, Fake::new("SnmpConfig", log.clone()));
+        let input = "\
+kind: SnmpConfig
+metadata: {name: default}
+---
+kind: EventSourceOrder
+metadata: {name: default}
+---
+kind: EventSource
+metadata: {name: acme.traps}
+";
+        apply_documents(&reg, docs(input), &ApplyParams::default(), &test_ctx())
+            .await
+            .unwrap();
+        assert_eq!(
+            *log.lock().unwrap(),
+            vec![
+                "EventSource:acme.traps",
+                "EventSourceOrder:default",
+                "SnmpConfig:default"
+            ]
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]

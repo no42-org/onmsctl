@@ -24,6 +24,7 @@ pub mod cmd;
 pub mod convert;
 pub mod dto;
 pub mod export;
+pub mod order;
 mod render;
 pub mod xml;
 

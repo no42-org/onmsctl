@@ -620,8 +620,8 @@ fn guided_rejection_for_known_spec_keys(raw: &serde_norway::Value) -> Option<Err
             match k {
                 "fileOrder" => {
                     return Some(Error::Config(
-                        "spec.fileOrder is not declarative in v0.1; ordering is server-managed. \
-                         Declarative ordering moves to a future `kind: EventConfMaster` resource."
+                        "spec.fileOrder is not allowed on an EventSource. \
+                         Declare evaluation order with a `kind: EventSourceOrder` document."
                             .into(),
                     ));
                 }
@@ -706,33 +706,40 @@ impl EventSourceLocal {
 }
 
 fn validate_name(name: &str) -> Result<()> {
+    validate_source_name("metadata.name", name)
+}
+
+/// The `EventSource` name rules, with `field` naming the offending path in
+/// each message. Shared with `EventSourceOrder`, whose `spec.first` entries
+/// are source names.
+pub(crate) fn validate_source_name(field: &str, name: &str) -> Result<()> {
     if name.is_empty() {
-        return Err(Error::Config("metadata.name is empty".into()));
+        return Err(Error::Config(format!("{field} is empty")));
     }
     if name.len() > 256 {
         return Err(Error::Config(format!(
-            "metadata.name '{name}' exceeds 256 chars (got {})",
+            "{field} '{name}' exceeds 256 chars (got {})",
             name.len()
         )));
     }
     if !name.chars().all(VALID_NAME_CHARS) {
         return Err(Error::Config(format!(
-            "metadata.name '{name}' contains invalid characters; only ASCII letters, digits, '.', '-', '_' allowed"
+            "{field} '{name}' contains invalid characters; only ASCII letters, digits, '.', '-', '_' allowed"
         )));
     }
     if name.starts_with('.') {
         return Err(Error::Config(format!(
-            "metadata.name '{name}' must not start with a dot"
+            "{field} '{name}' must not start with a dot"
         )));
     }
     if name.ends_with('.') {
         return Err(Error::Config(format!(
-            "metadata.name '{name}' must not end with a dot"
+            "{field} '{name}' must not end with a dot"
         )));
     }
     if name.contains("..") {
         return Err(Error::Config(format!(
-            "metadata.name '{name}' must not contain consecutive dots"
+            "{field} '{name}' must not contain consecutive dots"
         )));
     }
     // Reserved-name check runs BEFORE the dot-required check because at
@@ -741,7 +748,7 @@ fn validate_name(name: &str) -> Result<()> {
     // against `Eventconf` / `OPENNMS.CATCH-ALL.EVENTS` style bypass.
     if RESERVED_NAMES.iter().any(|r| r.eq_ignore_ascii_case(name)) {
         return Err(Error::Config(format!(
-            "metadata.name '{name}' is reserved by OpenNMS"
+            "{field} '{name}' is reserved by OpenNMS"
         )));
     }
     // Vendor derivation matches Horizon's server-side
@@ -755,12 +762,12 @@ fn validate_name(name: &str) -> Result<()> {
     };
     if vendor.is_empty() {
         return Err(Error::Config(format!(
-            "metadata.name '{name}' has empty vendor segment"
+            "{field} '{name}' has empty vendor segment"
         )));
     }
     if vendor.len() > 128 {
         return Err(Error::Config(format!(
-            "metadata.name '{name}' vendor segment '{vendor}' exceeds 128 chars"
+            "{field} '{name}' vendor segment '{vendor}' exceeds 128 chars"
         )));
     }
     Ok(())
@@ -1109,6 +1116,16 @@ spec:
         assert_eq!(local.metadata.name, "cisco.foo");
         assert_eq!(local.spec.events.len(), 1);
         assert!(local.spec.enabled, "enabled defaults to true");
+    }
+
+    #[test]
+    fn file_order_rejection_points_to_event_source_order() {
+        let yaml = minimal_yaml().replace("spec:\n", "spec:\n  fileOrder: 50\n");
+        let err = EventSourceLocal::from_yaml(yaml.as_bytes()).unwrap_err();
+        match err {
+            Error::Config(m) => assert!(m.contains("kind: EventSourceOrder"), "got: {m}"),
+            other => panic!("expected Config, got {other:?}"),
+        }
     }
 
     #[test]

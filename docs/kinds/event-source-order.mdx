@@ -1,0 +1,76 @@
+---
+title: EventSourceOrder
+description: Declare which event sources Horizon evaluates first, so your custom event definitions win over the stock ones.
+---
+
+import CodeBlock from '@theme/CodeBlock';
+import example from '!!raw-loader!../../examples/event-source-order.yaml';
+
+Declare which event sources are evaluated first.
+When two sources define the same UEI, the source evaluated first wins.
+Targets `/api/v2/eventconf`.
+
+## YAML
+
+`EventSourceOrder` is a singleton: `metadata.name` is fixed to `default`.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| **`apiVersion`** | string | required | `eventconf.opennms.org/v1` |
+| **`kind`** | string | required | `EventSourceOrder` |
+| **`metadata.name`** | string | required | `default` |
+| **`spec.first`** | list of source names | required | Sources evaluated first, in list order. At least one entry. |
+
+Each `spec.first` entry follows the [`EventSource`](event-source.mdx) name rules.
+An entry must name a source on the server or an `EventSource` document in the same apply.
+`opennms.catch-all.events` cannot be listed. It is always evaluated last.
+
+## Apply
+
+```sh
+onmsctl apply -f ./eventconf/ --dry-run --diff
+onmsctl apply -f ./eventconf/
+```
+
+The target order is:
+
+1. The `spec.first` sources, in list order.
+2. Every other source, in its current relative order.
+3. `opennms.catch-all.events`.
+
+The document owns only the positions of the sources it lists.
+Sources added later, by a Horizon upgrade or by another tool, cause no drift.
+They stay below the listed sources.
+
+**Order:** `EventSourceOrder` applies after `EventSource`, so one apply can create a source and place it first.
+
+**Write and verify:** apply uploads the full target order as an `eventconf.xml` master part, then reads the order back.
+When the live order already matches, apply reports the document unchanged and sends no upload.
+
+## Diff
+
+`--diff` prints one line per listed source that moves, with its evaluation position before and after (`1` is evaluated first).
+Unlisted sources that shift are counted, not listed.
+
+```text
+EventSourceOrder/default: 2 listed sources move, 6 others shift down
+  ~ cisco.custom  8 -> 1
+  ~ acme.traps    1 -> 2  (created by this apply)
+```
+
+A source created by the same apply is placed on top in the preview, where Horizon puts a new source.
+
+## Errors
+
+| Message | Probable cause | Recovery |
+|---|---|---|
+| `spec.first names a source not found on the server or as an EventSource in this apply: <name>` | A typo, or the source was deleted. The whole apply aborts before any write. | Fix the name in `spec.first`, or add the `EventSource` document to the apply. |
+| `'opennms.catch-all.events' is always evaluated last and cannot be listed` | The catch-all source is in `spec.first`. | Remove it. |
+| `kind: EventSourceOrder is a singleton` | More than one `EventSourceOrder` document in the apply. | Keep one document. |
+| `metadata.name must be "default"` | Any other name. | Set `metadata.name: default`. |
+| `spec.first names missing on the server: <name>` | The source disappeared between plan and execute, or its `EventSource` document failed. | Fix the source, then re-run the apply. |
+| `server did not apply the requested order` | The server accepted the upload but the order did not change. | Check that the server supports reordering through an `eventconf.xml` upload part. |
+
+## Example
+
+<CodeBlock language="yaml" title="examples/event-source-order.yaml">{example}</CodeBlock>

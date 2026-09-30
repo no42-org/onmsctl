@@ -324,15 +324,17 @@ fn walk_event_direct_children(xml: &[u8]) -> Result<Vec<Vec<String>>> {
     Ok(all)
 }
 
-/// Synthesize an `eventconf.xml` master file listing source basenames in
-/// the order they should appear. Per design.md §3.1, the upload pipeline
-/// reads `<event-file>` entries in **reversed** iteration order to assign
-/// fileOrder values, so the FIRST entry in the produced master gets the
-/// highest fileOrder and the LAST entry gets the lowest.
-pub fn synth_master_with_order(basenames: &[&str]) -> Result<String> {
+/// Synthesize an `eventconf.xml` master file listing source names in
+/// evaluation order, first-evaluated first. Uploaded as a part named
+/// `eventconf.xml`, its entries set the search order of the listed sources:
+/// the FIRST entry gets the highest fileOrder and is evaluated first.
+///
+/// Each entry is written as `<name>.xml`. Black-box observation shows the
+/// server silently ignores a bare `<name>` entry.
+pub fn synth_master_with_order(source_names: &[&str]) -> Result<String> {
     let xml_events = XmlEvents {
         event: Vec::new(),
-        event_file: basenames.iter().map(|s| (*s).to_string()).collect(),
+        event_file: source_names.iter().map(|s| format!("{s}.xml")).collect(),
     };
     serialize_root(&xml_events)
 }
@@ -1233,11 +1235,12 @@ mod tests {
     fn synth_master_with_order_lists_event_files() {
         let xml = synth_master_with_order(&["cisco.foo", "juniper.bar", "vendor.baz"]).unwrap();
         // Each name appears as an event-file element in the requested
-        // order. The upload pipeline assigns fileOrder values from this
-        // list (reversed iteration; see design.md §3.1).
-        assert!(xml.contains("<event-file>cisco.foo</event-file>"));
-        assert!(xml.contains("<event-file>juniper.bar</event-file>"));
-        assert!(xml.contains("<event-file>vendor.baz</event-file>"));
+        // order; the first entry is evaluated first.
+        // Entries carry the `.xml` suffix; a bare name is ignored server-side.
+        assert!(xml.contains("<event-file>cisco.foo.xml</event-file>"));
+        assert!(xml.contains("<event-file>juniper.bar.xml</event-file>"));
+        assert!(xml.contains("<event-file>vendor.baz.xml</event-file>"));
+        assert!(!xml.contains("<event-file>cisco.foo</event-file>"));
         let cisco_pos = xml.find("cisco.foo").unwrap();
         let juniper_pos = xml.find("juniper.bar").unwrap();
         let vendor_pos = xml.find("vendor.baz").unwrap();

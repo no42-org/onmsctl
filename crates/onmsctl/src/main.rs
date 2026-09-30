@@ -510,6 +510,7 @@ async fn run_apply(args: ApplyArgs, merged: &Overrides) -> Result<()> {
         dry_run: args.dry_run,
         show_diff: args.diff,
         continue_on_error: args.continue_on_error,
+        ..Default::default()
     };
 
     match apply_documents(&registry, docs, &params, &ctx).await {

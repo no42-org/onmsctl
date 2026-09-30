@@ -6,14 +6,18 @@
 //! Kind-precedence data (Decision C / D7).
 //!
 //! Pure `kind → rank` data — no capability types — so it can live in core.
-//! Documents apply in ascending rank order. Today's kinds are independent, so
-//! these ranks encode no real dependency; they establish the ordering
-//! mechanism for a future dependent kind. Because the ordering is a strict
+//! Documents apply in ascending rank order. Most kinds are independent and
+//! their ranks only fix a deterministic order. `EventSourceOrder` after
+//! `EventSource` is a real dependency: an order document places sources the
+//! same apply may create. Because the ordering is a strict
 //! total order, "acyclic" reduces to "every rank is distinct"
 //! ([`ranks_are_total_order`]), checked by a unit test.
 
 pub const RANK_USER: u32 = 100;
 pub const RANK_EVENT_SOURCE: u32 = 200;
+/// Event-source order applies after `EventSource` so it can place sources
+/// created by the same apply. This is a real dependency.
+pub const RANK_EVENT_SOURCE_ORDER: u32 = 210;
 pub const RANK_SNMP_CONFIG: u32 = 250;
 pub const RANK_REQUISITION: u32 = 300;
 /// Maintenance windows apply after `Requisition` so a co-located apply imports
@@ -35,6 +39,7 @@ pub const RANK_BUSINESS_SERVICE: u32 = 400;
 pub const KNOWN_RANKS: &[(&str, u32)] = &[
     ("User", RANK_USER),
     ("EventSource", RANK_EVENT_SOURCE),
+    ("EventSourceOrder", RANK_EVENT_SOURCE_ORDER),
     ("SnmpConfig", RANK_SNMP_CONFIG),
     ("Requisition", RANK_REQUISITION),
     ("Maintenance", RANK_MAINTENANCE),
@@ -70,6 +75,12 @@ mod tests {
     fn default_rank_resolves_known_and_rejects_unknown() {
         assert_eq!(default_rank("EventSource"), Some(RANK_EVENT_SOURCE));
         assert_eq!(default_rank("Nope"), None);
+    }
+
+    #[test]
+    fn event_source_order_ranks_between_event_source_and_snmp_config() {
+        let r = default_rank("EventSourceOrder").unwrap();
+        assert!(RANK_EVENT_SOURCE < r && r < RANK_SNMP_CONFIG);
     }
 
     #[test]

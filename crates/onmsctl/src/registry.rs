@@ -15,13 +15,14 @@
 
 use onmsctl_core::Registry;
 use onmsctl_core::kind::precedence::{
-    RANK_BUSINESS_SERVICE, RANK_DATACOLLECTION, RANK_EVENT_SOURCE, RANK_MAINTENANCE,
-    RANK_REQUISITION, RANK_SNMP_CONFIG, RANK_USER, ranks_are_total_order,
+    RANK_BUSINESS_SERVICE, RANK_DATACOLLECTION, RANK_EVENT_SOURCE, RANK_EVENT_SOURCE_ORDER,
+    RANK_MAINTENANCE, RANK_REQUISITION, RANK_SNMP_CONFIG, RANK_USER, ranks_are_total_order,
 };
 
 use onmsctl_businessservice::apply::BusinessServiceHandler;
 use onmsctl_datacollection::apply::DataCollectionSourceHandler;
 use onmsctl_eventconf::apply::EventSourceHandler;
+use onmsctl_eventconf::order::EventSourceOrderHandler;
 use onmsctl_iam::apply::UserHandler;
 use onmsctl_maintenance::apply::MaintenanceHandler;
 use onmsctl_provisioning::apply::ProvisioningHandler;
@@ -40,6 +41,7 @@ pub fn build() -> Registry {
     let mut reg = Registry::new();
     reg.register(RANK_USER, Box::new(UserHandler));
     reg.register(RANK_EVENT_SOURCE, Box::new(EventSourceHandler));
+    reg.register(RANK_EVENT_SOURCE_ORDER, Box::new(EventSourceOrderHandler));
     reg.register(RANK_SNMP_CONFIG, Box::new(SnmpConfigHandler));
     reg.register(RANK_REQUISITION, Box::new(ProvisioningHandler));
     reg.register(RANK_MAINTENANCE, Box::new(MaintenanceHandler));
@@ -67,11 +69,15 @@ mod tests {
     #[test]
     fn build_registers_all_kinds_at_their_canonical_ranks() {
         let reg = build();
-        assert_eq!(reg.len(), 7, "exactly the wired kinds are present");
+        assert_eq!(reg.len(), 8, "exactly the wired kinds are present");
         // Key off each handler's own `kind()` so the test can't drift from the
         // registration site if a KIND constant changes.
         assert_eq!(reg.rank(UserHandler.kind()), Some(RANK_USER));
         assert_eq!(reg.rank(EventSourceHandler.kind()), Some(RANK_EVENT_SOURCE));
+        assert_eq!(
+            reg.rank(EventSourceOrderHandler.kind()),
+            Some(RANK_EVENT_SOURCE_ORDER)
+        );
         assert_eq!(reg.rank(SnmpConfigHandler.kind()), Some(RANK_SNMP_CONFIG));
         assert_eq!(reg.rank(ProvisioningHandler.kind()), Some(RANK_REQUISITION));
         assert_eq!(reg.rank(MaintenanceHandler.kind()), Some(RANK_MAINTENANCE));
