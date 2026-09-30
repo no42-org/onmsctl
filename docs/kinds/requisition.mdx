@@ -83,8 +83,19 @@ A requisition that replaces one carrying them drops them from the server.
 ## Apply
 
 ```sh
-onmsctl apply -f acme-prod.yaml --dry-run   # preview the action per document
-onmsctl apply -f acme-prod.yaml             # write + auto-import
+onmsctl apply -f examples/requisition-acme-prod.yaml --dry-run   # preview the action per document
+onmsctl apply -f examples/requisition-acme-prod.yaml             # write + auto-import
+```
+
+Expected output:
+
+```text
+$ onmsctl apply -f examples/requisition-acme-prod.yaml --dry-run
++-------------+-----------+--------+---------+-----------------------+
+| kind        | name      | action | status  | message               |
++====================================================================+
+| Requisition | acme-prod | create | Skipped | dry-run: would create |
++-------------+-----------+--------+---------+-----------------------+
 ```
 
 Apply reads the deployed requisition and foreign source, then compares them with the document.
@@ -94,7 +105,8 @@ Otherwise it writes the foreign source (create, update or delete), posts the req
 `apply` picks `rescanExisting` automatically from what changed:
 
 - A rescan runs for changes that affect what provisiond discovers: a node added or removed, interfaces, services, SNMP primary, location, detectors and policies.
-- No rescan runs for pure metadata: labels, categories, assets and `scanInterval`. A new `scanInterval` takes effect at the next scheduled scan.
+- No rescan runs for pure metadata: labels, categories, assets and `scanInterval`.
+  A new `scanInterval` takes effect at the next scheduled scan.
 - A change the classifier does not recognize triggers a rescan.
 
 Import completion is asynchronous.
@@ -116,6 +128,14 @@ onmsctl requisition import acme-prod                     # re-import without re-
 onmsctl requisition import acme-prod --rescan-existing   # re-evaluate existing nodes
 onmsctl requisition import acme-prod --wait --timeout 5m # block on the async import
 onmsctl requisition delete acme-prod --yes               # purge pending + deployed
+```
+
+Expected output:
+
+```text
+$ onmsctl requisition list
+poc-scale
+selfmonitor
 ```
 
 Lifecycle and read verbs: `requisition list|status|import|export|delete`, `node|interface list|get`, `service|category list`, and `asset list|get`.
@@ -156,9 +176,11 @@ onmsctl requisition convert --from ./reqs/ --foreign-sources-dir ./fs/ --out ./y
 
 - `--from` reads every `*.xml` in the directory as a requisition.
 - `--foreign-sources-dir` pairs each requisition with the foreign-source XML of the same basename.
-- `--out` writes one `<foreign-source>.yaml` per requisition. Without it, convert writes one `---`-separated stream to stdout.
+- `--out` writes one `<foreign-source>.yaml` per requisition.
+  Without it, convert writes one `---`-separated stream to stdout.
 
-Convert is a local transform. It issues no HTTP and needs no context, so it runs under `--read-only`.
+Convert is a **local transform**.
+It issues no HTTP and needs no context, so it runs under `--read-only`.
 
 The `provision.pl` migration is covered in the [migration guide](../guides/migration.md#provisionpl-verb--onmsctl).
 
@@ -183,8 +205,10 @@ onmsctl requisition convert --explain PR001
 Exit codes:
 
 - `0`: no findings, or info only.
-- `1`: warnings present. The YAML is still written.
-- `2`: an error-severity finding withheld the YAML, or a usage error such as a missing `--from`. No current code has error severity.
+- `1`: warnings present.
+  The YAML is still written.
+- `2`: an error-severity finding withheld the YAML, or a usage error such as a missing `--from`.
+  No current code has error severity.
 
 ## Errors
 

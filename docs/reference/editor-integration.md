@@ -4,13 +4,36 @@ description: Validate onmsctl YAML in your editor with the published JSON Schema
 ---
 
 JSON Schemas (draft 2020-12) live under [`schemas/`](https://github.com/no42-org/onmsctl/tree/main/schemas), one per kind.
-Add a modeline to the top of your YAML for in-editor validation via [`yaml-language-server`](https://github.com/redhat-developer/yaml-language-server):
+Any editor with [`yaml-language-server`](https://github.com/redhat-developer/yaml-language-server) can validate against them.
 
-```yaml
-# yaml-language-server: $schema=https://raw.githubusercontent.com/no42-org/onmsctl/main/schemas/event-source.schema.json
-```
+## Validate YAML in your editor
 
-Swap the filename for the document's kind:
+1. Add the modeline as the **first line** of each YAML file:
+
+   ```yaml
+   # yaml-language-server: $schema=https://raw.githubusercontent.com/no42-org/onmsctl/main/schemas/event-source.schema.json
+   ```
+
+2. Swap the filename for the document's `kind`.
+   Pick it from the [schema files](#schema-files) table.
+
+3. Optional: pin a release tag instead of `main` for stability.
+
+   ```text
+   https://raw.githubusercontent.com/no42-org/onmsctl/<tag>/schemas/<file>
+   ```
+
+   The tag must contain the schema.
+   Kinds added after that release have no schema file at that tag.
+   To validate against a local clone instead, point the modeline at the file on disk:
+
+   ```yaml
+   # yaml-language-server: $schema=<path-to-clone>/schemas/<file>
+   ```
+
+`requisition export` writes this modeline into its YAML output for you.
+
+## Schema files
 
 | `kind` | Schema file |
 |---|---|
@@ -25,6 +48,10 @@ Swap the filename for the document's kind:
 | `DataCollectionSource` | `datacollection.schema.json` |
 | `BusinessService` | `business-service.schema.json` |
 
-Pin a release tag for stability, or reference a local clone (`./schemas/<name>.schema.json`).
-Regenerate with `make schema` (CI fails if a committed artifact lags).
-The requisition schema annotates list fields with `x-onmsctl-list-kind: ordered|set` so diff tooling distinguishes ordered sequences (`detectors`, `policies`) from sets (`categories`, `services`).
+Regenerate the schemas with `make schema`.
+CI fails if a committed schema lags its Rust types.
+
+### Tell ordered lists from sets
+
+The requisition schema annotates list fields with **`x-onmsctl-list-kind: ordered|set`**.
+Diff tooling uses it to tell ordered sequences (`detectors`, `policies`) from sets (`categories`, `services`).

@@ -3,7 +3,7 @@ title: Declarative apply
 description: Reconcile YAML documents by kind with the onmsctl apply -f declarative entrypoint.
 ---
 
-`onmsctl apply -f <file|dir|glob>` is the single declarative mutation entrypoint.
+**`onmsctl apply -f <file|dir|glob>`** is the single declarative mutation entrypoint.
 It peeks each YAML document's `kind` and routes it to the registered handler.
 There is no per-capability apply verb.
 Recognized kinds:
@@ -23,16 +23,35 @@ Recognized kinds:
 
 A single file may hold many `---`-separated documents, and a directory can mix all kinds.
 
-**Plan → gate → execute.**
+## Order of execution
+
 Every document is planned first.
 If *any* fails to plan (unknown `kind`, duplicate `metadata.name`, parse error), the whole apply **aborts before any mutation**.
 Once the gate passes, documents execute in a static precedence order so dependencies settle first:
 
-```
+```text
 User (100) → EventSource (200) → EventSourceOrder (210) → ThresholdGroup (220) → ThreshdPackage (230) → SnmpConfig (250) → Requisition (300) → Maintenance (350) → DataCollectionSource (375) → BusinessService (400)
 ```
 
-Each document yields one `ApplyOutcome` row, rendered through `-o table|yaml|json`:
+## Run apply
+
+Pass a file, a directory, or a quoted glob:
+
+```sh
+onmsctl apply -f users.yaml                       # single file
+onmsctl apply -f ./desired-state/                 # directory (mixed kinds)
+onmsctl apply -f ./desired-state/ -R              # recurse into subdirs
+onmsctl apply -f 'sources/cisco-*.yaml'           # glob (quote it)
+```
+
+Each document yields one `ApplyOutcome` row, rendered through `-o table|yaml|json`.
+A dry run of one new requisition:
+
+```sh
+onmsctl apply -f acme-prod.yaml --dry-run
+```
+
+Expected output:
 
 ```text
 +-------------+-----------+--------+---------+-----------------------+
@@ -42,17 +61,13 @@ Each document yields one `ApplyOutcome` row, rendered through `-o table|yaml|jso
 +-------------+-----------+--------+---------+-----------------------+
 ```
 
-```sh
-onmsctl apply -f users.yaml                       # single file
-onmsctl apply -f ./desired-state/                 # directory (mixed kinds)
-onmsctl apply -f ./desired-state/ -R              # recurse into subdirs
-onmsctl apply -f 'sources/cisco-*.yaml'           # glob (quote it)
-```
-
 The `apply` flags (`--dry-run`, `--diff`, `--continue-on-error`, `-R`, `--force`) are listed under [apply flags](../reference/global-flags.md#apply-flags).
 
-**Exit codes:** `0` means every document applied or was unchanged.
+## Exit codes
+
+`0` means every document applied or was unchanged.
 `1` means a document failed or the plan gate refused the input.
 Other failures keep their own codes: `2` for a usage or config error (including empty input), `4`-`9` for connection errors, `12` for a read-only refusal, `13`-`15` for the IAM safety gates.
 The full table is under [Exit codes](../reference/exit-codes.md).
-The imperative mutators that predated this model are gone: see the [migration guide](../guides/migration.md#removed-imperative-verbs--onmsctl-apply--f).
+
+See also: [Replace removed imperative verbs](../guides/migration.md#replace-removed-imperative-verbs) in the migration guide.

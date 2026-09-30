@@ -8,7 +8,8 @@ import example from '!!raw-loader!../../examples/threshold-group.yaml';
 
 Declare one threshold group per document: its basic thresholds and its expression thresholds.
 Targets `/api/v2/thresholding`.
-Requires Horizon 37.0.0 (NMS-19837); older servers fail with a version error.
+Requires Horizon 37.0.0 (NMS-19837).
+Older servers fail with a version error.
 
 A group does nothing on its own.
 A [`ThreshdPackage`](threshd-package.mdx) service binds it to interfaces.
@@ -54,7 +55,8 @@ onmsctl apply -f ./thresholds/
 - Apply creates an absent group and replaces a changed one.
 - It leaves a matching group untouched and sends no request, because every write reloads threshd.
 - Updates carry the ETag read during plan, so a group changed on the server in between fails instead of being overwritten.
-- Apply never deletes. Groups no document declares are left alone.
+- Apply **never deletes**.
+  Groups no document declares are left alone.
 - A group contributed by an extension is read-only and fails the plan.
 
 **Plan gate:** each `dsType` is checked against the server's list of datasource types before any write.
@@ -82,9 +84,13 @@ onmsctl threshold export --out ./thresholds/
 onmsctl threshold group delete acme-cpu
 ```
 
-- `get` and `export` write documents that apply back unchanged. Values stay the server's strings, quoted, such as `value: '1.0'`.
-- `export --out <dir>` writes every group and package, one file each, and skips extension groups. It refuses to overwrite existing files unless you pass `--force`. Without `--out` it writes one `---`-separated stream to stdout.
-- `group delete` refuses while a package still binds the group. `--force` deletes anyway and leaves the package with a dangling reference.
+- `get` and `export` write documents that apply back unchanged.
+  Values stay the server's strings, quoted, such as `value: '1.0'`.
+- `export --out <dir>` writes every group and package, one file each, and skips extension groups.
+  It refuses to overwrite existing files unless you pass `--force`.
+  Without `--out` it writes one `---`-separated stream to stdout.
+- `group delete` refuses while a package still binds the group.
+  `--force` deletes anyway and leaves the package with a dangling reference.
 
 ## Errors
 

@@ -1,6 +1,7 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/no42-org/onmsctl/main/schemas/maintenance.schema.json
 #
-# kind: Maintenance — a maintenance window (OpenNMS scheduled outage). For the
+# kind: Maintenance. It declares a maintenance window (OpenNMS scheduled
+# outage). For the
 # window, OpenNMS stops the chosen daemons (polling / thresholds / collection /
 # notifications) for the chosen devices. NAMED + multi-instance: one document per
 # window, metadata.name = the outage name. `onmsctl apply -f` reconciles it
@@ -40,10 +41,11 @@ spec:
     nodes:
       - { foreignSource: labmonkeys-hq, foreignId: web01 }
     # Every node in ANY of these OpenNMS categories (resolved at apply via the
-    # v2 nodes search; snapshot — re-apply to refresh as membership changes).
+    # v2 nodes search). The result is a snapshot. Re-apply to refresh as
+    # membership changes.
     categories: [Routers, Core]
     # Every node at ANY of these monitoring (Minion) locations. Selects whole
-    # nodes by id — the outage model has no location field, so an interface IP
+    # nodes by id. The outage model has no location field, so an interface IP
     # cannot be scoped to a location.
     locations: [Berlin]
     # Nodes whose OpenNMS asset-record field matches (the searchable key/value).

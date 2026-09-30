@@ -8,11 +8,11 @@ import VersionBadge from '@site/src/components/VersionBadge';
 
 <VersionBadge />
 
-A `kubectl`-style command-line interface for [OpenNMS Horizon](https://www.opennms.com/horizon/).
-One declarative entrypoint, `onmsctl apply -f`, peeks each YAML document's `kind` and routes it to the right handler.
-This lets users, event sources and their evaluation order, threshold groups and threshd packages, SNMP config, requisitions, maintenance windows, data-collection sources, and business services all reconcile through a single command.
+Manage [OpenNMS Horizon](https://www.opennms.com/horizon/) configuration as YAML from a `kubectl`-style command line.
+One declarative entrypoint, **`onmsctl apply -f`**, peeks each YAML document's `kind` and routes it to the right handler.
+Users, event sources and their evaluation order, threshold groups and threshd packages, SNMP config, requisitions, maintenance windows, data-collection sources, and business services all reconcile through it.
 The [kind pages](kinds/event-source.mdx) document each one.
-XML→YAML migrators bring legacy eventconf and `provision.pl`-shape files into the loop.
+[XML to YAML migrators](guides/migration.md) bring legacy eventconf and `provision.pl`-shape files into the loop.
 Reads, explicit deletes, and `convert` stay imperative.
 
 Start here: [Install](getting-started/install.md), then the [Quick Start](getting-started/quickstart.md).

@@ -26,7 +26,7 @@ spec:
 
   # → a monitored IP service. The node is resolved by label + location; this
   # auto-covers the service's standard alarms (nodeLostService/interfaceDown/
-  # nodeDown) — no hand-written reduction key needed.
+  # nodeDown). No hand-written reduction key is needed.
   ipServices:
     - node:
         label: webhost01

@@ -3,7 +3,7 @@ title: Read-only contexts
 description: How a read-only context refuses every write verb before any HTTP call.
 ---
 
-Mark a context `read-only: true` (or pass `--read-only` / set `$ONMSCTL_READ_ONLY`) to refuse every Write verb locally, before any HTTP call.
+Mark a context **`read-only: true`** (or pass `--read-only` / set `$ONMSCTL_READ_ONLY`) to refuse every Write verb locally, before any HTTP call.
 This exits with code `12`.
 The flag and `ONMSCTL_READ_ONLY` only turn read-only on.
 `ONMSCTL_READ_ONLY` accepts `1`, `true`, `yes` or `on`; other values leave the context's setting in place.
@@ -20,3 +20,9 @@ contexts:
       basic:
         username: auditor
 ```
+
+A refused Write verb prints one error line that names the active context:
+
+| Code | Message | Probable cause | Recovery |
+|---|---|---|---|
+| 12 | `` error: active context '<name>' is read-only; this is a Write command and was refused locally without issuing any HTTP request. Remove `read-only: true` from the context or switch to a writable context to proceed. `` | A Write verb ran under `--read-only`, `ONMSCTL_READ_ONLY`, or the context's `read-only: true` | Switch to a writable context, or edit the context. |
