@@ -37,6 +37,11 @@ pub struct ApplyParams {
     pub show_diff: bool,
     /// Attempt every item/bucket instead of halting after the first failure.
     pub continue_on_error: bool,
+    /// Re-send documents that plan as unchanged. Only handlers whose
+    /// comparison cannot see every field honour it: `SnmpConfig` (write-only
+    /// secrets are not compared, so a secret-only rotation needs a forced
+    /// write). Other handlers ignore it.
+    pub force: bool,
     /// Every document in this apply, as (kind, metadata.name), in input order.
     /// Read-only context for cross-kind checks at plan time. The router fills
     /// it; a caller's value is replaced.

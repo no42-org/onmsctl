@@ -14,8 +14,9 @@ Targets `/api/v2/snmp-config`.
 `SnmpConfig` is a singleton: `metadata.name` is fixed to `default`.
 
 **Secrets are write-only.** Communities and v3 passphrases are rejected inline; reference an external secret (the same shape as IAM's `passwordRef`).
-They're excluded from the idempotency comparison, so apply cannot push a secret-only change: it reports the config in sync and uploads nothing.
-The resolved secrets are sent with the next apply that also changes a non-secret field.
+They're excluded from the idempotency comparison, so a plain apply reports a secret-only change as in sync and uploads nothing.
+To push a rotated secret, apply with **`--force`**: an in-sync config is re-sent with its resolved secrets.
+Without `--force`, the new secrets go out with the next apply that also changes a non-secret field.
 `snmp export` emits placeholders, never cleartext.
 
 :::note Trap daemon requires a Horizon build with the Trapd REST API
@@ -31,6 +32,7 @@ Apply reconciles by whole-config replace: pull the deployed config, compare igno
 ```sh
 onmsctl apply -f examples/snmp-config.yaml --dry-run --diff
 onmsctl apply -f examples/snmp-config.yaml
+onmsctl apply -f examples/snmp-config.yaml --force   # push a secret-only rotation
 ```
 
 **Order:** `SnmpConfig` applies before `Requisition`, so a co-located directory configures SNMP before importing nodes.

@@ -180,6 +180,12 @@ struct ApplyArgs {
     /// Recurse into subdirectories when the input is a directory (off by default).
     #[arg(short = 'R', long)]
     recursive: bool,
+
+    /// Re-send a document even when it plans as unchanged. Only
+    /// `kind: SnmpConfig` honours it, to push a secret-only rotation (secrets
+    /// are write-only and never compared); other kinds ignore it.
+    #[arg(long)]
+    force: bool,
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -521,6 +527,7 @@ async fn run_apply(args: ApplyArgs, merged: &Overrides) -> Result<()> {
         dry_run: args.dry_run,
         show_diff: args.diff,
         continue_on_error: args.continue_on_error,
+        force: args.force,
         ..Default::default()
     };
 
