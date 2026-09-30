@@ -237,12 +237,12 @@ pub enum Error {
 
     /// **IAM-001** — an `iam apply` would leave a protected role (default
     /// `ROLE_ADMIN`) with zero holders on the server. Refused before any
-    /// write. Overridable with `--allow-admin-lockout --yes`. Dedicated exit
+    /// write. Overridable with the context key `iam.allow-admin-lockout: true`. Dedicated exit
     /// code 13 so ops automation can branch on "admin lockout averted".
     #[error(
         "IAM-001: this apply would remove the last holder of protected role(s) [{roles}]; \
-         refusing to avoid locking everyone out. Re-run with `--allow-admin-lockout --yes` \
-         if this is intentional."
+         refusing to avoid locking everyone out. If this is intentional, set \
+         `iam.allow-admin-lockout: true` in the context and re-run."
     )]
     IamLockout { roles: String },
 
