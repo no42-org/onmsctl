@@ -128,6 +128,7 @@ Apply **never deletes** sources or profiles.
 Sources no document declares are left alone.
 A detached profile stays on the server.
 A `profileSpec` profile not listed in `spec.profiles` is reconciled, but the source is not attached to it.
+Plan prints `warning: <name>: spec.profileSpec.name "<profile>" is not listed in spec.profiles` to stderr when this happens.
 
 If a write fails partway, the result lists the steps that completed, then `FAILED:` and the error.
 
