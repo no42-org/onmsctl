@@ -109,6 +109,10 @@ impl KindHandler for DataCollectionSourceHandler {
                     ))
                 })?;
             local.validate()?;
+            // Advisory warnings (e.g. a profileSpec not listed in profiles), non-fatal.
+            for w in local.warnings() {
+                eprintln!("warning: {}: {w}", local.metadata.name);
+            }
             if !seen.insert(local.metadata.name.clone()) {
                 return Err(Error::Config(format!(
                     "duplicate kind: DataCollectionSource metadata.name {:?} — names must be unique \
