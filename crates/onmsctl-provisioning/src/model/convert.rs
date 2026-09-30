@@ -17,10 +17,10 @@
 //!   local form, so the dropped fields can't surface false positives.
 //!
 //! - **Local → Server** reconstructs wire shape with empty / `null`
-//!   defaults for the unmodeled fields. POSTing this is acceptable
-//!   for a CLI-authored requisition (foreign data the operator
-//!   didn't write); Horizon fills in server-derived fields on its
-//!   own.
+//!   defaults for the unmodeled fields. On a create that is the whole
+//!   story. On an update, [`preserve_unmodeled`] copies the server's
+//!   values for those fields into the body first, so apply never drops
+//!   data it does not own.
 //!
 //! Where the wire and local types use different shapes (categories as
 //! `[{name}]` vs `[String]`, assets as `[{name,value}]` vs
@@ -144,6 +144,52 @@ fn interface_from_wire(i: &InterfaceServer) -> Interface {
 // ---------------------------------------------------------------------------
 // Local → Server — used as the apply payload (POSTs to Horizon)
 // ---------------------------------------------------------------------------
+
+/// Carry the live requisition's unmodeled fields into an update body.
+///
+/// `requisition_to_wire` sends every field the local model does not own as
+/// empty, and a POST replaces the requisition. On an update, copy those
+/// fields from `live` so apply never drops what it does not manage. Nodes
+/// match by `foreign-id`, interfaces by `ip-addr` within their node,
+/// services by `service-name` within their interface. Entries new in the
+/// document get nothing; entries the document removed stay removed.
+pub fn preserve_unmodeled(wire: &mut RequisitionServer, live: &RequisitionServer) {
+    for node in &mut wire.node {
+        let Some(live_node) = live.node.iter().find(|n| n.foreign_id == node.foreign_id) else {
+            continue;
+        };
+        node.building = live_node.building.clone();
+        node.city = live_node.city.clone();
+        node.parent_foreign_source = live_node.parent_foreign_source.clone();
+        node.parent_foreign_id = live_node.parent_foreign_id.clone();
+        node.parent_node_label = live_node.parent_node_label.clone();
+        node.meta_data = live_node.meta_data.clone();
+        for iface in &mut node.interface {
+            let Some(live_if) = live_node
+                .interface
+                .iter()
+                .find(|i| i.ip_addr == iface.ip_addr)
+            else {
+                continue;
+            };
+            iface.descr = live_if.descr.clone();
+            iface.status = live_if.status;
+            iface.managed = live_if.managed;
+            iface.category = live_if.category.clone();
+            iface.meta_data = live_if.meta_data.clone();
+            for svc in &mut iface.monitored_service {
+                if let Some(live_svc) = live_if
+                    .monitored_service
+                    .iter()
+                    .find(|s| s.service_name == svc.service_name)
+                {
+                    svc.category = live_svc.category.clone();
+                    svc.meta_data = live_svc.meta_data.clone();
+                }
+            }
+        }
+    }
+}
 
 /// Project a [`RequisitionLocal`] onto two server payloads suitable
 /// for POSTing to `/rest/requisitions/{fs}` and (when
@@ -275,6 +321,102 @@ fn interface_to_wire(i: &Interface) -> InterfaceServer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn wire(json: serde_json::Value) -> RequisitionServer {
+        serde_json::from_value(json).unwrap()
+    }
+
+    /// The live requisition: every unmodeled field populated at all three
+    /// levels, plus a node and an interface the document no longer has.
+    fn live() -> RequisitionServer {
+        let md = |k: &str| serde_json::json!([{"context": "requisition", "key": k, "value": "v"}]);
+        wire(serde_json::json!({"foreign-source": "acme", "node": [
+            {"foreign-id": "web01", "node-label": "old-label", "building": "HQ", "city": "Fulda",
+             "parent-foreign-source": "core", "parent-foreign-id": "sw1", "parent-node-label": "sw1",
+             "meta-data": md("node"),
+             "interface": [
+                {"ip-addr": "10.0.0.1", "snmp-primary": "P", "status": 1, "managed": true,
+                 "descr": "uplink", "category": [{"name": "Uplinks"}], "meta-data": md("if"),
+                 "monitored-service": [
+                    {"service-name": "ICMP", "category": [{"name": "Ping"}], "meta-data": md("svc")}
+                 ]},
+                {"ip-addr": "10.0.0.9", "snmp-primary": "N", "descr": "gone"}
+             ]},
+            {"foreign-id": "old01", "node-label": "removed", "meta-data": md("gone")}
+        ]}))
+    }
+
+    /// What `requisition_to_wire` produces from a document that renamed
+    /// web01, dropped 10.0.0.9 and old01, and added db01 and 10.0.0.2.
+    fn desired() -> RequisitionServer {
+        wire(serde_json::json!({"foreign-source": "acme", "node": [
+            {"foreign-id": "web01", "node-label": "web01.acme",
+             "interface": [
+                {"ip-addr": "10.0.0.1", "snmp-primary": "P",
+                 "monitored-service": [{"service-name": "ICMP"}, {"service-name": "SNMP"}]},
+                {"ip-addr": "10.0.0.2", "snmp-primary": "N"}
+             ]},
+            {"foreign-id": "db01", "node-label": "db01.acme"}
+        ]}))
+    }
+
+    #[test]
+    fn preserve_unmodeled_copies_server_fields_at_every_level() {
+        let mut w = desired();
+        preserve_unmodeled(&mut w, &live());
+        let n = &w.node[0];
+        assert_eq!(
+            n.node_label, "web01.acme",
+            "modeled fields stay from the document"
+        );
+        assert_eq!(n.building.as_deref(), Some("HQ"));
+        assert_eq!(n.city.as_deref(), Some("Fulda"));
+        assert_eq!(n.parent_foreign_source.as_deref(), Some("core"));
+        assert_eq!(n.parent_foreign_id.as_deref(), Some("sw1"));
+        assert_eq!(n.parent_node_label.as_deref(), Some("sw1"));
+        assert_eq!(n.meta_data[0].key, "node");
+        let i = &n.interface[0];
+        assert_eq!(i.descr.as_deref(), Some("uplink"));
+        assert_eq!((i.status, i.managed), (Some(1), Some(true)));
+        assert_eq!(i.category[0].name, "Uplinks");
+        assert_eq!(i.meta_data[0].key, "if");
+        let icmp = &i.monitored_service[0];
+        assert_eq!(
+            (
+                icmp.category[0].name.as_str(),
+                icmp.meta_data[0].key.as_str()
+            ),
+            ("Ping", "svc")
+        );
+    }
+
+    #[test]
+    fn preserve_unmodeled_leaves_new_entries_and_does_not_resurrect_removed_ones() {
+        let mut w = desired();
+        preserve_unmodeled(&mut w, &live());
+        let snmp = &w.node[0].interface[0].monitored_service[1];
+        assert!(
+            snmp.category.is_empty() && snmp.meta_data.is_empty(),
+            "new service gets nothing"
+        );
+        let new_if = &w.node[0].interface[1];
+        assert_eq!(
+            (new_if.descr.as_ref(), new_if.meta_data.len()),
+            (None, 0),
+            "new interface gets nothing"
+        );
+        let db = &w.node[1];
+        assert!(
+            db.meta_data.is_empty() && db.building.is_none(),
+            "new node gets nothing"
+        );
+        assert_eq!(w.node.len(), 2, "removed node old01 is not resurrected");
+        assert_eq!(
+            w.node[0].interface.len(),
+            2,
+            "removed interface 10.0.0.9 is not resurrected"
+        );
+    }
 
     const REQUISITION_FIXTURE: &str = include_str!("../../tests/fixtures/requisition.json");
     const FOREIGN_SOURCE_FIXTURE: &str = include_str!("../../tests/fixtures/foreign_source.json");

@@ -77,8 +77,22 @@ Run `onmsctl requisition export <name>` first to keep a copy.
 ### Unmodeled XML is recorded, not applied
 
 `convert` keeps XML that the YAML model doesn't represent under `metadata.x-onmsctl-unmodeled`, for review in the local YAML only.
-`apply` strips the annotation before the diff and the wire body, so those fields never reach Horizon.
-A requisition that replaces one carrying them drops them from the server.
+`apply` strips the annotation before the diff and the wire body, so its values are never sent to Horizon.
+
+### Server fields onmsctl does not model
+
+`export` omits requisition fields the YAML model does not represent.
+On an update, **apply keeps the server's values** for them, so editing an exported requisition never drops them:
+
+| Level | Kept from the server | Matched by |
+|---|---|---|
+| Node | `meta-data`, `parent-foreign-source`, `parent-foreign-id`, `parent-node-label`, `building`, `city` | `foreignId` |
+| Interface | `meta-data`, `category`, `descr`, `status`, `managed` | `ip` within its node |
+| Service | `meta-data`, `category` | service name within its interface |
+
+A node, interface or service new in the document starts without them.
+One the document removes is removed with them.
+onmsctl cannot set or remove these fields; change them in Horizon.
 
 ## Apply
 
