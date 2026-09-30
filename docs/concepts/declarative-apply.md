@@ -10,16 +10,16 @@ Recognized kinds:
 
 | `kind` | `apiVersion` | Reconciles |
 |---|---|---|
-| `User` | `onmsctl.no42.org/v1alpha1` | Horizon users + roles |
-| `EventSource` | `eventconf.opennms.org/v1` | event configuration sources |
-| `EventSourceOrder` | `eventconf.opennms.org/v1` | event-source evaluation order (singleton) |
-| `ThresholdGroup` | `thresholding.opennms.org/v1` | threshold groups (thresholds and expressions) |
-| `ThreshdPackage` | `thresholding.opennms.org/v1` | threshd packages (what is thresholded, with which group) |
-| `SnmpConfig` | `snmp.opennms.org/v1` | SNMP agent + trap-daemon config (singleton) |
-| `Requisition` | `provisioning.opennms.org/v1` | provisioning requisitions |
-| `Maintenance` | `maintenance.opennms.org/v1` | scheduled-outage maintenance windows |
-| `DataCollectionSource` | `datacollection.opennms.org/v1` | SNMP data-collection sources |
-| `BusinessService` | `bsm.opennms.org/v1` | Business Service Monitoring (BSM) services + edges |
+| [`User`](../kinds/user.mdx) | `onmsctl.no42.org/v1alpha1` | Horizon users + roles |
+| [`EventSource`](../kinds/event-source.mdx) | `eventconf.opennms.org/v1` | event configuration sources |
+| [`EventSourceOrder`](../kinds/event-source-order.mdx) | `eventconf.opennms.org/v1` | event-source evaluation order (singleton) |
+| [`ThresholdGroup`](../kinds/threshold-group.mdx) | `thresholding.opennms.org/v1` | threshold groups (thresholds and expressions) |
+| [`ThreshdPackage`](../kinds/threshd-package.mdx) | `thresholding.opennms.org/v1` | threshd packages (what is thresholded, with which group) |
+| [`SnmpConfig`](../kinds/snmp-config.mdx) | `snmp.opennms.org/v1` | SNMP agent + trap-daemon config (singleton) |
+| [`Requisition`](../kinds/requisition.mdx) | `provisioning.opennms.org/v1` | provisioning requisitions |
+| [`Maintenance`](../kinds/maintenance.mdx) | `maintenance.opennms.org/v1` | scheduled-outage maintenance windows |
+| [`DataCollectionSource`](../kinds/datacollection-source.mdx) | `datacollection.opennms.org/v1` | SNMP data-collection sources |
+| [`BusinessService`](../kinds/business-service.mdx) | `bsm.opennms.org/v1` | Business Service Monitoring (BSM) services + edges |
 
 A single file may hold many `---`-separated documents, and a directory can mix all kinds.
 
@@ -49,13 +49,7 @@ onmsctl apply -f ./desired-state/ -R              # recurse into subdirs
 onmsctl apply -f 'sources/cisco-*.yaml'           # glob (quote it)
 ```
 
-| Flag | Behavior |
-|---|---|
-| `--dry-run` | Plan only; zero mutating HTTP. Classifies as a Read, so `--read-only` contexts may run it. |
-| `--diff` | Render each kind-bucket's diff to stderr (stdout stays clean for `-o json/yaml`). |
-| `--continue-on-error` (alias `--keep-going`) | Keep applying after a failing document. Default is stop-on-error. |
-| `-R` / `--recursive` | Recurse into subdirectories (off by default). |
-| `--force` | Re-send a document that plans as unchanged. Only `SnmpConfig` honours it, to push a secret-only rotation; other kinds ignore it. |
+The `apply` flags (`--dry-run`, `--diff`, `--continue-on-error`, `-R`, `--force`) are listed under [apply flags](../reference/global-flags.md#apply-flags).
 
 **Exit codes:** `0` means every document applied or was unchanged.
 `1` means a document failed or the plan gate refused the input.
