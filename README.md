@@ -19,10 +19,6 @@ stay imperative.
 > **New to onmsctl?** Start with [Getting started](https://onmsctl.no42.org/getting-started/install) — install,
 > configure a context, and run your first `apply` in a few minutes.
 
-> **Pre-stability notice.** `v0.x.y` releases may break CLI flags, the config
-> schema, and the `EventSource` YAML schema between minor versions. Surfaces
-> stabilize at `v1.0.0`.
-
 ## Install
 
 ```sh
