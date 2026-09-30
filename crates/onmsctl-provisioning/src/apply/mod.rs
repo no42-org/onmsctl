@@ -145,6 +145,10 @@ pub struct RequisitionPlan {
     pub pre_trigger_last_import_ms: Option<i64>,
     /// Scan-relevant leaves the rescan auto-decision considered.
     pub scan_relevant_leaves: Vec<String>,
+    /// The server's requisition at plan time, if any. On an update its
+    /// unmodeled fields are carried into the POST body (see
+    /// [`crate::model::convert::preserve_unmodeled`]).
+    pub original_remote_req: Option<RequisitionServer>,
 }
 
 /// What Phase 2 would do for a given plan.
@@ -346,6 +350,7 @@ pub async fn plan_requisition(
             original_remote_fs: remote_fs,
             pre_trigger_last_import_ms,
             scan_relevant_leaves: vec![],
+            original_remote_req: remote_req,
         });
     }
 
@@ -377,6 +382,7 @@ pub async fn plan_requisition(
         original_remote_fs: remote_fs,
         pre_trigger_last_import_ms,
         scan_relevant_leaves,
+        original_remote_req: remote_req,
     })
 }
 
@@ -395,7 +401,11 @@ pub async fn execute_plan(
     }
 
     let fs_name = plan.local.metadata.name.clone();
-    let (wire_req, wire_fs) = requisition_to_wire(&plan.local);
+    let (mut wire_req, wire_fs) = requisition_to_wire(&plan.local);
+    // Apply does not own the unmodeled fields: keep the server's values.
+    if let Some(live) = &plan.original_remote_req {
+        crate::model::convert::preserve_unmodeled(&mut wire_req, live);
+    }
 
     match plan.foreign_source_action {
         ForeignSourceAction::Created | ForeignSourceAction::Updated => {
@@ -679,6 +689,76 @@ mod tests {
         assert_eq!(outcome.foreign_source_action, ForeignSourceAction::NoChange);
         assert_eq!(outcome.state, ApplyState::Unchanged);
         // No mutating mocks: a re-POST of the FS or requisition would panic.
+    }
+
+    // -- Path 2c: an update keeps the server's unmodeled fields ------------
+
+    #[tokio::test]
+    async fn update_keeps_unmodeled_server_fields() {
+        let (server, client) = mock_with_client().await;
+        let api = ProvisioningApi::new(&client);
+
+        Mock::given(method("GET"))
+            .and(path("/rest/requisitions/acme-prod"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "foreign-source": "acme-prod",
+                "node": [{"foreign-id": "web01", "node-label": "old-label",
+                    "meta-data": [{"context": "requisition", "key": "cpu-high", "value": "90"}],
+                    "interface": [{"ip-addr": "10.0.0.1", "snmp-primary": "P", "descr": "uplink",
+                        "monitored-service": []}]}]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/rest/foreignSources/acme-prod"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/rest/foreignSources/default"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(empty_default_fs_response()))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/rest/requisitions"))
+            .respond_with(ResponseTemplate::new(202))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/rest/requisitions/acme-prod/import"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let local = parse_local(
+            "apiVersion: provisioning.opennms.org/v1\n\
+             kind: Requisition\n\
+             metadata:\n  name: acme-prod\n\
+             spec:\n  nodes:\n    - foreignId: web01\n      label: new-label\n\
+             \x20     interfaces:\n        - ip: 10.0.0.1\n          snmpPrimary: P\n",
+        );
+        let outcome = apply_requisition(&local, &api, &ApplyOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(outcome.state, ApplyState::Updated);
+
+        let reqs = server.received_requests().await.unwrap();
+        let post = reqs
+            .iter()
+            .find(|r| r.method.as_str() == "POST")
+            .expect("requisition POST");
+        let body: serde_json::Value = serde_json::from_slice(&post.body).unwrap();
+        let node = &body["node"][0];
+        assert_eq!(node["node-label"], "new-label", "the document's edit lands");
+        assert_eq!(
+            node["meta-data"][0]["key"], "cpu-high",
+            "server meta-data kept: {body}"
+        );
+        assert_eq!(
+            node["interface"][0]["descr"], "uplink",
+            "server descr kept: {body}"
+        );
     }
 
     // -- Path 3: dry-run never writes ------------------------------------
