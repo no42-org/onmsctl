@@ -6,66 +6,220 @@ description: Describe a Business Service Monitoring hierarchy declaratively, wit
 import CodeBlock from '@theme/CodeBlock';
 import example from '!!raw-loader!../../examples/business-service.yaml';
 
-Describe a Business Service Monitoring (BSM) hierarchy declaratively: a service, its per-service reduce function, optional attributes, and four kinds of edge (to child services, monitored IP services, applications, and raw alarm reduction keys), each with a `weight` and optional per-edge map function.
-Maps to the v2 `/api/v2/business-services` surface; named and multi-instance (one document per service).
-There is no version gate: the API is present in every supported Horizon/Meridian.
+Declare one Business Service Monitoring (BSM) service per document.
+A service has attributes, a reduce function and four kinds of edge: child services, monitored IP services, applications and raw alarm reduction keys.
+Each edge has a `weight` and an optional map function.
+Targets `/api/v2/business-services`.
+See the [compatibility table](../reference/compatibility.md) for supported servers.
 
 ## YAML
 
-```yaml
-apiVersion: bsm.opennms.org/v1
-kind: BusinessService
-metadata: { name: web-frontend }
-spec:
-  attributes: { owner: platform-team }
-  reduceFunction:
-    type: Threshold                 # HighestSeverity | Threshold | HighestSeverityAbove | ExponentialPropagation
-    properties: { threshold: "0.75" }
-  childServices:                    # → another BusinessService, by name
-    - { name: database-tier, weight: 2, mapFunction: { type: Increase } }
-  ipServices:                       # → a monitored service; node by label+location
-    - node: { label: webhost01, location: Default }
-      ipAddress: 10.0.0.10
-      service: HTTP
-  applications:                     # → an OpenNMS Application, by name
-    - { name: Webservers }
-  reductionKeys:                    # → a raw alarm reduction key (escape hatch)
-    - reductionKey: "uei.opennms.org/threshold/highThresholdExceeded::{{nodeId}}:10.0.0.10:ifHCInOctets:90.0:3:75.0:Gi1/0/1"
-      node: { label: webhost01 }    # resolves {{nodeId}} at apply
-      mapFunction: { type: SetTo, properties: { status: Major } }
-```
+`BusinessService` is named and multi-instance: `metadata.name` is the service name.
+Unknown fields are rejected.
 
-References are by name (BSM's REST API is ID-centric; onmsctl resolves names to ids at apply, so the same YAML is portable across instances).
+| Field | Type | Default | Description |
+|---|---|---|---|
+| **`apiVersion`** | string | required | `bsm.opennms.org/v1` |
+| **`kind`** | string | required | `BusinessService` |
+| **`metadata.name`** | string | required | Service name. Must not be empty. Must be unique within an apply. |
+| **`spec.attributes`** | map of string to string | `{}` | Free-form key/value attributes. |
+| **`spec.reduceFunction`** | function | `{type: HighestSeverity}` | How edge severities aggregate into the service status. |
+| **`spec.childServices`** | list of child edges | `[]` | Edges to other Business Services. |
+| **`spec.ipServices`** | list of IP service edges | `[]` | Edges to monitored services on a node interface. |
+| **`spec.applications`** | list of application edges | `[]` | Edges to OpenNMS Applications. |
+| **`spec.reductionKeys`** | list of reduction-key edges | `[]` | Edges to raw alarm reduction keys. |
 
-**Node references.** A `node` is `{label, location}` (the default location is `Default`) or `{foreignSource, foreignId}`.
-Labels are not unique in OpenNMS; an ambiguous label fails the apply and tells you to use the foreignSource/foreignId form.
+References are by name.
+The BSM REST API is ID-centric, so onmsctl resolves names to ids at apply.
+The same YAML is portable across instances.
 
-**Prefer `ipServices` over hand-written reduction keys.** An `ipServices` edge auto-covers the service's standard alarms (`nodeLostService`/`interfaceDown`/`nodeDown`), so you never type a node id.
-Reach for `reductionKeys` only for custom alarms (thresholds, custom UEIs, situations); the literal key must match a resolved alarm reduction key (copy it from a real alarm, not the event-def formula), and `{{nodeId}}` (plus `{{foreignSource}}`/`{{foreignId}}`/`{{nodeLabel}}`) is expanded from the edge's `node`.
+### Functions
+
+A reduce or map function is a `type` plus string-valued `properties`.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| **`type`** | string | required | Function name, from the tables below. |
+| **`properties`** | map of string to string | `{}` | Parameters the function needs. Quote numbers, such as `threshold: "0.75"`. |
+
+Reduce functions, for `spec.reduceFunction`:
+
+| Type | Required properties | Validation |
+|---|---|---|
+| **`HighestSeverity`** | none | Default when `reduceFunction` is omitted. |
+| **`Threshold`** | `threshold` | A number in `(0, 1]`. |
+| **`HighestSeverityAbove`** | `threshold` | A status: `Indeterminate`, `Normal`, `Warning`, `Minor`, `Major` or `Critical`. |
+| **`ExponentialPropagation`** | `base` | A number greater than `1.0`. |
+
+Map functions, for an edge's `mapFunction`:
+
+| Type | Required properties | Validation |
+|---|---|---|
+| **`Identity`** | none | Default when `mapFunction` is omitted. |
+| **`Increase`** | none | |
+| **`Decrease`** | none | |
+| **`Ignore`** | none | |
+| **`SetTo`** | `status` | A status: `Indeterminate`, `Normal`, `Warning`, `Minor`, `Major` or `Critical`. |
+
+Status names are case-insensitive.
+
+### Edges
+
+Every edge type has these two fields:
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| **`weight`** | integer | `1` | Edge weight. Must be `>= 1`. |
+| **`mapFunction`** | function | `{type: Identity}` | Severity transform for this edge. |
+
+`childServices` entries:
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| **`name`** | string | required | Name of another Business Service. It must exist on the server or be a document in the same apply. |
+
+`ipServices` entries:
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| **`node`** | node reference | required | The node that hosts the service. |
+| **`ipAddress`** | string | required | Interface IP address. Must parse as an IPv4 or IPv6 address. |
+| **`service`** | string | required | Monitored service name, such as `HTTP`. Must not be empty. |
+| **`friendlyName`** | string | none | Display name for the edge. |
+
+`applications` entries:
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| **`name`** | string | required | Name of an OpenNMS Application on the server. |
+
+`reductionKeys` entries:
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| **`reductionKey`** | string | required | Alarm reduction key. Must not be empty. May contain `{{token}}` placeholders. |
+| **`node`** | node reference | none | Node that expands the tokens. Required when the key has a token. An error when the key has none. |
+| **`friendlyName`** | string | none | Display name for the edge. |
+
+### Node references
+
+A node reference uses exactly one of two forms.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| **`label`** | string | required in the label form | Node label. Must not be empty. |
+| **`location`** | string | `Default` | Monitoring location. Only valid in the label form. |
+| **`foreignSource`** | string | required in the foreign form | Requisition name. Must not be empty. |
+| **`foreignId`** | string | required in the foreign form | Node foreign ID. Must not be empty. |
+
+Mixing `label` with `foreignSource` or `foreignId` is an error.
+Labels are not unique in OpenNMS.
+A label that matches more than one node in the location fails the apply.
+Use `{foreignSource, foreignId}` when a label is not unique.
+
+### Reduction-key templates
+
+A `reductionKey` can contain these tokens, matched case-insensitively:
+
+| Token | Needs node form | Expands to |
+|---|---|---|
+| **`{{nodeId}}`** | either | The numeric node id, resolved at apply. |
+| **`{{foreignSource}}`** | `{foreignSource, foreignId}` | The reference's `foreignSource`. |
+| **`{{foreignId}}`** | `{foreignSource, foreignId}` | The reference's `foreignId`. |
+| **`{{nodeLabel}}`** | `{label, location}` | The reference's `label`. |
+
+Any other token is an error.
+A token that the node form cannot supply fails at plan, before any request.
+
+Prefer `ipServices` over hand-written reduction keys.
+An `ipServices` edge needs no node id.
+It follows the service's standard alarms, such as `nodeLostService`, `interfaceDown` and `nodeDown` (Horizon behaviour).
+Use `reductionKeys` for custom alarms: thresholds, custom UEIs and situations.
+The expanded key must match a real alarm's reduction key.
+Copy it from a real alarm, not from the event definition's formula.
 
 ## Apply
 
 ```sh
 onmsctl apply -f examples/business-service.yaml --dry-run --diff
+onmsctl apply -f examples/business-service.yaml
 ```
 
-**Whole-object reconcile.** A service is created then fully PUT (a destructive full replace).
-Edges omitted from a document are pruned; an unchanged service (order-insensitive) is a no-op.
-Child references are resolved by a two-pass apply (create, then PUT with resolved ids), so two new services can reference each other in one file regardless of order; a child cycle fails at plan time.
+- Apply reconciles each service as a whole object.
+- A new service is created, then fully replaced with a PUT.
+- A changed service is fully replaced with a PUT. Edges omitted from the document are removed.
+- A service that matches the document sends no write. Edge order does not matter.
+- Apply never deletes a service. A service on the server but absent from the apply stays. Remove it with `business-service delete`.
 
-**Across-apply non-deletion.** A service present on the server but absent from your apply is not deleted; use `business-service delete <name>`.
+**Two-pass execute:** pass 1 creates each new service with its name, attributes and reduce function only.
+Pass 2 PUTs the full body, with every edge resolved to an id.
+Two new services can reference each other's names in one file, in any order.
 
-**Daemon reload.** Changes are inert until `bsmd` reloads; a mutating apply (and `delete`) issues exactly one `daemon/reload` automatically.
+**Plan gates:** every check below runs before any write.
+One failure aborts the whole apply.
+
+- `metadata.name` is unique within the apply.
+- Each document passes the field validation above.
+- Child references form no cycle among the applied services.
+- Every application, node, monitored service and child service resolves on the server or in the apply.
+
+**Daemon reload:** changes stay inert until bsmd reloads.
+After any successful write, apply sends one `POST /api/v2/business-services/daemon/reload`.
+A failed reload does not fail the apply.
+It prints a warning that names the reload endpoint.
+Reload bsmd by hand.
+
+**Order:** `BusinessService` applies last, after `DataCollectionSource`.
+It has no cross-kind dependencies.
+The two-pass execute orders child references within the kind.
+
+## Diff
+
+`--diff` prints one fixed reconcile note for the kind.
+It shows no per-field changes.
+The per-service action (create, update or unchanged) appears in the apply output.
+
+```text
+business-service: each service is reconciled as a whole object (create / full PUT). Edges omitted from a document are pruned; a service present on the server but absent from this apply is NOT deleted (use `onmsctl business-service delete <name>`).
+```
 
 ## Inspect and delete
 
 ```sh
-onmsctl business-service list                   # or: onmsctl bs list
+onmsctl business-service list
+onmsctl bs list
 onmsctl business-service get web-frontend
-onmsctl business-service delete web-frontend     # explicit removal
+onmsctl business-service delete web-frontend
 ```
 
-`list`/`get` are Read; `apply`/`delete` are Write.
+- `bs` is an alias for `business-service`.
+- `list` prints one row per service with its edge counts: `NAME`, `CHILDREN`, `IP-SERVICES`, `APPLICATIONS` and `REDUCTION-KEYS`.
+- `get <name>` prints the same row for one service.
+- `delete <name>` removes the service, then reloads bsmd.
+- If the reload fails after the delete, `delete` prints a warning and exits successfully. Reload bsmd by hand.
+
+## Errors
+
+| Message | Probable cause | Recovery |
+|---|---|---|
+| `is ambiguous` | The node label matches more than one node in the location. | Use a `{foreignSource, foreignId}` node reference. |
+| `no node matches label` | No node has that label in the location. The location defaults to `Default`. | Fix `label`, or set `location`. |
+| `not found (not on the server and not in this apply)` | A `childServices` name is unknown. | Fix the name, or add the child's document to the apply. |
+| `child references form a cycle` | Services in the apply reference each other in a loop. | Remove one child edge from the loop. |
+| `names must be unique within an apply` | Two documents share a `metadata.name`. | Rename or remove one document. |
+| `unsupported template token` | The reduction key uses a token other than `nodeId`, `foreignSource`, `foreignId` or `nodeLabel`. | Use a supported token, or write the value literally. |
+| `requires a {foreignSource, foreignId} node reference` | `{{foreignSource}}` or `{{foreignId}}` with a label-form node. | Switch the node to `{foreignSource, foreignId}`. |
+| `requires a {label, location} node reference` | `{{nodeLabel}}` with a foreign-form node. | Switch the node to `{label, location}`, or drop the token. |
+| ``no `node` reference was given to resolve it`` | The reduction key has a token but the edge has no `node`. | Add `node`. |
+| `contains no {{token}} to expand` | The edge has a `node` but the key has no token. | Remove `node`, or add the token. |
+| `weight must be >= 1` | An edge has `weight` 0 or negative. | Set `weight` to 1 or more. |
+| ``mapFunction SetTo requires a `status` property`` | `SetTo` without `properties.status`. | Add `status`, such as `Major`. |
+| `is not a known reduce function` | A typo in `reduceFunction.type`. | Use a type from the reduce function table. |
+| `threshold must be in (0, 1]` | `Threshold` with a value outside the range. | Use a fraction such as `"0.75"`. |
+| `base must be > 1.0` | `ExponentialPropagation` with a base of 1 or less. | Use a base greater than 1. |
+| `not found (resolve to an id failed)` | No Application with that name on the server. | Create the Application, or fix the name. |
+| `monitored service` | The node has no such service on that IP. | Fix `ipAddress` or `service`, or provision the service. |
+| `bsmd daemon/reload failed` | The write succeeded but the reload call failed. The changes are inert. | Reload bsmd with `POST /api/v2/business-services/daemon/reload`. |
 
 ## Example
 

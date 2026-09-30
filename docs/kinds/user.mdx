@@ -6,73 +6,174 @@ description: Manage Horizon users and roles declaratively, and read, rotate, or 
 import CodeBlock from '@theme/CodeBlock';
 import example from '!!raw-loader!../../examples/iam-user.yaml';
 
-Manage Horizon users and roles declaratively (`kind: User`) and imperatively via the read / rotate / delete verbs.
-Targets the `users` REST surface on Horizon 35+.
+Declare one Horizon user per document: its profile fields, its roles, and the secret its initial password comes from.
+Targets `/rest/users`.
+Works on any supported Horizon; there is no version check.
 
 ## YAML
 
+| Field | Type | Default | Description |
+|---|---|---|---|
+| **`apiVersion`** | string | required | `onmsctl.no42.org/v1alpha1` |
+| **`kind`** | string | required | `User` |
+| **`metadata.name`** | string | required | Username. Must not be empty or numeric-only (`PR-IAM-003`). |
+| **`metadata.x-onmsctl-unmodeled`** | map | none | Server fields the model does not cover. Written by `export`, stripped before apply and before comparison. |
+| **`spec.fullName`** | string | none | Display name. |
+| **`spec.email`** | string | none | Email address. |
+| **`spec.comments`** | string | none | Free text. |
+| **`spec.dutySchedule`** | string | none | Duty schedule, such as `MoTuWeThFr0800-1700`. Create-only. |
+| **`spec.roles`** | list of strings | `[]` | Roles the user holds. A duplicate or empty entry fails the parse. |
+| **`spec.passwordRef`** | secret reference | none | Source of the initial password. Required to create a user. Ignored on an existing user. |
+
+Unknown keys under `spec` fail the parse.
+A literal `spec.password` fails the parse with `PR-IAM-001`.
+
+`passwordRef` names exactly one source:
+
+| Form | Reads |
+|---|---|
+| `{ fromFile: <path> }` | The file content, minus one trailing newline. |
+| `{ fromEnv: <VAR> }` | The environment variable. |
+| `{ fromKeyring: { service: <s>, account: <a> } }` | The OS keyring entry. |
+
+A reference with two sources fails the parse.
+A `fromFile` path must not be a symlink or writable beyond its owner.
+A file readable beyond its owner prints a warning.
+The file must hold one line of at most 4 KiB.
+The resolved password must not be empty.
+
+A role outside the known-roles set prints a `PR-IAM-006` warning and is applied anyway.
+
+### Context settings
+
+A context can tune user apply under an `iam:` block:
+
 ```yaml
-apiVersion: onmsctl.no42.org/v1alpha1
-kind: User
-metadata:
-  name: jdoe
-spec:
-  fullName: Jane Doe
-  email: jane@example.com
-  roles: [ROLE_USER]
-  passwordRef:            # passwords are create-only and never inline
-    fromEnv: JDOE_PASSWORD
+contexts:
+  - name: prod
+    iam:
+      protected-roles: [ROLE_ADMIN]
+      known-roles: [ROLE_USER, ROLE_ADMIN, ROLE_REST]
+      allow-admin-lockout: false
 ```
 
-**Roles reconcile as a set.** `roles: [B, C]` against a server holding `[A, B]` grants `C`, revokes `A`, and keeps `B`.
-Omitted scalar fields never clear the server value: this is a merge, not a replace.
+| Key | Type | Default | Description |
+|---|---|---|---|
+| **`protected-roles`** | list of strings | `[ROLE_ADMIN]` | Roles apply refuses to leave without a holder (`IAM-001`). An empty list disables the check. |
+| **`known-roles`** | list of strings | the 16 Horizon built-in roles | Roles that pass without a `PR-IAM-006` warning. |
+| **`allow-admin-lockout`** | boolean | `false` | Skip the `IAM-001` refusal. |
 
-**`passwordRef`: passwords are create-only and never inline.** A literal `password:` is rejected at parse (`PR-IAM-001`); reference exactly one external secret:
-
-- `passwordRef: { fromFile: /run/secrets/alice.pw }`
-- `passwordRef: { fromEnv: ALICE_PW }`
-- `passwordRef: { fromKeyring: { service: onmsctl, account: alice } }`
-
-Creating a user requires a `passwordRef`; a create without one fails that user (`PR-IAM-005`).
-On an existing user the `passwordRef` is ignored with a warning (`PR-IAM-008`): `apply` never rotates a password (it can't read the current password to diff), so use `iam user set-password`.
-
-`dutySchedule` is create-only (`PR-IAM-004` warns on change); a purely numeric `metadata.name` is refused (`PR-IAM-003`).
-
-A context may tune defaults under an `iam:` block (`protected-roles`, `known-roles`, `allow-admin-lockout`).
+A list you set replaces the default. It does not extend it.
+Role names match verbatim, so an entry with leading or trailing whitespace fails the config load.
+Unknown keys in the block fail the config load.
+See [Configure a context](../getting-started/configure-context.md).
 
 ## Apply
 
 ```sh
-JDOE_PASSWORD=… onmsctl apply -f user.yaml --dry-run --diff
-JDOE_PASSWORD=… onmsctl apply -f user.yaml
-onmsctl apply -f ./users/ --dry-run --diff            # preview
-onmsctl apply -f ./users/                             # apply
+onmsctl apply -f ./users/ --dry-run
+JDOE_PASSWORD=… onmsctl apply -f ./users/
 ```
 
-**Lockout protection.** Apply refuses a plan that would empty a protected role (`IAM-001`, exit 13; override per-context with `allow-admin-lockout: true`) or strip or delete the calling user's own protected role (`IAM-002`, exit 14, no override).
-If `whoami` is unavailable for a self-affecting change, apply refuses (exit 15) rather than skip the check.
+- Apply creates an absent user with its roles in one request.
+- On an existing user it sends only the scalar fields the document sets and the server holds differently.
+- An omitted `fullName`, `email` or `comments` never clears the server value.
+- Roles reconcile as a set. `roles: [B, C]` against a server holding `[A, B]` grants `C`, revokes `A`, and keeps `B`.
+- Writes run in this order: creates, field updates, role grants, role revokes.
+- Apply never deletes. Users no document declares are left alone.
+- A matching user reports `in sync` and sends no request.
 
-## Inspect and delete
+:::warning An omitted `roles` list revokes every role
+`roles` is reconciled as a set even when the document leaves it out.
+An existing user applied without `roles` loses every role it holds.
+List every role the user should keep, and preview with `--dry-run` first.
+:::
+
+**Passwords are create-only.** Apply resolves `passwordRef` only when it creates a user.
+On an existing user it ignores the reference and warns with `PR-IAM-008`, because it cannot read the current password to compare.
+Rotate with `iam user set-password`.
+Secrets resolve on the real apply only, so `--dry-run` needs no password in the environment.
+
+**`dutySchedule` is create-only.** A change on an existing user warns with `PR-IAM-004` and is not applied.
+The other fields still apply.
+
+**Plan gates:**
+
+- Each user must be declared once across the whole input (`PR-IAM-002`). A duplicate aborts the apply before any request.
+- A create without `passwordRef` fails that user (`PR-IAM-005`).
+- A failed plan-phase read of a user fails that user (`PR-IAM-007`).
+- A server with more than 10000 users is refused, so the lockout checks never run on a truncated list.
+
+**Lockout protection.** A real apply refuses a plan that would leave a protected role with no holder (`IAM-001`, exit 13).
+Override it per context with `allow-admin-lockout: true`.
+A real apply also refuses to strip the calling user's own protected role (`IAM-002`, exit 14). This has no override.
+When the calling user cannot be identified for a self-affecting change, apply refuses with exit 15 instead of skipping the check.
+`--dry-run` skips all three checks, so a preview works from a read-only or anonymous-token context.
+See [exit codes](../reference/exit-codes.md).
+
+**Order:** `User` applies first, before every other kind.
+No other kind depends on it; its rank only fixes the order.
+
+`--diff` prints nothing extra for `User`.
+The preview row per user names the planned action and lists warning codes.
+Use `-o yaml` or `-o json` for the full warning text.
+
+## Inspect, rotate and delete
 
 ```sh
-onmsctl iam whoami                                    # the calling user
-onmsctl iam user list|get|export                      # reads
-onmsctl iam user delete alice --yes
-printf %s "$NEW_PW" | onmsctl iam user set-password alice --password-stdin
+onmsctl iam whoami
+onmsctl iam user list
+onmsctl iam user get jdoe
+onmsctl iam user export > users.yaml
+onmsctl iam user export --name jdoe > jdoe.yaml
+onmsctl iam user delete jdoe --yes
 ```
 
-`iam user export` snapshots all users as YAML.
+- `whoami` prints the calling user's name.
+- `list` and `get` print a summary row per user and follow `-o`.
+- `export` writes `kind: User` documents to stdout, `---`-separated. `--name` exports one user.
+- An exported document carries no `passwordRef`. It applies back unchanged to an existing user. To create the user elsewhere, add a `passwordRef`.
+- `delete` asks for confirmation and names the user's roles. It refuses in a non-interactive shell unless you pass `--yes` (`-y`). A user that is already absent is not an error.
+- `delete` runs no lockout check.
 
-Rotate a password (pick exactly one source):
+Rotate a password with exactly one source:
 
 ```sh
-onmsctl iam user set-password jdoe --password-stdin   # read one line from stdin
+printf %s "$NEW_PW" | onmsctl iam user set-password jdoe --password-stdin
 onmsctl iam user set-password jdoe --from-env JDOE_PASSWORD
 onmsctl iam user set-password jdoe --from-file ./pw
 onmsctl iam user set-password jdoe --from-keyring myservice/jdoe
 ```
 
+`--password-stdin` reads piped input and refuses a terminal, because the password would echo.
+`--from-file` applies the same file checks as `passwordRef.fromFile`.
+
 The legacy `users.xml` migration is covered in the [migration guide](../guides/migration.md#legacy-usersxml--onmsctl).
+
+## Errors
+
+| Message | Probable cause | Recovery |
+|---|---|---|
+| `PR-IAM-001: never commit plaintext passwords` | The document has a literal `password:` key. | Replace it with `passwordRef`. |
+| `data did not match any variant of untagged enum PasswordRef` | A `passwordRef` with zero or two sources. | Name exactly one of `fromFile`, `fromEnv` or `fromKeyring`. |
+| `PR-IAM-002` … `each user must be declared at most once across the apply input` | Two documents declare the same `metadata.name`. | Keep one document per user. |
+| `PR-IAM-003: metadata.name` … `is numeric-only` | A username of digits only. Horizon resolves it as a username or a database ID. | Rename the user on the server. |
+| `PR-IAM-004` … `dutySchedule changes are not supported on update` | Warning. The document changes `dutySchedule` on an existing user. | Delete and recreate the user, or edit it on the server. |
+| `PR-IAM-005` … `` creating a user requires a `passwordRef` `` | A new user without `passwordRef`. | Add a `passwordRef`. |
+| `PR-IAM-006` … `is not in the known-roles set` | Warning. A role outside the known set, often a typo. | Fix the role, or add it to `iam.known-roles`. |
+| `PR-IAM-007` … `plan-phase GET /users/` | Reading the user failed. | Check connectivity and permissions, then re-run. |
+| `PR-IAM-008` … `passwordRef is ignored on an existing user` | Warning. The user exists, so apply did not rotate the password. | Run `onmsctl iam user set-password`. |
+| `duplicate role` … `in spec.roles` | A role is listed twice. | List each role once. |
+| `spec.roles contains an empty role string` | An empty entry in `roles`. | Remove it. |
+| `IAM-001: this apply would remove the last holder of protected role(s)` | Exit 13. The apply revokes the last holder of a protected role. | Keep a holder, or set `iam.allow-admin-lockout: true` in the context. |
+| `IAM-002: this apply would strip your own protected role` | Exit 14. The apply revokes a protected role from the calling user. | Apply with a different context. |
+| `could not determine the calling user via GET /users/whoami` | Exit 15. The context cannot identify its user, such as an anonymous-token context. | Use a basic-auth context, or preview with `--dry-run`. |
+| `passwordRef.fromEnv: env var` … `is not set` | The variable is missing at apply time. | Export the variable, then re-run. |
+| `passwordRef.fromFile:` … `is writable beyond the owner` | The secret file is group- or world-writable. | Run `chmod 600` on the file. |
+| `passwordRef.fromFile:` … `is a symlink` | The path is a symlink. | Pass the resolved path. |
+| `passwordRef.fromFile:` … `contains an internal newline` | The file holds more than one line. | Keep one password line. |
+| `user '<name>' does not exist on the server` | `get`, `export --name` or `set-password` names an absent user. | Check the name with `iam user list`. |
+| `needs a password source` | `set-password` without a source flag. | Pass one of the four source flags. |
 
 ## Example
 
