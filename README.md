@@ -6,13 +6,11 @@
 [![latest release](https://img.shields.io/github/v/release/no42-org/onmsctl?sort=semver)](https://github.com/no42-org/onmsctl/releases/latest)
 [![license](https://img.shields.io/github/license/no42-org/onmsctl)](LICENSE)
 
-A `kubectl`-style command-line interface for [OpenNMS Horizon][horizon]. One
-declarative entrypoint — `onmsctl apply -f` — peeks each YAML document's `kind`
-and routes it to the right handler, so users, event sources, SNMP config,
-requisitions, maintenance windows, and data-collection sources all reconcile
-through a single command. XML→YAML migrators bring legacy eventconf and
-`provision.pl`-shape files into the loop; reads, explicit deletes, and `convert`
-stay imperative.
+A `kubectl`-style command-line interface for [OpenNMS Horizon][horizon].
+One declarative entrypoint, `onmsctl apply -f`, peeks each YAML document's `kind` and routes it to the right handler.
+That way users, event sources and their evaluation order, threshold groups and threshd packages, SNMP config, requisitions, maintenance windows, data-collection sources, and business services all reconcile through a single command.
+XML→YAML migrators bring legacy eventconf and `provision.pl`-shape files into the loop.
+Reads, explicit deletes, and `convert` stay imperative.
 
 [horizon]: https://www.opennms.com/horizon/
 
