@@ -1018,9 +1018,8 @@ mod tests {
     #[test]
     fn undotted_name_converts_cleanly() {
         // Undotted metadata.name (e.g. just "Cisco") is now accepted —
-        // the vendor derivation tolerates undotted names (matching
-        // Horizon's server-side `StringUtils.substringBefore`, which
-        // returns the whole name when no '.' is present).
+        // the vendor derivation tolerates undotted names (Horizon derives
+        // the whole name as the vendor when no '.' is present).
         let result = convert(
             MINIMAL_XML,
             Path::new("/tmp/test.xml"),

@@ -73,9 +73,9 @@ pub struct MultipartPart {
     /// servers are still common in the wild; keep `"upload"` as the
     /// default for compatibility with both fixed and unfixed Horizon.
     pub field_name: String,
-    /// Filename associated with this part. `EventConfRestService.uploadEventConfFiles`
-    /// reads `getContentDisposition().getParameter("filename")` to derive
-    /// the source basename — this field is load-bearing.
+    /// Filename associated with this part. `POST /api/v2/eventconf/upload`
+    /// derives the stored source name from it (observed black-box), so this
+    /// field is load-bearing.
     pub filename: String,
     /// MIME type. Common values: `application/xml` for eventconf XML.
     pub content_type: String,
@@ -259,7 +259,7 @@ impl OnmsClient {
     }
 
     /// `PUT` with an `application/x-www-form-urlencoded` body, discarding the
-    /// response body. Used by v1 `UserRestService.updateUser` (and similar
+    /// response body. Used by v1 `PUT /rest/users/{name}` (and similar
     /// Horizon endpoints) that do not accept JSON. The form struct must
     /// serialize to a flat key=value map — nested values are not representable
     /// in form-encoding and `serde_urlencoded` will refuse them.
@@ -281,7 +281,7 @@ impl OnmsClient {
     }
 
     /// `POST` with an `application/xml` body, discarding the response body.
-    /// Used by v1 `UserRestService.addUser`, which only consumes XML — a JSON
+    /// Used by v1 `POST /rest/users`, which only consumes XML: a JSON
     /// POST to `/users` returns `415 Unsupported Media Type` (verified against
     /// a live Horizon). The caller serializes the document (e.g. via
     /// `quick-xml`) and passes the full string; any query string (such as

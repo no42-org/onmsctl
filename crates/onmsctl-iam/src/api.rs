@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//! Typed HTTP client for Horizon's v1 `UserRestService` (`/rest/users`).
+//! Typed HTTP client for Horizon's v1 users API (`/rest/users`).
 //!
 //! Endpoints exposed:
 //!
@@ -66,7 +66,7 @@ const PATH_SEGMENT: &AsciiSet = &CONTROLS
     .add(b'[')
     .add(b']');
 
-/// REST base under the OnmsClient root URL. The v1 `UserRestService` lives
+/// REST base under the OnmsClient root URL. The v1 users API lives
 /// at `/opennms/rest/users`; the client is configured at `/opennms/`.
 const BASE: &str = "rest";
 

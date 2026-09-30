@@ -36,7 +36,7 @@ How to fix
    is no filename to derive from.
 
 Note on the vendor: the prefix before the first `.` becomes the
-server-derived vendor (matching Horizon's `StringUtils.substringBefore`).
+server-derived vendor.
 A name with no `.` is accepted — the whole name becomes the vendor.
 Examples:
 
