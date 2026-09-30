@@ -7,7 +7,7 @@ This page covers the core concepts of `onmsctl`, the command-line interface for 
 It assumes you have [installed](install.md) `onmsctl` and [configured a context](configure-context.md).
 
 `onmsctl` follows the kubectl pattern: one config file with named contexts, a single declarative `apply -f` mutation entrypoint, and read-only inspection verbs alongside it.
-It is a single statically linked binary that bundles seven capabilities: **eventconf** (`event-source` / `event`), **provisioning** (`requisition`), **IAM** (`iam`), **SNMP config** (`snmp`), **maintenance** (`maintenance`), **data collection** (`datacollection`), and **BSM** (`business-service`).
+It is a single statically linked binary that bundles eight capabilities: **eventconf** (`event-source` / `event`), **provisioning** (`requisition`), **IAM** (`iam`), **SNMP config** (`snmp`), **maintenance** (`maintenance`), **data collection** (`datacollection`), **BSM** (`business-service`), and **thresholding** (`threshold`).
 
 > This is the fast path.
 > For signature verification, see [Install](install.md).

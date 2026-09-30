@@ -14,7 +14,8 @@ Targets `/api/v2/snmp-config`.
 `SnmpConfig` is a singleton: `metadata.name` is fixed to `default`.
 
 **Secrets are write-only.** Communities and v3 passphrases are rejected inline; reference an external secret (the same shape as IAM's `passwordRef`).
-They're excluded from the idempotency comparison, so a secret-only rotation isn't auto-detected; re-apply deliberately.
+They're excluded from the idempotency comparison, so apply cannot push a secret-only change: it reports the config in sync and uploads nothing.
+The resolved secrets are sent with the next apply that also changes a non-secret field.
 `snmp export` emits placeholders, never cleartext.
 
 :::note Trap daemon requires a Horizon build with the Trapd REST API
@@ -35,7 +36,7 @@ onmsctl apply -f examples/snmp-config.yaml
 **Order:** `SnmpConfig` applies before `Requisition`, so a co-located directory configures SNMP before importing nodes.
 An SNMP change does not auto-rescan already-imported nodes; follow with `requisition import <fs> --rescan-existing`.
 
-## Inspect and delete
+## Inspect the config
 
 ```sh
 onmsctl snmp export -O snmp-config.yaml          # deployed config → YAML (secrets as refs)
@@ -43,7 +44,7 @@ onmsctl snmp lookup 192.168.8.8
 onmsctl snmp lookup 192.168.8.8 --location labmonkeys-hq --show-secrets
 ```
 
-Community strings and v3 passphrases are write-only: masked on `lookup`, placeholders on `export`.
+Community strings and v3 passphrases are write-only: masked on `lookup` unless you pass `--show-secrets`, placeholders on `export`.
 
 ## Example
 

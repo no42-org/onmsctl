@@ -15,7 +15,7 @@ to preview without writing). Filenames are prefixed with their kind.
 | [`event-source-minimal.yaml`](event-source-minimal.yaml) | `EventSource` | The smallest valid EventSource document. | [docs](https://onmsctl.no42.org/kinds/event-source) |
 | [`event-source-full.yaml`](event-source-full.yaml) | `EventSource` | Every nested type the EventSource model supports (mask, alarmData, varbinds, snmp, forwards, scripts, filters, …). | [docs](https://onmsctl.no42.org/kinds/event-source) |
 | [`event-source-severities.yaml`](event-source-severities.yaml) | `EventSource` | The seven case-sensitive severity levels. | [docs](https://onmsctl.no42.org/kinds/event-source) |
-| [`event-source-disabled.yaml`](event-source-disabled.yaml) | `EventSource` | `enabled: false` (applied via upload-then-disable; brief enabled-flap — see `apply --help`). | [docs](https://onmsctl.no42.org/kinds/event-source) |
+| [`event-source-disabled.yaml`](event-source-disabled.yaml) | `EventSource` | `enabled: false` (applied via upload-then-disable, so an update briefly enables the source; see the docs). | [docs](https://onmsctl.no42.org/kinds/event-source) |
 | [`event-source-order.yaml`](event-source-order.yaml) | `EventSourceOrder` | The singleton evaluation order: which sources are evaluated first. | [docs](https://onmsctl.no42.org/kinds/event-source-order) |
 | [`threshold-group.yaml`](threshold-group.yaml) | `ThresholdGroup` | A threshold group: a basic threshold and an expression with a resource filter. | [docs](https://onmsctl.no42.org/kinds/threshold-group) |
 | [`threshd-package.yaml`](threshd-package.yaml) | `ThreshdPackage` | A threshd package binding the `acme-cpu` group to SNMP on a filter and address range. | [docs](https://onmsctl.no42.org/kinds/threshd-package) |

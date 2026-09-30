@@ -16,7 +16,7 @@ These imperative mutators no longer exist. Declare the desired state in YAML and
 | `event-source apply`, `event-source create`, `event-source enable`, `event-source disable` | Declare the source, its events, and enabled-state in a `kind: EventSource` document, then `onmsctl apply -f`. (`event-source upload` / `event-source download` still round-trip raw XML.) |
 | `event add`, `event update`, `event delete`, `event enable`, `event disable` | Edit `spec.events[...]` in the owning `kind: EventSource` document, then `onmsctl apply -f`. (`event list` remains for inspection.) |
 | `requisition apply` | `onmsctl apply -f` (kind `Requisition`). |
-| `requisition node\|interface\|service\|category add\|set\|remove` | Edit `spec.nodes[...]` in the requisition YAML, then `onmsctl apply -f`. The matching `… list` / `get` sub-resource verbs remain for inspection. |
+| `requisition node\|interface\|service\|category add\|set\|remove` | Edit `spec.nodes[...]` in the requisition YAML, then `onmsctl apply -f`. The read verbs remain for inspection: `node` and `interface` have `list` and `get`, `service` and `category` have `list`. |
 | `iam apply`, `iam user create`, `iam user update`, `iam user role add`, `iam user role remove` | Declare a `kind: User` document (scalar fields + `roles` set + `passwordRef`), then `onmsctl apply -f`. `iam user set-password`, `iam user delete`, and the read verbs remain. |
 
 ## `provision.pl <verb>` → `onmsctl`
@@ -44,7 +44,8 @@ Recommended once-per-site recipe:
      --foreign-sources-dir /opt/opennms/etc/foreign-sources/ \
      --out repo/yaml/
    ```
-   Review the stderr findings; resolve `PR001` / `PR002` by editing the source XML (rare) or accepting the documented data loss (most common; see each code's `--explain` text).
+   Review the stderr findings (`PR001`-`PR005`); resolve each by editing the source XML (rare) or accepting the documented data loss (most common; see each code's `--explain` text, e.g. `onmsctl requisition convert --explain PR001`).
+   `convert` exits `1` when it reports warnings, even though the YAML is written, so a `set -e` script stops there; exit `2` means a finding blocked the output.
 2. **Commit** the YAML directory to git as the new source of truth.
 3. **Rewrite** the existing `provision.pl` shell scripts as `onmsctl apply -f <fs>.yaml` invocations. The legacy "step-by-step mutation" pattern collapses to one apply per requisition.
 4. **Schedule** the apply via CI / cron. `--dry-run --diff` is the review gate; the real apply runs only after review.
