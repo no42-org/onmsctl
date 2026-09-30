@@ -510,7 +510,10 @@ mod tests {
         .to_string();
         assert!(s.starts_with("IAM-001:"), "{s}");
         assert!(s.contains("ROLE_ADMIN"), "{s}");
-        assert!(s.contains("--allow-admin-lockout --yes"), "{s}");
+        // The override is the context key, not a flag: `apply` has no
+        // `--allow-admin-lockout`.
+        assert!(s.contains("iam.allow-admin-lockout: true"), "{s}");
+        assert!(!s.contains("--allow-admin-lockout"), "{s}");
     }
 
     #[test]

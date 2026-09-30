@@ -9,7 +9,7 @@
 //!
 //! - **IAM-001 — admin lockout** ([`check_admin_lockout`]): refuse if the
 //!   apply would leave a *protected* role (default `ROLE_ADMIN`) with **zero**
-//!   holders. Overridable with `--allow-admin-lockout --yes`.
+//!   holders. Overridable with the context key `iam.allow-admin-lockout: true`.
 //! - **IAM-002 — self lockout** ([`check_self_lockout`]): refuse if the apply
 //!   would strip the **calling** user's own protected role (or delete their
 //!   account). **No override.**
@@ -102,7 +102,7 @@ pub fn admin_lockout_roles(
 
 /// IAM-001 enforcement (task 7.1/7.3). `Err(Error::IamLockout)` when the apply
 /// would empty a protected role's holder set, unless `allow_override` is set
-/// (`--allow-admin-lockout --yes`), in which case it returns `Ok(())`.
+/// (the context key `iam.allow-admin-lockout`), in which case it returns `Ok(())`.
 pub fn check_admin_lockout(
     plans: &[&UserPlan],
     server_users: &[OnmsUserWire],

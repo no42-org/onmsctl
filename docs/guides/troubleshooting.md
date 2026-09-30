@@ -12,9 +12,8 @@ description: "Diagnose common onmsctl problems: wrong binary, auth failures, TLS
 - **Wrong server.**
   `--url`/`$ONMS_URL` override the active context.
   Run `onmsctl config view` to see what's actually loaded.
-- **Untrusted server certificate.**
+- **TLS handshake failed (exit 7).**
   onmsctl trusts only its bundled Mozilla root certificates, not the OS trust store, so a private CA fails too.
-  The failure currently surfaces as `error: connection refused` with exit `5`, not as a TLS error; `curl -v` against the same URL shows the certificate problem.
   For a lab with a self-signed cert, `--insecure-tls` skips verification (never in production).
 - **A write "did nothing".**
   A `--dry-run` writes nothing by design.

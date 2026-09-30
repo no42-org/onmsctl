@@ -53,7 +53,7 @@ pub struct ApplyOptions {
     /// Per-context `iam.protected-roles` resolves into this (wired at the CLI
     /// layer, Group 8).
     pub protected_roles: BTreeSet<String>,
-    /// `--allow-admin-lockout --yes` — skips the IAM-001 admin-lockout refusal
+    /// The context key `iam.allow-admin-lockout` — skips the IAM-001 admin-lockout refusal
     /// only. IAM-002 self-lockout has no override.
     pub allow_admin_lockout: bool,
 }
@@ -706,7 +706,7 @@ mod tests {
         assert!(matches!(err, Error::IamWhoamiUnavailable));
     }
 
-    /// `--allow-admin-lockout` skips IAM-001; with a non-self caller the
+    /// `allow_admin_lockout` skips IAM-001; with a non-self caller the
     /// demotion of the sole admin then proceeds to execute.
     #[tokio::test]
     async fn allow_admin_lockout_override_proceeds() {
