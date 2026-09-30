@@ -326,15 +326,16 @@ impl Error {
 ///
 /// reqwest's own `Display` is only "error sending request for url (...)";
 /// the cause (a DNS failure, a rejected certificate, a refused connection)
-/// is further down the `source()` chain, so classification reads the whole
-/// chain.
+/// is further down the `source()` chain. Classification reads the causes
+/// only: the top frame carries the URL, and a host such as `dns1.lab` or
+/// `onms-tls.example.com` must not decide the class.
 impl From<reqwest::Error> for Error {
     fn from(e: reqwest::Error) -> Self {
         let msg = e
             .url()
             .map(|u| u.to_string())
             .unwrap_or_else(|| e.to_string());
-        let chain = error_chain(&e);
+        let chain = error_causes(&e);
         if e.is_connect() {
             return connect_error(&chain, msg);
         }
@@ -351,10 +352,10 @@ impl From<reqwest::Error> for Error {
     }
 }
 
-/// An error's `Display` followed by every `source()`, joined with ` | `
+/// Every `source()` of an error (not the error itself), joined with ` | `
 /// and lowercased, for substring classification.
-fn error_chain(e: &dyn std::error::Error) -> String {
-    let mut parts = vec![e.to_string()];
+fn error_causes(e: &dyn std::error::Error) -> String {
+    let mut parts = Vec::new();
     let mut next = e.source();
     while let Some(s) = next {
         parts.push(s.to_string());
@@ -385,13 +386,12 @@ mod tests {
 
     // Chains as observed from reqwest 0.12 + rustls (Display, then every
     // `source()`), lowercased: a self-signed server and an unresolvable host.
-    const TLS_CHAIN: &str = "error sending request for url (https://localhost:18443/x) | \
-        client error (connect) | invalid peer certificate: other(othererror(caused as endentity))";
-    const DNS_CHAIN: &str = "error sending request for url (https://no-such-host.invalid/x) | \
-        client error (connect) | dns error | failed to lookup address information: nodename nor \
-        servname provided, or not known";
-    const REFUSED_CHAIN: &str = "error sending request for url (http://localhost:1/x) | \
-        client error (connect) | tcp connect error | connection refused (os error 61)";
+    const TLS_CHAIN: &str =
+        "client error (connect) | invalid peer certificate: other(othererror(caused as endentity))";
+    const DNS_CHAIN: &str = "client error (connect) | dns error | failed to lookup address \
+        information: nodename nor servname provided, or not known";
+    const REFUSED_CHAIN: &str =
+        "client error (connect) | tcp connect error | connection refused (os error 61)";
 
     #[test]
     fn connect_errors_classify_from_the_whole_chain() {
@@ -433,9 +433,37 @@ mod tests {
                 Some(&self.0)
             }
         }
-        assert_eq!(
-            error_chain(&Top(Leaf)),
-            "error sending request | invalid peer certificate"
+        assert_eq!(error_causes(&Top(Leaf)), "invalid peer certificate");
+    }
+
+    /// The top frame carries the request URL; a host name containing
+    /// "tls" or "dns" must not decide the class.
+    #[test]
+    fn url_words_do_not_classify() {
+        #[derive(Debug)]
+        struct Refused;
+        impl std::fmt::Display for Refused {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("connection refused")
+            }
+        }
+        impl std::error::Error for Refused {}
+        #[derive(Debug)]
+        struct Top(Refused);
+        impl std::fmt::Display for Top {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("error sending request for url (https://onms-tls.dns1.lab/opennms)")
+            }
+        }
+        impl std::error::Error for Top {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                Some(&self.0)
+            }
+        }
+        let causes = error_causes(&Top(Refused));
+        assert!(
+            matches!(connect_error(&causes, "u".into()), Error::ConnRefused(_)),
+            "{causes}"
         );
     }
 
