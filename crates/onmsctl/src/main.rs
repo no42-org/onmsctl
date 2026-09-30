@@ -131,6 +131,9 @@ enum TopCmd {
     /// Manage Business Services / BSM (list, get, delete).
     #[command(subcommand, visible_alias = "bs")]
     BusinessService(onmsctl_businessservice::BusinessServiceCmd),
+    /// Manage threshold groups and threshd packages (list, get, export, delete).
+    #[command(subcommand, visible_alias = "thr")]
+    Threshold(onmsctl_thresholding::ThresholdCmd),
     /// Print the binary version and linked capability list.
     Version,
     /// Inspect or switch the active configuration.
@@ -343,6 +346,12 @@ async fn run(cli: Cli) -> Result<()> {
             cmd.run(&ctx).await?;
             Ok(())
         }
+        TopCmd::Threshold(cmd) => {
+            let ctx = resolve_context(&merged)?;
+            refuse_if_read_only(&ctx, cmd.kind())?;
+            cmd.run(&ctx).await?;
+            Ok(())
+        }
     }
 }
 
@@ -369,7 +378,7 @@ fn config_path_from(merged: &Overrides) -> Result<PathBuf> {
 /// pin a specific binary build.
 fn print_version() -> Result<()> {
     let s = format!(
-        "onmsctl {}\ncapabilities:\n  - {} {}\n  - {} {}\n  - {} {}\n  - {} {}\n  - {} {}\n  - {} {}\n  - {} {}\n",
+        "onmsctl {}\ncapabilities:\n  - {} {}\n  - {} {}\n  - {} {}\n  - {} {}\n  - {} {}\n  - {} {}\n  - {} {}\n  - {} {}\n",
         env!("CARGO_PKG_VERSION"),
         onmsctl_eventconf::CAPABILITY_NAME,
         onmsctl_eventconf::VERSION,
@@ -385,6 +394,8 @@ fn print_version() -> Result<()> {
         onmsctl_datacollection::VERSION,
         onmsctl_businessservice::CAPABILITY_NAME,
         onmsctl_businessservice::VERSION,
+        onmsctl_thresholding::CAPABILITY_NAME,
+        onmsctl_thresholding::VERSION,
     );
     write_stdout(s.as_bytes())
 }

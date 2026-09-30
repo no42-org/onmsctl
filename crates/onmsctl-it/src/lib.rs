@@ -212,6 +212,69 @@ impl Harness {
         Ok(n)
     }
 
+    /// True when the server has the NMS-19837 threshold API. Threshold tests
+    /// skip themselves otherwise, so `make integration` still passes against
+    /// older servers.
+    pub async fn thresholds_supported(&self) -> bool {
+        onmsctl_thresholding::api::ThresholdingApi::new(&self.client)
+            .metadata()
+            .await
+            .is_ok()
+    }
+
+    /// Delete every threshd package and threshold group whose name starts
+    /// with [`RESOURCE_PREFIX`], packages first. Real objects are never
+    /// touched.
+    pub async fn cleanup_thresholds(&self) -> Result<usize> {
+        use onmsctl_thresholding::api::{ThreshdApi, ThresholdingApi};
+        let (packages, groups) = (
+            ThreshdApi::new(&self.client),
+            ThresholdingApi::new(&self.client),
+        );
+        let mut n = 0;
+        for p in packages
+            .list_packages()
+            .await
+            .map_err(|e| anyhow!("list_packages: {e}"))?
+        {
+            if !p.name.starts_with(RESOURCE_PREFIX) {
+                continue;
+            }
+            if let Some((_, etag)) = packages
+                .get_package(&p.name)
+                .await
+                .map_err(|e| anyhow!("{e}"))?
+            {
+                packages
+                    .delete_package(&p.name, etag.as_deref())
+                    .await
+                    .map_err(|e| anyhow!("delete_package({}): {e}", p.name))?;
+                n += 1;
+            }
+        }
+        for g in groups
+            .list_groups()
+            .await
+            .map_err(|e| anyhow!("list_groups: {e}"))?
+        {
+            if !g.name.starts_with(RESOURCE_PREFIX) {
+                continue;
+            }
+            if let Some((_, etag)) = groups
+                .get_group(&g.name)
+                .await
+                .map_err(|e| anyhow!("{e}"))?
+            {
+                groups
+                    .delete_group(&g.name, etag.as_deref())
+                    .await
+                    .map_err(|e| anyhow!("delete_group({}): {e}", g.name))?;
+                n += 1;
+            }
+        }
+        Ok(n)
+    }
+
     /// Delete every requisition whose name starts with [`RESOURCE_PREFIX`],
     /// purging both pending and deployed snapshots. Mirrors the other cleanup
     /// sweeps; real requisitions (no prefix) are never touched.

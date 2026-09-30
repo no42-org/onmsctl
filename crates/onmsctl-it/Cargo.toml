@@ -15,7 +15,9 @@ onmsctl-businessservice = { workspace = true }
 onmsctl-eventconf = { workspace = true }
 onmsctl-iam = { workspace = true }
 onmsctl-provisioning = { workspace = true }
+onmsctl-thresholding = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 anyhow = { workspace = true }
 tempfile = { workspace = true }
 serde_norway = { workspace = true }
+serde_json = { workspace = true }

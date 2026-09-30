@@ -25,6 +25,8 @@ const sidebars: SidebarsConfig = {
       items: [
         'kinds/event-source',
         'kinds/event-source-order',
+        'kinds/threshold-group',
+        'kinds/threshd-package',
         'kinds/requisition',
         'kinds/user',
         'kinds/snmp-config',

@@ -1,0 +1,267 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ThresholdGroupLocal",
+  "description": "A `ThresholdGroup` document: one threshold group.",
+  "type": "object",
+  "properties": {
+    "apiVersion": {
+      "type": "string"
+    },
+    "kind": {
+      "type": "string"
+    },
+    "metadata": {
+      "$ref": "#/$defs/Metadata"
+    },
+    "spec": {
+      "$ref": "#/$defs/ThresholdGroupSpec"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "spec"
+  ],
+  "$defs": {
+    "ExpressionDef": {
+      "description": "A threshold on an expression over one or more datasources.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dsLabel": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dsType": {
+          "type": "string"
+        },
+        "exprLabel": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "expression": {
+          "type": "string"
+        },
+        "filterOperator": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rearm": {
+          "$ref": "#/$defs/Scalar"
+        },
+        "rearmedUEI": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "relaxed": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "resourceFilters": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ResourceFilterDef"
+          }
+        },
+        "trigger": {
+          "$ref": "#/$defs/Scalar"
+        },
+        "triggeredUEI": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/Scalar"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "dsType",
+        "expression",
+        "value",
+        "rearm",
+        "trigger"
+      ]
+    },
+    "Metadata": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ]
+    },
+    "ResourceFilterDef": {
+      "description": "A Java regular expression matched against one resource field.",
+      "type": "object",
+      "properties": {
+        "content": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "field": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "field"
+      ]
+    },
+    "Scalar": {
+      "description": "A number or a string. The server stores `value`, `rearm` and `trigger` as\nstrings so they can hold metadata references such as `${scv:key:value}`.",
+      "anyOf": [
+        {
+          "type": "integer",
+          "format": "int64"
+        },
+        {
+          "type": "number",
+          "format": "double"
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
+    "ThresholdDef": {
+      "description": "A basic threshold on one collected datasource.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dsLabel": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dsName": {
+          "description": "Collected datasource name, at most 19 characters.",
+          "type": "string"
+        },
+        "dsType": {
+          "type": "string"
+        },
+        "exprLabel": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "filterOperator": {
+          "description": "`and` or `or` (default).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rearm": {
+          "$ref": "#/$defs/Scalar"
+        },
+        "rearmedUEI": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "relaxed": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "resourceFilters": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ResourceFilterDef"
+          }
+        },
+        "trigger": {
+          "$ref": "#/$defs/Scalar"
+        },
+        "triggeredUEI": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/Scalar"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "dsType",
+        "dsName",
+        "value",
+        "rearm",
+        "trigger"
+      ]
+    },
+    "ThresholdGroupSpec": {
+      "type": "object",
+      "properties": {
+        "expressions": {
+          "description": "Expression thresholds, in evaluation order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ExpressionDef"
+          }
+        },
+        "rrdRepository": {
+          "description": "Directory holding the RRD files this group thresholds against.",
+          "type": "string"
+        },
+        "thresholds": {
+          "description": "Basic thresholds, in evaluation order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ThresholdDef"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "rrdRepository"
+      ]
+    }
+  }
+}

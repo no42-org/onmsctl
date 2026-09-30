@@ -1,0 +1,23 @@
+# ThreshdPackage: which interfaces and services are thresholded, and with
+# which group.
+#
+# thresholdingGroup names a ThresholdGroup on the server or in the same
+# apply. Outage calendars are managed by kind: Maintenance and are kept as
+# they are on every apply. Requires Horizon 37.0.0 (NMS-19837).
+#
+#     onmsctl apply -f examples/ --dry-run --diff
+#
+apiVersion: thresholding.opennms.org/v1
+kind: ThreshdPackage
+metadata:
+  name: acme
+spec:
+  filter: "IPADDR != '0.0.0.0' & catincAcme"
+  includeRanges:
+    - begin: 10.0.0.1
+      end: 10.0.255.254
+  services:
+    - name: SNMP
+      interval: 5m
+      status: "on"
+      thresholdingGroup: acme-cpu
