@@ -12,9 +12,9 @@ Changing a code requires a spec amendment.
 | 1 | request or document failed | HTTP non-success, a failed document in a batch, a plan-gate refusal in `apply` (unknown `kind`, duplicate `metadata.name`, a kind's own gate), a post-upload state-sync failure, user not found | Read the error message; re-run after fixing the input or the server state. |
 | 2 | misuse, config or internal error | Invalid flags, config file errors, no or unknown context, no password/token source, empty `apply` input, I/O, YAML/JSON parse errors | Fix the command line or the config file. |
 | 4 | DNS resolution failure | Wrong host name in the server URL | Check the URL and DNS. |
-| 5 | connection refused | Nothing listening, a firewall, or an untrusted TLS certificate (currently reported as a refused connection, see [TLS](tls.md)) | Check the URL and port; test the certificate with `curl -v`. |
+| 5 | connection refused | Nothing listening on the host and port, or a firewall | Check the URL and port. |
 | 6 | timeout | Server or network too slow | Retry; check the server. |
-| 7 | TLS handshake failed | TLS errors outside the connect phase | See [TLS](tls.md). |
+| 7 | TLS handshake failed | An untrusted or invalid server certificate, or another TLS failure | See [TLS](tls.md). |
 | 8 | redirect loop | Wrong base URL or proxy config | Point the URL at `/opennms`. |
 | 9 | unsupported authentication scheme | The server asks for an auth scheme other than Basic or Bearer | Use a basic or bearer context. |
 | 10 | `--wait` timed out | The async operation outlasted `--timeout` (default `30m`) | Raise `--timeout` or check the operation's progress. |
