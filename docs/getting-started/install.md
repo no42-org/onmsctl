@@ -116,6 +116,7 @@ capabilities:
   - datacollection 0.5.0
   - business-service 0.5.0
   - thresholding 0.5.0
+  - graph 0.5.0
 ```
 
 ## Run the container image

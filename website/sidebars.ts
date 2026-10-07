@@ -33,6 +33,7 @@ const sidebars: SidebarsConfig = {
         'kinds/maintenance',
         'kinds/datacollection-source',
         'kinds/business-service',
+        'kinds/graph',
       ],
     },
     {

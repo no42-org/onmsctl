@@ -1,0 +1,42 @@
+apiVersion: graphml.opennms.org/v1
+kind: Graph
+metadata:
+  name: wan-overview
+spec:
+  label: WAN Overview
+  description: Regions and sites
+  breadcrumbStrategy: SHORTEST_PATH_TO_ROOT
+  layers:
+    - namespace: wan:regions
+      label: Regions
+      description: Top layer
+      preferredLayout: Circle Layout
+      semanticZoomLevel: 2
+      focus:
+        strategy: SPECIFIC
+        vertices: [eu]
+      vertexStatusProvider: propagate
+      edgePathOffset: 20
+      vertices:
+        - id: eu
+          label: Europe
+          iconKey: cloud
+          tooltip: EU & UK <core>
+          level: 0
+        - id: us
+          label: US
+      edges:
+        - source: eu
+          target: us
+          tooltip: transatlantic
+        - id: eu-to-fra
+          source: eu
+          target: fra
+    - namespace: wan:sites
+      label: Sites
+      vertices:
+        - id: fra
+          label: Frankfurt
+          node:
+            foreignSource: dc-eu
+            foreignId: fra-core-01

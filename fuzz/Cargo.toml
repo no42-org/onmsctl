@@ -18,6 +18,8 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 onmsctl-core = { path = "../crates/onmsctl-core" }
 onmsctl-eventconf = { path = "../crates/onmsctl-eventconf" }
+onmsctl-graph = { path = "../crates/onmsctl-graph" }
+serde_json = "1"
 # Same major as the workspace: the round-trip invariants serialize with
 # the crate the parsers deserialize with.
 serde_norway = "0.9"
@@ -39,6 +41,13 @@ bench = false
 [[bin]]
 name = "event_source_from_yaml"
 path = "fuzz_targets/event_source_from_yaml.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "graphml_parse"
+path = "fuzz_targets/graphml_parse.rs"
 test = false
 doc = false
 bench = false

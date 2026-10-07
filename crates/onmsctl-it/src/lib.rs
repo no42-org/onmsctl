@@ -31,6 +31,7 @@ use anyhow::{Context as _, Result, anyhow};
 use onmsctl_businessservice::api::BusinessServiceApi;
 use onmsctl_core::{AuthCreds, Context, OnmsClient, OutputFormat, Url};
 use onmsctl_eventconf::EventConfApi;
+use onmsctl_graph::api::{GraphApi, GraphmlApi, is_not_found};
 use onmsctl_iam::api::IamApi;
 use onmsctl_provisioning::api::ProvisioningApi;
 
@@ -273,6 +274,30 @@ impl Harness {
             }
         }
         Ok(n)
+    }
+
+    /// Delete every GraphML upload whose v2 container id starts with
+    /// [`RESOURCE_PREFIX`]. onmsctl names the container after the upload, and
+    /// there is no upload list endpoint, so the v2 container list is the index.
+    /// Real graphs (no prefix) are never touched.
+    pub async fn cleanup_graphs(&self) -> Result<usize> {
+        let ids: Vec<String> = GraphApi::new(&self.client)
+            .containers()
+            .await
+            .map_err(|e| anyhow!("graph containers: {e}"))?
+            .into_iter()
+            .map(|c| c.id)
+            .filter(|id| id.starts_with(RESOURCE_PREFIX))
+            .collect();
+        let uploads = GraphmlApi::new(&self.client);
+        for id in &ids {
+            match uploads.delete(id).await {
+                Ok(()) => {}
+                Err(e) if is_not_found(&e) => {}
+                Err(e) => return Err(anyhow!("graphml delete({id}): {e}")),
+            }
+        }
+        Ok(ids.len())
     }
 
     /// Delete every requisition whose name starts with [`RESOURCE_PREFIX`],

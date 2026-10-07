@@ -37,6 +37,11 @@ pub const RANK_MAINTENANCE: u32 = 350;
 /// base, no cross-kind references); the rank only fixes a deterministic apply
 /// order after `SnmpConfig`/`Maintenance`.
 pub const RANK_DATACOLLECTION: u32 = 375;
+/// GraphML topologies are independent of the other kinds (their own REST base;
+/// vertex node references only warn, and are looked up at plan time, before
+/// any bucket executes). The rank only fixes a deterministic apply order after
+/// `DataCollectionSource`.
+pub const RANK_GRAPH: u32 = 390;
 /// Business services are independent of the other kinds (their own REST base;
 /// intra-kind child references are ordered by the handler's two-pass execute,
 /// not by this table). The rank only fixes a deterministic apply order last.
@@ -54,6 +59,7 @@ pub const KNOWN_RANKS: &[(&str, u32)] = &[
     ("Requisition", RANK_REQUISITION),
     ("Maintenance", RANK_MAINTENANCE),
     ("DataCollectionSource", RANK_DATACOLLECTION),
+    ("Graph", RANK_GRAPH),
     ("BusinessService", RANK_BUSINESS_SERVICE),
 ];
 
@@ -99,6 +105,12 @@ mod tests {
         let p = default_rank("ThreshdPackage").unwrap();
         assert!(RANK_EVENT_SOURCE_ORDER < g && g < p && p < RANK_SNMP_CONFIG);
         assert!(p < RANK_MAINTENANCE);
+    }
+
+    #[test]
+    fn graph_ranks_after_requisition_and_datacollection_and_before_business_service() {
+        let g = default_rank("Graph").unwrap();
+        assert!(RANK_DATACOLLECTION < g && g < RANK_BUSINESS_SERVICE);
     }
 
     #[test]

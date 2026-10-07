@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<graphml xmlns="http://graphml.graphdrawing.org/xmlns">
+  <key id="containerId" for="graphml" attr.name="containerId" attr.type="string"/>
+  <key id="label" for="all" attr.name="label" attr.type="string"/>
+  <key id="description" for="all" attr.name="description" attr.type="string"/>
+  <key id="breadcrumb-strategy" for="graphml" attr.name="breadcrumb-strategy" attr.type="string"/>
+  <key id="namespace" for="graph" attr.name="namespace" attr.type="string"/>
+  <key id="preferred-layout" for="graph" attr.name="preferred-layout" attr.type="string"/>
+  <key id="semantic-zoom-level" for="graph" attr.name="semantic-zoom-level" attr.type="int"/>
+  <key id="focus-strategy" for="graph" attr.name="focus-strategy" attr.type="string"/>
+  <key id="focus-ids" for="graph" attr.name="focus-ids" attr.type="string"/>
+  <key id="vertex-status-provider" for="graph" attr.name="vertex-status-provider" attr.type="string"/>
+  <key id="edge-path-offset" for="graph" attr.name="edge-path-offset" attr.type="int"/>
+  <key id="iconKey" for="node" attr.name="iconKey" attr.type="string"/>
+  <key id="tooltipText" for="all" attr.name="tooltipText" attr.type="string"/>
+  <key id="level" for="node" attr.name="level" attr.type="int"/>
+  <key id="foreignSource" for="node" attr.name="foreignSource" attr.type="string"/>
+  <key id="foreignID" for="node" attr.name="foreignID" attr.type="string"/>
+  <data key="containerId">wan-overview</data>
+  <data key="label">WAN Overview</data>
+  <data key="description">Regions and sites</data>
+  <data key="breadcrumb-strategy">SHORTEST_PATH_TO_ROOT</data>
+  <graph id="wan:regions" edgedefault="undirected">
+    <data key="namespace">wan:regions</data>
+    <data key="label">Regions</data>
+    <data key="description">Top layer</data>
+    <data key="preferred-layout">Circle Layout</data>
+    <data key="semantic-zoom-level">2</data>
+    <data key="focus-strategy">SPECIFIC</data>
+    <data key="focus-ids">eu</data>
+    <data key="vertex-status-provider">propagate</data>
+    <data key="edge-path-offset">20</data>
+    <node id="eu">
+      <data key="label">Europe</data>
+      <data key="iconKey">cloud</data>
+      <data key="tooltipText">EU &amp; UK &lt;core&gt;</data>
+      <data key="level">0</data>
+    </node>
+    <node id="us">
+      <data key="label">US</data>
+    </node>
+    <edge id="eu-us" source="eu" target="us">
+      <data key="tooltipText">transatlantic</data>
+    </edge>
+    <edge id="eu-to-fra" source="eu" target="fra"/>
+  </graph>
+  <graph id="wan:sites" edgedefault="undirected">
+    <data key="namespace">wan:sites</data>
+    <data key="label">Sites</data>
+    <node id="fra">
+      <data key="label">Frankfurt</data>
+      <data key="foreignSource">dc-eu</data>
+      <data key="foreignID">fra-core-01</data>
+    </node>
+  </graph>
+</graphml>

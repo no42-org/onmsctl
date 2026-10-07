@@ -1,0 +1,251 @@
+---
+title: Graph
+description: Declare GraphML topologies for the OpenNMS topology UI, with layers, vertices bound to nodes, and cross-layer edges.
+---
+
+import CodeBlock from '@theme/CodeBlock';
+import example from '!!raw-loader!../../examples/graph.yaml';
+
+Declare one GraphML topology per document.
+A topology is a container of ordered layers.
+Each layer holds vertices and edges, and a vertex can show the alarm status of an OpenNMS node.
+Apply writes `/rest/graphml/{name}`.
+Reads go through the v2 Graph API, `/api/v2/graphs`, which is read-only.
+See the [compatibility table](../reference/compatibility.md) for supported servers.
+
+## YAML
+
+`Graph` is named and multi-instance.
+`metadata.name` is the upload name and the container id the topology UI and `/api/v2/graphs` show.
+Unknown fields are rejected.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| **`apiVersion`** | string | required | `graphml.opennms.org/v1` |
+| **`kind`** | string | required | `Graph` |
+| **`metadata.name`** | string | required | Upload name and container id. Must match `[A-Za-z0-9._-]+`. Must be unique within an apply. |
+| **`spec.label`** | string | none | Container label in the topology menu. |
+| **`spec.description`** | string | none | Container description. |
+| **`spec.breadcrumbStrategy`** | `NONE` or `SHORTEST_PATH_TO_ROOT` | none | Breadcrumb navigation between layers. |
+| **`spec.layers`** | list of layers | required | The graphs of the container, in order. Must not be empty. |
+
+### Layers
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| **`namespace`** | string | required | Unique across the server. |
+| **`label`** | string | none | Layer name in the topology UI. |
+| **`description`** | string | none | Shown in the info panel. |
+| **`preferredLayout`** | string | server: `D3` | Layout the topology UI starts with, such as `Circle Layout`. |
+| **`semanticZoomLevel`** | integer, 0 or more | server: 1 | Default semantic zoom level. |
+| **`focus.strategy`** | `EMPTY`, `ALL`, `FIRST` or `SPECIFIC` | none | Default focus. Without it the layer's default view shows no vertices. |
+| **`focus.vertices`** | list of vertex ids | `[]` | Required with `SPECIFIC`, rejected otherwise. Ids of this layer, without commas. |
+| **`vertexStatusProvider`** | `default`, `script` or `propagate` | none | `default`: worst alarm of the vertex's node. `script`: Groovy scripts in `etc/graphml-vertex-status`. `propagate`: worst status of connected vertices. |
+| **`edgePathOffset`** | integer, 0 or more | server: 20 | Spacing between parallel edges. |
+| **`vertices`** | list of vertices | `[]` | |
+| **`edges`** | list of edges | `[]` | Edges whose source is a vertex of this layer. |
+
+### Vertices
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| **`id`** | string | required | Unique across all layers of the document. |
+| **`label`** | string | none | Display name. |
+| **`iconKey`** | string | server: `generic` | Topology icon, such as `router`, `switch`, `server` or `cloud`. |
+| **`tooltip`** | string | none | Hover text. |
+| **`level`** | integer | server: 0 | Layout level. |
+| **`node`** | `{foreignSource, foreignId}` | none | The OpenNMS node whose status the vertex shows. Both fields must be non-empty. |
+
+Node references pass through to the server unchanged.
+A node that does not exist yet only prints a warning, so a graph can apply in the same run as the requisition that creates its nodes.
+The check runs only for graphs that will be written, and a failed lookup is also just a warning.
+
+### Edges
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| **`id`** | string | `<source>-<target>` | Set it when two edges join the same pair. |
+| **`source`** | vertex id | required | A vertex of the layer that declares the edge. |
+| **`target`** | vertex id | required | A vertex of any layer. A target in another layer makes a cross-layer edge. |
+| **`tooltip`** | string | none | Hover text. |
+
+### GraphML mapping
+
+Apply renders the document as GraphML.
+`graph convert` and `graph export` read GraphML back with the same mapping.
+
+| YAML | GraphML key | On |
+|---|---|---|
+| **`metadata.name`** | `containerId` | document |
+| **`spec.label`**, **`spec.description`** | `label`, `description` | document |
+| **`spec.breadcrumbStrategy`** | `breadcrumb-strategy` | document |
+| **`namespace`**, **`label`**, **`description`** | `namespace`, `label`, `description` | graph |
+| **`preferredLayout`** | `preferred-layout` | graph |
+| **`semanticZoomLevel`** | `semantic-zoom-level` | graph |
+| **`focus.strategy`**, **`focus.vertices`** | `focus-strategy`, `focus-ids` (comma-joined) | graph |
+| **`vertexStatusProvider`** | `vertex-status-provider` | graph |
+| **`edgePathOffset`** | `edge-path-offset` | graph |
+| **`label`**, **`iconKey`**, **`level`** | `label`, `iconKey`, `level` | node |
+| **`tooltip`** | `tooltipText` | node, edge |
+| **`node.foreignSource`**, **`node.foreignId`** | `foreignSource`, `foreignID` | node |
+
+Each layer becomes a `<graph>` whose id is its namespace, with `edgedefault="undirected"`.
+
+## Apply
+
+```sh
+onmsctl apply -f examples/graph.yaml --dry-run --diff
+onmsctl apply -f examples/graph.yaml
+```
+
+Expected output:
+
+```text
+warning: Graph wan-overview: vertex ber-rtr-01: node wan:ber-rtr-01 not found
+warning: Graph wan-overview: vertex ber-sw-01: node wan:ber-sw-01 not found
+warning: Graph wan-overview: vertex ham-rtr-01: node wan:ham-rtr-01 not found
++-------+--------------+--------+---------+---------+
+| kind  | name         | action | status  | message |
++===================================================+
+| Graph | wan-overview | create | Created | created |
++-------+--------------+--------+---------+---------+
+```
+
+- A new graph is uploaded with one `POST`.
+- A changed graph is replaced: `DELETE`, a wait until the old container has left `/api/v2/graphs`, then `POST`. The server has no update call, and a `POST` right after the `DELETE` is stored but never shown.
+- A graph that matches the document sends no write.
+- After every write, apply waits up to 30 seconds for the container to appear in `/api/v2/graphs`. A slow load prints a warning and does not fail the apply.
+- Apply **never deletes** a graph. Remove one with `graph delete`.
+
+**Rollback:** if the `POST` of an update fails, apply re-uploads the version it read during the plan.
+The outcome is `Failed` and says whether the rollback worked.
+
+**Plan gates:** every check below runs before any write.
+One failure aborts the whole apply.
+
+- Each document passes the field rules above.
+- `metadata.name` and every namespace are unique within the apply.
+- No namespace belongs to another container on the server. A graph whose namespace is already taken is stored but never loads, without any error from the server.
+
+**Order:** `Graph` applies after `DataCollectionSource` and before `BusinessService`.
+It has no dependency on other kinds.
+Node references are checked while planning, before any kind executes, so a requisition in the same apply still produces `not found` warnings on its first run.
+
+## Diff
+
+`--diff` prints the change as a unified YAML diff per graph.
+
+```sh
+onmsctl apply -f graph.yaml --dry-run --diff
+```
+
+Expected output:
+
+```text
+Graph/wan-overview: update
+  @@ -17,7 +17,7 @@
+         label: Berlin
+         iconKey: cloud
+       - id: site-hamburg
+  -      label: Hamburg
+  +      label: Hamburg HQ
+         iconKey: cloud
+       edges:
+       - source: site-berlin
+```
+
+A graph uploaded without `containerId` also shows `container id: <old> -> <name>`.
+
+## Inspect and delete
+
+```sh
+onmsctl graph list
+onmsctl graph get wan-overview
+onmsctl graph export wan-overview > wan-overview.yaml
+onmsctl graph view wan-overview wan:sites --focus site-berlin --szl 1
+onmsctl graph search wan:sites Ber
+onmsctl graph delete wan-overview
+```
+
+Expected output of `graph list`:
+
+```text
++--------------+--------------------------+--------+---------+
+| ID           | LABEL                    | LAYERS | MANAGED |
++============================================================+
+| application  | Application Graph        | 1      | no      |
+|--------------+--------------------------+--------+---------|
+| bsm          | Business Service Graph   | 1      | no      |
+|--------------+--------------------------+--------+---------|
+| enlinkd      | Enlinkd Graphs           | 11     | no      |
+|--------------+--------------------------+--------+---------|
+| pathoutage   | Path Outage              | 1      | no      |
+|--------------+--------------------------+--------+---------|
+| vmware       | VMware Topology Provider | 1      | no      |
+|--------------+--------------------------+--------+---------|
+| wan-overview | WAN Overview             | 2      | yes     |
++--------------+--------------------------+--------+---------+
+```
+
+| Command | Kind | Does |
+|---|---|---|
+| **`graph list`** | read | Every container in `/api/v2/graphs`. `MANAGED` is `yes` when a GraphML upload has the same name. |
+| **`graph get NAME`** | read | The upload as a `kind: Graph` document, in YAML, or JSON with **`-o json`**. |
+| **`graph export NAME`** | read | The upload as an apply-ready `kind: Graph` document. Edge ids equal to `<source>-<target>` are omitted. |
+| **`graph convert -f FILE`** | read, local | A GraphML file as a `kind: Graph` document. No server access. |
+| **`graph view CONTAINER NAMESPACE`** | read | One layer as the v2 API serves it. **`--focus ID`** (repeatable) takes vertex ids of that layer; **`--szl N`** sets the semantic zoom level. |
+| **`graph search NAMESPACE TEXT`** | read | Vertex suggestions within one layer. |
+| **`graph delete NAME`** | write | Deletes the upload. A missing graph exits non-zero with `graph NAME not found`. |
+
+`view` and `search` print YAML by default and JSON with **`-o json`**.
+Pass `--focus` the bare vertex id, such as `site-berlin`. The `namespace:id` form finds nothing when the namespace contains a colon.
+
+## Migrate a GraphML file
+
+Convert an existing GraphML file, review it, then apply it.
+
+```sh
+onmsctl graph convert -f topology.xml > topology.yaml
+onmsctl apply -f topology.yaml --dry-run --diff
+onmsctl apply -f topology.yaml
+```
+
+- The document is named after the file's `containerId`, or its first `<graph id>` when there is none. That is the container id the server uses for the file today.
+- Rename `metadata.name` to the name the file was uploaded under (`rest/graphml/{name}`) before applying. Otherwise the plan fails with `already belongs to container`, because the old upload still owns the namespaces.
+- Apply always writes `containerId: <metadata.name>`. A file uploaded without one moves to the new container id on the first apply. Update links to `/api/v2/graphs/<old id>`.
+- `convert` prints a warning for each value it drops or rewrites, such as a key the model does not know or a numeric `nodeID`.
+- The legacy value `vertex-status-provider: true` is read as `default`, with a warning. Check the converted layer if the old file relied on another meaning.
+
+## Errors
+
+| Message | Probable cause | Recovery |
+|---|---|---|
+| `missing field namespace` or `namespace is required` | A layer has no `namespace`, or an empty one. The server would store it and never load it. | Add `namespace`. |
+| `is declared by more than one Graph` | Two documents in the apply use the same namespace. | Rename one namespace. |
+| `already belongs to container` | Another container on the server uses the namespace. The server would store the graph and never load it. | Rename the namespace, or delete the other upload. |
+| `namespace ... is declared twice` | Two layers of one document share a namespace. | Rename one namespace. |
+| `vertex id ... is declared twice` | Two vertices share an id, in the same or different layers. | Make vertex ids unique across the document. |
+| `is not a vertex of layer` | An edge is declared in a layer that does not contain its source. | Move the edge to its source vertex's layer. |
+| `unknown target` | An edge targets a vertex no layer declares. | Fix `target`, or add the vertex. |
+| `is declared twice; set an explicit id` | Two edges share an id, often two edges between the same pair without `id`. | Set `id` on one edge. |
+| `focus.vertices requires strategy SPECIFIC` | `focus.vertices` with another strategy. | Set `strategy: SPECIFIC`, or drop `vertices`. |
+| `strategy SPECIFIC requires focus.vertices` | `SPECIFIC` without vertices. | List the focus vertices. |
+| `focus vertex ... is not in layer` | A focus vertex belongs to another layer. | Focus vertices of the same layer. |
+| `must not contain a comma` | A focus vertex id contains a comma. GraphML joins focus ids with commas. | Rename the vertex. |
+| `foreignSource and foreignId must both be non-empty` | A `node` reference is incomplete. | Set both fields. |
+| `name must match [A-Za-z0-9._-]+` | `metadata.name` has another character. It is a URL path segment. | Rename the graph. |
+| `duplicate Graph metadata.name` | Two documents share a name. | Rename or remove one document. |
+| `node ... not found` (warning) | No node has that foreign source and foreign id yet. The vertex shows no status. | Fix the reference, or apply the requisition. |
+| `node ... lookup failed` (warning) | The node lookup returned an error other than not found. | Check the server; the reference is written unchanged. |
+| `stored upload: ... was dropped` (warning) | The stored upload carries keys the model does not know. The update replaces it without them. | Keep the keys by not applying, or accept the loss. |
+| `derived metadata.name ... is not a valid upload name` (warning) | `convert` named the document after a `<graph id>` that is not path-safe. | Set `metadata.name` to the upload name before applying. |
+| `not visible in api/v2/graphs after` (warning) | The upload is stored but has not loaded. | Check `karaf.log` for GraphML errors. |
+| `still listed in api/v2/graphs ... after DELETE` (warning) | The old version did not unload in time. | Run `onmsctl graph view` to check, and apply again if the old version shows. |
+| `appeared since plan; re-run apply` | Another client created the graph between plan and execute. | Run apply again. |
+| `rolled back to the previous version` | The server rejected the new version. The old one is back. | Fix the reported error and apply again. |
+| `is now absent` | The update and its rollback both failed. The graph is deleted. | Fix the reported error and apply again to recreate it. |
+| `graph ... not found` | `get`, `export` or `delete` names no upload. | Check the name with `graph list`. |
+
+## Example
+
+<CodeBlock language="yaml" title="examples/graph.yaml">{example}</CodeBlock>

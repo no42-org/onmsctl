@@ -856,7 +856,26 @@ dependencies = [
  "libfuzzer-sys",
  "onmsctl-core",
  "onmsctl-eventconf",
+ "onmsctl-graph",
+ "serde_json",
  "serde_norway",
+]
+
+[[package]]
+name = "onmsctl-graph"
+version = "0.5.0"
+dependencies = [
+ "async-trait",
+ "clap",
+ "onmsctl-core",
+ "percent-encoding",
+ "quick-xml",
+ "schemars",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "similar",
+ "tokio",
 ]
 
 [[package]]

@@ -1,0 +1,322 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GraphLocal",
+  "description": "A `kind: Graph` document.",
+  "type": "object",
+  "properties": {
+    "apiVersion": {
+      "type": "string"
+    },
+    "kind": {
+      "type": "string"
+    },
+    "metadata": {
+      "$ref": "#/$defs/Metadata"
+    },
+    "spec": {
+      "$ref": "#/$defs/GraphSpec"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "spec"
+  ],
+  "$defs": {
+    "BreadcrumbStrategy": {
+      "type": "string",
+      "enum": [
+        "NONE",
+        "SHORTEST_PATH_TO_ROOT"
+      ]
+    },
+    "Edge": {
+      "description": "A GraphML `<edge>`.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Defaults to `<source>-<target>`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "description": "A vertex of the layer that declares the edge.",
+          "type": "string"
+        },
+        "target": {
+          "description": "A vertex of any layer.",
+          "type": "string"
+        },
+        "tooltip": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "target"
+      ]
+    },
+    "Focus": {
+      "description": "A layer's default focus.",
+      "type": "object",
+      "properties": {
+        "strategy": {
+          "$ref": "#/$defs/FocusStrategy"
+        },
+        "vertices": {
+          "description": "Vertex ids in this layer. Required for, and only allowed with, `SPECIFIC`.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "strategy"
+      ]
+    },
+    "FocusStrategy": {
+      "type": "string",
+      "enum": [
+        "EMPTY",
+        "ALL",
+        "FIRST",
+        "SPECIFIC"
+      ]
+    },
+    "GraphSpec": {
+      "description": "The GraphML document body: container-level attributes and the layers.",
+      "type": "object",
+      "properties": {
+        "breadcrumbStrategy": {
+          "description": "Breadcrumb navigation between layers. Written at document level.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BreadcrumbStrategy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "label": {
+          "description": "Container label, shown in the topology menu.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "layers": {
+          "description": "The graphs of this container, in order. Layer 0 is the top.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Layer"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "Layer": {
+      "description": "One GraphML `<graph>`.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "edgePathOffset": {
+          "description": "Spacing between parallel edges (server default 20).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "edges": {
+          "description": "Edges whose source vertex is in this layer. The target may be in any layer.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Edge"
+          }
+        },
+        "focus": {
+          "description": "Default focus. Without one the server reports `EMPTY`, so the layer's\ndefault view shows no vertices.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Focus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "namespace": {
+          "description": "Required, and unique across the server. A graph without one, or with\none another upload already uses, is stored but never loads.",
+          "type": "string"
+        },
+        "preferredLayout": {
+          "description": "Layout the topology UI starts with (server default `D3`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "semanticZoomLevel": {
+          "description": "Default semantic zoom level (server default 1).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "vertexStatusProvider": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VertexStatusProvider"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "vertices": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Vertex"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "namespace"
+      ]
+    },
+    "Metadata": {
+      "description": "Document metadata. `name` is the upload name and the v2 container id.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ]
+    },
+    "NodeRef": {
+      "description": "A node by foreign reference, passed through to GraphML unchanged.",
+      "type": "object",
+      "properties": {
+        "foreignId": {
+          "type": "string"
+        },
+        "foreignSource": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "foreignSource",
+        "foreignId"
+      ]
+    },
+    "Vertex": {
+      "description": "A GraphML `<node>`.",
+      "type": "object",
+      "properties": {
+        "iconKey": {
+          "description": "Topology icon (server default `generic`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "Unique across all layers of the document.",
+          "type": "string"
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "level": {
+          "description": "Layout level (server default 0).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "node": {
+          "description": "The OpenNMS node this vertex shows status for.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NodeRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tooltip": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id"
+      ]
+    },
+    "VertexStatusProvider": {
+      "oneOf": [
+        {
+          "description": "Worst unacknowledged alarm of the vertex's node.",
+          "type": "string",
+          "const": "default"
+        },
+        {
+          "description": "Groovy scripts in `etc/graphml-vertex-status`.",
+          "type": "string",
+          "const": "script"
+        },
+        {
+          "description": "Worst status of connected vertices.",
+          "type": "string",
+          "const": "propagate"
+        }
+      ]
+    }
+  }
+}

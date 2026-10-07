@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Original onmsctl test fixture, written for this repository.
+  It reproduces the hand-written GraphML style seen in the field:
+  no containerId, a document-level breadcrumb-strategy, the legacy
+  typed-boolean vertex-status-provider, edges declared before their
+  target vertex, and two edge ids that differ from "<source>-<target>".
+-->
+<graphml xmlns="http://graphml.graphdrawing.org/xmlns"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://graphml.graphdrawing.org/xmlns
+     http://graphml.graphdrawing.org/xmlns/1.0/graphml.xsd">
+    <key id="breadcrumb-strategy" for="graphml" attr.name="breadcrumb-strategy" attr.type="string"/>
+    <key id="label" for="all" attr.name="label" attr.type="string"></key>
+    <key id="namespace" for="graph" attr.name="namespace" attr.type="string"></key>
+    <key id="focus-strategy" for="graph" attr.name="focus-strategy" attr.type="string"></key>
+    <key id="foreignSource" for="node" attr.name="foreignSource" attr.type="string"></key>
+    <key id="foreignID" for="node" attr.name="foreignID" attr.type="string"></key>
+    <key id="vertex-status-provider" for="graph" attr.name="vertex-status-provider" attr.type="boolean"></key>
+    <key id="iconKey" for="node" attr.name="iconKey" attr.type="string"></key>
+    <data key="label">Campus Network</data>
+    <data key="breadcrumb-strategy">NONE</data>
+
+    <graph id="campus" edgedefault="undirected">
+        <data key="namespace">campus</data>
+        <data key="focus-strategy">ALL</data>
+        <data key="vertex-status-provider">true</data>
+
+        <!-- Core -->
+        <node id="core-sw">
+            <data key="foreignSource">campus-net</data>
+            <data key="label">core-sw</data>
+            <data key="foreignID">core-sw</data>
+            <data key="iconKey">switch</data>
+        </node>
+        <node id="fw">
+            <data key="foreignSource">campus-net</data>
+            <data key="label">firewall</data>
+            <data key="foreignID">fw-01</data>
+            <data key="iconKey">firewall</data>
+        </node>
+        <edge id="core-sw-fw" source="core-sw" target="fw"/>
+        <edge id="uplink-a" source="access-sw-a" target="core-sw"/>
+        <edge id="access-sw-b-core-sw" source="access-sw-b" target="core-sw"/>
+
+        <!-- Access -->
+        <node id="access-sw-a">
+            <data key="foreignSource">campus-net</data>
+            <data key="label">access-sw-a</data>
+            <data key="foreignID">access-sw-a</data>
+            <data key="iconKey">switch</data>
+        </node>
+        <node id="access-sw-b">
+            <data key="foreignSource">campus-net</data>
+            <data key="label">access-sw-b</data>
+            <data key="foreignID">access-sw-b</data>
+            <data key="iconKey">switch</data>
+        </node>
+        <node id="ap-lobby">
+            <data key="foreignSource">campus-net</data>
+            <data key="label">ap-lobby</data>
+            <data key="foreignID">ap-lobby</data>
+        </node>
+        <edge id="ap-lobby-access-sw-a" source="ap-lobby" target="access-sw-a"/>
+
+        <!-- DMZ -->
+        <node id="net-dmz">
+            <data key="label">192.0.2.0/24</data>
+            <data key="iconKey">cloud</data>
+        </node>
+        <node id="srv-web">
+            <data key="foreignSource">campus-net</data>
+            <data key="label">srv-web</data>
+            <data key="foreignID">srv-web</data>
+            <data key="iconKey">server</data>
+        </node>
+        <edge id="fw-net-dmz" source="fw" target="net-dmz"/>
+        <edge id="dmz-web" source="srv-web" target="net-dmz"/>
+    </graph>
+</graphml>

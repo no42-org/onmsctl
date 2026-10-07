@@ -20,6 +20,7 @@ Recognized kinds:
 | [`Maintenance`](../kinds/maintenance.mdx) | `maintenance.opennms.org/v1` | scheduled-outage maintenance windows |
 | [`DataCollectionSource`](../kinds/datacollection-source.mdx) | `datacollection.opennms.org/v1` | SNMP data-collection sources |
 | [`BusinessService`](../kinds/business-service.mdx) | `bsm.opennms.org/v1` | Business Service Monitoring (BSM) services + edges |
+| [`Graph`](../kinds/graph.mdx) | `graphml.opennms.org/v1` | GraphML topologies (layers, vertices, edges) |
 
 A single file may hold many `---`-separated documents, and a directory can mix all kinds.
 
@@ -30,7 +31,7 @@ If *any* fails to plan (unknown `kind`, duplicate `metadata.name`, parse error),
 Once the gate passes, documents execute in a static precedence order so dependencies settle first:
 
 ```text
-User (100) → EventSource (200) → EventSourceOrder (210) → ThresholdGroup (220) → ThreshdPackage (230) → SnmpConfig (250) → Requisition (300) → Maintenance (350) → DataCollectionSource (375) → BusinessService (400)
+User (100) → EventSource (200) → EventSourceOrder (210) → ThresholdGroup (220) → ThreshdPackage (230) → SnmpConfig (250) → Requisition (300) → Maintenance (350) → DataCollectionSource (375) → Graph (390) → BusinessService (400)
 ```
 
 ## Run apply

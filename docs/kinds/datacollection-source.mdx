@@ -138,7 +138,7 @@ On a server without it, the whole apply aborts before any write.
 A source that fails its plan checks, such as a missing profile, fails at execute.
 Later sources are not attempted unless you pass `--continue-on-error`.
 
-**Order:** `DataCollectionSource` (rank 375) applies after `Maintenance` (350) and before `BusinessService` (400).
+**Order:** `DataCollectionSource` (rank 375) applies after `Maintenance` (350) and before `Graph` (390).
 It has no dependency on other kinds.
 The rank only fixes a deterministic order.
 

@@ -19,7 +19,9 @@ to preview without writing). Filenames are prefixed with their kind.
 | [`event-source-order.yaml`](event-source-order.yaml) | `EventSourceOrder` | The singleton evaluation order: which sources are evaluated first. | [docs](https://onmsctl.no42.org/kinds/event-source-order) |
 | [`threshold-group.yaml`](threshold-group.yaml) | `ThresholdGroup` | A threshold group: a basic threshold and an expression with a resource filter. | [docs](https://onmsctl.no42.org/kinds/threshold-group) |
 | [`threshd-package.yaml`](threshd-package.yaml) | `ThreshdPackage` | A threshd package binding the `acme-cpu` group to SNMP on a filter and address range. | [docs](https://onmsctl.no42.org/kinds/threshd-package) |
+| [`graph.yaml`](graph.yaml) | `Graph` | A two-layer GraphML topology: sites, devices with node references, and cross-layer edges. | [docs](https://onmsctl.no42.org/kinds/graph) |
 
 Unit tests also parse the `event-source-*` fixtures, so they cannot silently drift out of sync with their models.
 `published_examples_parse_against_the_schema` covers the `EventSource` files, and `published_example_parses` covers `event-source-order.yaml`.
 `published_examples_parse` covers `threshold-group.yaml` and `threshd-package.yaml`.
+`published_example_parses_and_validates` covers `graph.yaml`.

@@ -64,6 +64,7 @@ onmsctl-core = { path = "crates/onmsctl-core", version = "=0.5.0" }
 onmsctl-businessservice = { path = "crates/onmsctl-businessservice", version = "=0.5.0" }
 onmsctl-datacollection = { path = "crates/onmsctl-datacollection", version = "=0.5.0" }
 onmsctl-eventconf = { path = "crates/onmsctl-eventconf", version = "=0.5.0" }
+onmsctl-graph = { path = "crates/onmsctl-graph", version = "=0.5.0" }
 onmsctl-iam = { path = "crates/onmsctl-iam", version = "=0.5.0" }
 onmsctl-maintenance = { path = "crates/onmsctl-maintenance", version = "=0.5.0" }
 onmsctl-provisioning = { path = "crates/onmsctl-provisioning", version = "=0.5.0" }
