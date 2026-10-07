@@ -1,0 +1,55 @@
+# A two-layer GraphML topology: WAN sites on top, the devices of each site
+# below. Applied to rest/graphml/wan-overview and shown in the topology UI as
+# container "wan-overview". Vertices with a `node` show that node's alarm
+# status; a node that does not exist yet only produces a warning.
+apiVersion: graphml.opennms.org/v1
+kind: Graph
+metadata:
+  name: wan-overview
+spec:
+  label: WAN Overview
+  description: Sites and their edge devices
+  breadcrumbStrategy: SHORTEST_PATH_TO_ROOT
+  layers:
+    - namespace: wan:sites
+      label: Sites
+      focus:
+        strategy: ALL
+      vertexStatusProvider: propagate
+      vertices:
+        - id: site-berlin
+          label: Berlin
+          iconKey: cloud
+        - id: site-hamburg
+          label: Hamburg
+          iconKey: cloud
+      edges:
+        - source: site-berlin
+          target: site-hamburg
+          tooltip: MPLS 1 Gbit/s
+        # Cross-layer edges drill down from a site to its devices.
+        - source: site-berlin
+          target: ber-rtr-01
+        - source: site-hamburg
+          target: ham-rtr-01
+    - namespace: wan:devices
+      label: Devices
+      focus:
+        strategy: ALL
+      vertexStatusProvider: default
+      vertices:
+        - id: ber-rtr-01
+          label: ber-rtr-01
+          iconKey: router
+          node: { foreignSource: wan, foreignId: ber-rtr-01 }
+        - id: ber-sw-01
+          label: ber-sw-01
+          iconKey: switch
+          node: { foreignSource: wan, foreignId: ber-sw-01 }
+        - id: ham-rtr-01
+          label: ham-rtr-01
+          iconKey: router
+          node: { foreignSource: wan, foreignId: ham-rtr-01 }
+      edges:
+        - source: ber-rtr-01
+          target: ber-sw-01

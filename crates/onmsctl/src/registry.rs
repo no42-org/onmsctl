@@ -16,7 +16,7 @@
 use onmsctl_core::Registry;
 use onmsctl_core::kind::precedence::{
     RANK_BUSINESS_SERVICE, RANK_DATACOLLECTION, RANK_EVENT_SOURCE, RANK_EVENT_SOURCE_ORDER,
-    RANK_MAINTENANCE, RANK_REQUISITION, RANK_SNMP_CONFIG, RANK_THRESHD_PACKAGE,
+    RANK_GRAPH, RANK_MAINTENANCE, RANK_REQUISITION, RANK_SNMP_CONFIG, RANK_THRESHD_PACKAGE,
     RANK_THRESHOLD_GROUP, RANK_USER, ranks_are_total_order,
 };
 
@@ -24,6 +24,7 @@ use onmsctl_businessservice::apply::BusinessServiceHandler;
 use onmsctl_datacollection::apply::DataCollectionSourceHandler;
 use onmsctl_eventconf::apply::EventSourceHandler;
 use onmsctl_eventconf::order::EventSourceOrderHandler;
+use onmsctl_graph::apply::GraphHandler;
 use onmsctl_iam::apply::UserHandler;
 use onmsctl_maintenance::apply::MaintenanceHandler;
 use onmsctl_provisioning::apply::ProvisioningHandler;
@@ -50,6 +51,7 @@ pub fn build() -> Registry {
     reg.register(RANK_REQUISITION, Box::new(ProvisioningHandler));
     reg.register(RANK_MAINTENANCE, Box::new(MaintenanceHandler));
     reg.register(RANK_DATACOLLECTION, Box::new(DataCollectionSourceHandler));
+    reg.register(RANK_GRAPH, Box::new(GraphHandler::default()));
     reg.register(RANK_BUSINESS_SERVICE, Box::new(BusinessServiceHandler));
 
     let ranks: Vec<(&str, u32)> = reg
@@ -73,7 +75,7 @@ mod tests {
     #[test]
     fn build_registers_all_kinds_at_their_canonical_ranks() {
         let reg = build();
-        assert_eq!(reg.len(), 10, "exactly the wired kinds are present");
+        assert_eq!(reg.len(), 11, "exactly the wired kinds are present");
         // Key off each handler's own `kind()` so the test can't drift from the
         // registration site if a KIND constant changes.
         assert_eq!(reg.rank(UserHandler.kind()), Some(RANK_USER));
@@ -97,6 +99,7 @@ mod tests {
             reg.rank(DataCollectionSourceHandler.kind()),
             Some(RANK_DATACOLLECTION)
         );
+        assert_eq!(reg.rank(GraphHandler::default().kind()), Some(RANK_GRAPH));
         assert_eq!(
             reg.rank(BusinessServiceHandler.kind()),
             Some(RANK_BUSINESS_SERVICE)

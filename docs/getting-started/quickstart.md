@@ -7,7 +7,7 @@ In five minutes you preview and apply a `Requisition` named `acme-prod` with thr
 You need an [installed](install.md) `onmsctl` and a [configured context](configure-context.md).
 
 `onmsctl` follows the kubectl pattern: one config file with named contexts, a single declarative `apply -f` mutation entrypoint, and read-only inspection verbs alongside it.
-It is a single statically linked binary that bundles eight capabilities: **eventconf** (`event-source` / `event`), **provisioning** (`requisition`), **IAM** (`iam`), **SNMP config** (`snmp`), **maintenance** (`maintenance`), **data collection** (`datacollection`), **BSM** (`business-service`), and **thresholding** (`threshold`).
+It is a single statically linked binary that bundles nine capabilities: **eventconf** (`event-source` / `event`), **provisioning** (`requisition`), **IAM** (`iam`), **SNMP config** (`snmp`), **maintenance** (`maintenance`), **data collection** (`datacollection`), **BSM** (`business-service`), **thresholding** (`threshold`), and **GraphML topologies** (`graph`).
 
 ## Learn the core concepts
 
@@ -97,6 +97,7 @@ Each `kind` has its own reference page:
 - [`Maintenance`](../kinds/maintenance.mdx): scheduled-outage maintenance windows.
 - [`DataCollectionSource`](../kinds/datacollection-source.mdx): SNMP data-collection sources.
 - [`BusinessService`](../kinds/business-service.mdx): Business Service Monitoring (BSM).
+- [`Graph`](../kinds/graph.mdx): GraphML topologies for the topology UI.
 
 See also:
 

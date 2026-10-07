@@ -13,6 +13,7 @@ publish = false
 onmsctl-core = { workspace = true }
 onmsctl-businessservice = { workspace = true }
 onmsctl-eventconf = { workspace = true }
+onmsctl-graph = { workspace = true }
 onmsctl-iam = { workspace = true }
 onmsctl-provisioning = { workspace = true }
 onmsctl-thresholding = { workspace = true }

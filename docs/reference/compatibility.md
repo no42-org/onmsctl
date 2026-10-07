@@ -16,7 +16,7 @@ onmsctl checks for newer endpoints and fails with a version message instead of a
 
 | Kind | Server requirement | When onmsctl checks |
 |---|---|---|
-| `EventSource`, `Requisition`, `User`, `Maintenance`, `BusinessService` | Any supported Horizon | No version check |
+| `EventSource`, `Requisition`, `User`, `Maintenance`, `BusinessService`, `Graph` | Any supported Horizon | No version check |
 | `EventSourceOrder` | A server that reorders sources through an `eventconf.xml` upload part | After the write: a server that ignores the order fails the document with `server did not apply the requested order` |
 | `SnmpConfig` | Any supported Horizon; the `spec.trapd` block needs the Trapd REST API (NMS-19128, `37.x`/`develop`) | On the trapd write only; `--dry-run` does not detect it |
 | `DataCollectionSource` | A Horizon build with the DB-backed data-collection subsystem (absent from released Horizon ≤ 37.0.0) | Before every `datacollection` command and apply |

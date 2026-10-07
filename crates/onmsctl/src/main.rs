@@ -134,6 +134,10 @@ enum TopCmd {
     /// Manage threshold groups and threshd packages (list, get, export, delete).
     #[command(subcommand, visible_alias = "thr")]
     Threshold(onmsctl_thresholding::ThresholdCmd),
+    /// Manage GraphML topologies and query the v2 Graph API (list, get, export,
+    /// convert, view, search, delete).
+    #[command(subcommand)]
+    Graph(onmsctl_graph::GraphCmd),
     /// Print the binary version and linked capability list.
     Version,
     /// Inspect or switch the active configuration.
@@ -358,6 +362,17 @@ async fn run(cli: Cli) -> Result<()> {
             cmd.run(&ctx).await?;
             Ok(())
         }
+        TopCmd::Graph(cmd) => {
+            // `convert` is a pure local transform: no Context, no keyring.
+            if cmd.is_local_only() {
+                cmd.run_local().await?;
+            } else {
+                let ctx = resolve_context(&merged)?;
+                refuse_if_read_only(&ctx, cmd.kind())?;
+                cmd.run(&ctx).await?;
+            }
+            Ok(())
+        }
     }
 }
 
@@ -384,7 +399,7 @@ fn config_path_from(merged: &Overrides) -> Result<PathBuf> {
 /// pin a specific binary build.
 fn print_version() -> Result<()> {
     let s = format!(
-        "onmsctl {}\ncapabilities:\n  - {} {}\n  - {} {}\n  - {} {}\n  - {} {}\n  - {} {}\n  - {} {}\n  - {} {}\n  - {} {}\n",
+        "onmsctl {}\ncapabilities:\n  - {} {}\n  - {} {}\n  - {} {}\n  - {} {}\n  - {} {}\n  - {} {}\n  - {} {}\n  - {} {}\n  - {} {}\n",
         env!("CARGO_PKG_VERSION"),
         onmsctl_eventconf::CAPABILITY_NAME,
         onmsctl_eventconf::VERSION,
@@ -402,6 +417,8 @@ fn print_version() -> Result<()> {
         onmsctl_businessservice::VERSION,
         onmsctl_thresholding::CAPABILITY_NAME,
         onmsctl_thresholding::VERSION,
+        onmsctl_graph::CAPABILITY_NAME,
+        onmsctl_graph::VERSION,
     );
     write_stdout(s.as_bytes())
 }
@@ -709,6 +726,26 @@ mod tests {
     use onmsctl_core::config::{
         AuthSpec, BasicSpec, BearerSpec, ConfigFile, NamedContext, ServerSpec,
     };
+
+    #[test]
+    fn read_only_context_refuses_graph_delete_but_not_reads() {
+        let ctx = Context {
+            name: "prod".into(),
+            url: onmsctl_core::Url::parse("https://h.example/opennms/").unwrap(),
+            creds: onmsctl_core::AuthCreds::bearer("t"),
+            insecure_skip_tls_verify: false,
+            output_format: OutputFormat::Table,
+            verbose: false,
+            read_only: true,
+            iam: Default::default(),
+        };
+        let delete = onmsctl_graph::GraphCmd::Delete { name: "g".into() };
+        assert!(matches!(
+            refuse_if_read_only(&ctx, delete.kind()),
+            Err(Error::ReadOnlyRefused { .. })
+        ));
+        assert!(refuse_if_read_only(&ctx, onmsctl_graph::GraphCmd::List.kind()).is_ok());
+    }
 
     fn cfg_with_inline_password(pw: &str) -> ConfigFile {
         ConfigFile {

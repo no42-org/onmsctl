@@ -47,6 +47,7 @@ Any editor with [`yaml-language-server`](https://github.com/redhat-developer/yam
 | `Maintenance` | `maintenance.schema.json` |
 | `DataCollectionSource` | `datacollection.schema.json` |
 | `BusinessService` | `business-service.schema.json` |
+| `Graph` | `graph.schema.json` |
 
 Regenerate the schemas with `make schema`.
 CI fails if a committed schema lags its Rust types.
