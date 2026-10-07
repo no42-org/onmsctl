@@ -106,17 +106,17 @@ onmsctl version
 Expected output:
 
 ```text
-onmsctl 0.5.0
+onmsctl 0.6.0
 capabilities:
-  - eventconf 0.5.0
-  - provisioning 0.5.0
-  - iam 0.5.0
-  - snmp 0.5.0
-  - maintenance 0.5.0
-  - datacollection 0.5.0
-  - business-service 0.5.0
-  - thresholding 0.5.0
-  - graph 0.5.0
+  - eventconf 0.6.0
+  - provisioning 0.6.0
+  - iam 0.6.0
+  - snmp 0.6.0
+  - maintenance 0.6.0
+  - datacollection 0.6.0
+  - business-service 0.6.0
+  - thresholding 0.6.0
+  - graph 0.6.0
 ```
 
 ## Run the container image
@@ -124,8 +124,8 @@ capabilities:
 A multi-arch (`linux/amd64`, `linux/arm64`) distroless image is published to GHCR for every `v*.*.*` tag at **`ghcr.io/no42-org/onmsctl`**.
 It is a single static binary on `gcr.io/distroless/static` with no shell and no package manager.
 It runs as the non-root user `65532`.
-Each release publishes the exact version (`0.5.0`), the rolling `MAJOR.MINOR` tag (`0.5`), and `latest` (the newest non-prerelease).
-Image tags carry no leading `v`: the `v0.5.0` git tag publishes as `0.5.0`.
+Each release publishes the exact version (`0.6.0`), the rolling `MAJOR.MINOR` tag (`0.5`), and `latest` (the newest non-prerelease).
+Image tags carry no leading `v`: the `v0.6.0` git tag publishes as `0.6.0`.
 
 ```sh
 docker run --rm ghcr.io/no42-org/onmsctl:latest version
