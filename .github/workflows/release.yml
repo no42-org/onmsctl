@@ -165,7 +165,7 @@ jobs:
         # container at the version matching this SHA pin (report-0.6.1, read
         # from package.json at the pinned commit) — the release path never
         # picks up a floating image.
-        uses: no42-org/blitsbom@ff9f8516070e082f78bc98453217d6f43cc4a357 # v0.8.3
+        uses: no42-org/blitsbom@bcd6d108886dbc0457794a5c3a20551073ac064f # v0.8.4
         with:
           sbom: sbom/onmsctl.cdx.json
           output: sbom/onmsctl-sbom-report.html
