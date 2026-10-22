@@ -52,7 +52,7 @@ RUN --mount=type=cache,id=cargo-registry-${TARGETARCH},target=/usr/local/cargo/r
 # (uid 65532). TLS roots are compiled into the binary (reqwest + webpki-roots),
 # so no ca-certificates layer is needed. Pinned by digest for the same reason
 # as the builder base; Dependabot keeps it current.
-FROM gcr.io/distroless/static:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3
+FROM gcr.io/distroless/static:nonroot@sha256:d62067879de890a1def9da0e7766b7d20810a5e5555cef8506b752437d7a3e88
 
 COPY --from=builder /out/onmsctl /usr/local/bin/onmsctl
 
