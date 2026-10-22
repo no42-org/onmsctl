@@ -18,8 +18,11 @@
 # ecosystem keeps the digest + tag comment current.
 FROM rust:1-bookworm@sha256:e70e2eec3d495fd5c8e0be74adda86507dfac7f51a724fbf9813ff59b2b247c7 AS builder
 
-# musl-tools provides `musl-gcc`, used both as the C compiler for `ring`'s
-# build script and as the linker for the *-musl target.
+# musl-tools provides `musl-gcc`, the C compiler for `ring`'s build script.
+# It is deliberately NOT the linker: on x86_64 rustc links static-pie, and
+# the musl-gcc wrapper turns that into a dynamic PIE that needs
+# /lib/ld-musl-x86_64.so.1, which distroless/static does not ship (#182).
+# rustc's default linking uses its self-contained musl CRT and libc.a.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends musl-tools \
     && rm -rf /var/lib/apt/lists/*
@@ -31,21 +34,27 @@ COPY . .
 # triple, build a stripped release binary (see [profile.release] in
 # Cargo.toml), and stage it at /out/onmsctl. The *-musl target links
 # statically by default, so the artifact has no runtime libc dependency.
+# The readelf check fails the build if the binary still declares a program
+# interpreter or a shared-library dependency, so a dynamically linked binary
+# can never reach an image.
 ARG TARGETARCH
 RUN --mount=type=cache,id=cargo-registry-${TARGETARCH},target=/usr/local/cargo/registry \
     --mount=type=cache,id=cargo-target-${TARGETARCH},target=/src/target \
     set -eux; \
     case "${TARGETARCH}" in \
-      amd64) target=x86_64-unknown-linux-musl; \
-             export CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc ;; \
-      arm64) target=aarch64-unknown-linux-musl; \
-             export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc ;; \
+      amd64) target=x86_64-unknown-linux-musl ;; \
+      arm64) target=aarch64-unknown-linux-musl ;; \
       *) echo "unsupported TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; \
     esac; \
     export CC=musl-gcc; \
     rustup target add "${target}"; \
     cargo build --release --locked --bin onmsctl --target "${target}"; \
-    install -D "target/${target}/release/onmsctl" /out/onmsctl
+    install -D "target/${target}/release/onmsctl" /out/onmsctl; \
+    elf="$(readelf -lW -d /out/onmsctl)"; \
+    if printf '%s\n' "${elf}" | grep -E 'INTERP|\(NEEDED\)'; then \
+      echo "onmsctl is dynamically linked; distroless/static cannot run it" >&2; \
+      exit 1; \
+    fi
 
 # ---- runtime ---------------------------------------------------------------
 # distroless/static: no libc, no shell, runs as the bundled `nonroot` user
