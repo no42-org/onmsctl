@@ -1,0 +1,8 @@
+# Vulnerabilities that OSV-Scanner (and the Scorecard "Vulnerabilities"
+# check) should ignore in package-lock.json. Each entry needs a reason and
+# an expiry so it is re-checked.
+
+[[IgnoredVulns]]
+id = "GHSA-gcqx-w48m-w2h4"
+ignoreUntil = 2027-01-29
+reason = "deepmerge has no patched release (4.3.1 is latest). Docs build-time dependency only, via @svgr/plugin-svgo, merging trusted config. Never ships in onmsctl. Dependabot alert #28 dismissed as tolerable risk."
