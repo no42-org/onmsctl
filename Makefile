@@ -265,10 +265,10 @@ sha256_actionlint_x86_64-unknown-linux-gnu := 8aca8db96f1b94770f1b0d72b6dddcb1eb
 
 # renovate: datasource=github-releases depName=zizmorcore/zizmor extractVersion=^v(?<version>.*)$
 ZIZMOR_VERSION ?= 1.32.0
-sha256_zizmor_aarch64-apple-darwin := ad5aa633cd56215b11e6c51d51f90c7e6b22904a75047d1215abbd422f61d698
-sha256_zizmor_x86_64-apple-darwin := 72ae63bb85b67229c06242f04195cb43927e9fab5f43803c6434dc701a517d61
-sha256_zizmor_aarch64-unknown-linux-gnu := 37eebbd5762a44f262d94875431b14a6d2402991e90a685113ea97b8b41be833
-sha256_zizmor_x86_64-unknown-linux-gnu := d185f726bdaf92df78273217dfdd24ebcd6b0ef48cf3ce776ff5762b6e138c99
+sha256_zizmor_aarch64-apple-darwin := 6efed18c4539a663fd3c851a2be9533fd8456c4e646d9416206da059154a0d3c
+sha256_zizmor_x86_64-apple-darwin := 6983143c719ada6845a69cc4dd2bacc215f971662fecd8bbd2678388e5ce5969
+sha256_zizmor_aarch64-unknown-linux-gnu := cb152b207f815116d7fa1c1ee4614f61578803351395052908095e79adfd9fd0
+sha256_zizmor_x86_64-unknown-linux-gnu := bb110cc765eca9cd7efb2e284a956be5974c60027b0970f16397d86208a9957b
 
 # PATH first, .bin/ second. Gate recipes call these instead of `cargo <tool>`
 # so the resolved binary is the one that runs.
