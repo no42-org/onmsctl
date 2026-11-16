@@ -250,7 +250,7 @@ sha256_cargo-deny_aarch64-unknown-linux-gnu := 995c82be0defc7a025cae49a2aa2644ce
 sha256_cargo-deny_x86_64-unknown-linux-gnu := 9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f
 
 # renovate: datasource=github-releases depName=CycloneDX/cyclonedx-rust-cargo extractVersion=^cargo-cyclonedx-(?<version>.*)$
-CARGO_CYCLONEDX_VERSION ?= 0.5.9
+CARGO_CYCLONEDX_VERSION ?= 0.5.10
 sha256_cargo-cyclonedx_aarch64-apple-darwin := 4c53dfa21e70b65bf7f8d2592aadde3bcb02c1a40b6ec63b877e5ca65a29e180
 sha256_cargo-cyclonedx_x86_64-apple-darwin := 59d2a583fa632f8759456c1b531340331255b277386d23c598a3dbbc916fde63
 sha256_cargo-cyclonedx_aarch64-unknown-linux-gnu := 7bf131ca5389b07a4f10c182bcf8a5ad339d64408b6f0d8f6834a0bd6120a06a
