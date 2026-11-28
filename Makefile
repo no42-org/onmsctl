@@ -243,7 +243,7 @@ version_zizmor = $(1) --version 2> /dev/null | awk '{print $$2}'
 version_actionlint = $(1) --version 2> /dev/null | head -n 1 | sed 's/^v//'
 
 # renovate: datasource=github-releases depName=EmbarkStudios/cargo-deny
-CARGO_DENY_VERSION ?= 0.20.2
+CARGO_DENY_VERSION ?= 0.22.2
 sha256_cargo-deny_aarch64-apple-darwin := fe67d82a10d8597a3549364cb733a3f9cc1bfff9031b7ae46384a9f2a72090c3
 sha256_cargo-deny_x86_64-apple-darwin := 248da7f581724e470071990c088ffc55c811981715f4cbdb258621fb79f8b7a6
 sha256_cargo-deny_aarch64-unknown-linux-gnu := 995c82be0defc7a025cae49a2aa2644ce8245c9a3318fc4103907c6a285e8c7d
